@@ -1,0 +1,250 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+/* Context7 MCP inspired performance optimizations */
+html, body, #__next {
+  height: 100%;
+}
+
+body {
+  @apply antialiased text-gray-900 bg-gray-50;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+  /* Context7 MCP: Optimize font loading */
+  font-display: swap;
+}
+
+a {
+  @apply text-gray-700 hover:text-gray-900 no-underline hover:underline underline-offset-2;
+}
+
+button {
+  @apply inline-flex items-center justify-center rounded-md px-3 sm:px-4 py-1.5 sm:py-2 text-sm font-medium text-gray-900 bg-white hover:bg-gray-50 border border-gray-300 disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+/* Responsive utilities */
+@media (max-width: 640px) {
+  .container {
+    @apply px-4;
+  }
+}
+
+@media (min-width: 641px) and (max-width: 1024px) {
+  .container {
+    @apply px-6;
+  }
+}
+
+@media (min-width: 1025px) {
+  .container {
+    @apply px-8;
+  }
+}
+
+/* Enhanced Animations for Homepage */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(40px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes bounceIn {
+  0% { opacity: 0; transform: scale(0.3) translateY(20px); }
+  50% { opacity: 1; transform: scale(1.05) translateY(-5px); }
+  70% { transform: scale(0.95) translateY(0); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes gradientX {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+@keyframes floatSlow {
+  0%, 100% { transform: translateY(0px) rotate(0deg); }
+  50% { transform: translateY(-20px) rotate(180deg); }
+}
+
+@keyframes floatMedium {
+  0%, 100% { transform: translateY(0px) rotate(0deg); }
+  50% { transform: translateY(-15px) rotate(90deg); }
+}
+
+@keyframes floatFast {
+  0%, 100% { transform: translateY(0px) rotate(0deg); }
+  50% { transform: translateY(-10px) rotate(45deg); }
+}
+
+@keyframes spinSlow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes bounceSlow {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.8s ease-out;
+}
+
+.animate-fade-in-delayed {
+  animation: fadeIn 0.8s ease-out 0.3s both;
+}
+
+.animate-slide-up {
+  animation: slideUp 1s ease-out 0.2s both;
+}
+
+.animate-bounce-in {
+  animation: bounceIn 0.8s ease-out 0.6s both;
+}
+
+.animate-gradient-x {
+  background-size: 200% 200%;
+  animation: gradientX 3s ease infinite;
+}
+
+.animate-float-slow {
+  animation: floatSlow 6s ease-in-out infinite;
+}
+
+.animate-float-medium {
+  animation: floatMedium 4s ease-in-out infinite;
+}
+
+.animate-float-fast {
+  animation: floatFast 3s ease-in-out infinite;
+}
+
+.animate-spin-slow {
+  animation: spinSlow 20s linear infinite;
+}
+
+.animate-bounce-slow {
+  animation: bounceSlow 3s ease-in-out infinite;
+}
+
+.text-shadow-lg {
+  text-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+}
+
+/* Utility Classes cho màu sắc trạng thái */
+.trang-thai-thanh-cong {
+  @apply bg-green-100 text-green-800 border-green-200;
+}
+
+.trang-thai-canh-bao {
+  @apply bg-yellow-100 text-yellow-800 border-yellow-200;
+}
+
+.trang-thai-loi {
+  @apply bg-red-100 text-red-800 border-red-200;
+}
+
+.trang-thai-thong-tin {
+  @apply bg-blue-100 text-blue-800 border-blue-200;
+}
+
+.trang-thai-cho-xu-ly {
+  @apply bg-orange-100 text-orange-800 border-orange-200;
+}
+
+.trang-thai-hoan-thanh {
+  @apply bg-green-100 text-green-800 border-green-200;
+}
+
+.trang-thai-huy-bo {
+  @apply bg-red-100 text-red-800 border-red-200;
+}
+
+.trang-thai-dang-thuc-hien {
+  @apply bg-blue-100 text-blue-800 border-blue-200;
+}
+
+.trang-thai-co-san {
+  @apply bg-green-100 text-green-800 border-green-200;
+}
+
+.trang-thai-da-thue {
+  @apply bg-red-100 text-red-800 border-red-200;
+}
+
+.trang-thai-bao-tri {
+  @apply bg-yellow-100 text-yellow-800 border-yellow-200;
+}
+
+.trang-thai-da-dat {
+  @apply bg-blue-100 text-blue-800 border-blue-200;
+}
+
+.trang-thai-da-thanh-toan {
+  @apply bg-green-100 text-green-800 border-green-200;
+}
+
+.trang-thai-chua-thanh-toan {
+  @apply bg-red-100 text-red-800 border-red-200;
+}
+
+.trang-thai-xac-nhan {
+  @apply bg-green-100 text-green-800 border-green-200;
+}
+
+/* Print optimizations for service orders */
+@media print {
+  .print\:shadow-none {
+    box-shadow: none !important;
+  }
+  
+  .print\:border-gray-400 {
+    border-color: #9ca3af !important;
+  }
+  
+  /* Hide non-essential elements when printing */
+  .no-print {
+    display: none !important;
+  }
+  
+  /* Optimize text for printing */
+  .print\:text-black {
+    color: #000000 !important;
+  }
+  
+  /* Ensure proper spacing for print */
+  .print\:p-4 {
+    padding: 1rem !important;
+  }
+  
+  /* Remove backgrounds for better printing */
+  .print\:bg-white {
+    background-color: white !important;
+  }
+}
+
+/* Animations for homepage */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes fadeInUp {
+  from { 
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to { 
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes zoomIn {
+  from { transform: scale(1); }
+  to { transform: scale(1.05); }
+}
+
+

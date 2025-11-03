@@ -1,0 +1,1096 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import Input from "@/components/ui/Input";
+import Button from "@/components/ui/Button";
+import Badge from "@/components/ui/Badge";
+import { Card, CardBody, CardHeader } from "@/components/ui/Card";
+import Modal from "@/components/ui/Modal";
+
+import { type Booking, type BookingStatus } from '@/lib/types'
+import { useBookings, useRooms } from '@/hooks/useApi'
+
+const statusOptions: BookingStatus[] = ['PENDING','APPROVED','REJECTED','CANCELLED','CHECKED_IN','CHECKED_OUT']
+
+// Removed mock data; always use API
+
+export default function BookingsPage() {
+  const [rows, setRows] = useState<Booking[]>([])
+  const [rooms, setRooms] = useState<any[]>([])
+  const [flash, setFlash] = useState<{ type: 'success' | 'error', text: string } | null>(null)
+
+  // API hooks
+  const { data: bookingsData, refetch: refetchBookings, loading: bookingsLoading, error: bookingsError } = useBookings()
+  const { data: roomsData, refetch: refetchRooms, loading: roomsLoading, error: roomsError } = useRooms()
+
+  const [query, setQuery] = useState("")
+  const [dateFrom, setDateFrom] = useState("")
+  const [dateTo, setDateTo] = useState("")
+  const [filterStatus, setFilterStatus] = useState<'ALL' | BookingStatus>('ALL')
+  const [sortKey, setSortKey] = useState<'id' | 'code' | 'checkin' | 'checkout'>("checkin")
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>("asc")
+  const [page, setPage] = useState(1)
+  const [size, setSize] = useState(10)
+
+  const [detailOpen, setDetailOpen] = useState(false)
+  const [selected, setSelected] = useState<Booking | null>(null)
+
+  const [editOpen, setEditOpen] = useState(false)
+  const [edit, setEdit] = useState<{ id?: number, code: string, roomId: number, checkinDate: string, checkoutDate: string, numGuests: number, status: BookingStatus, note: string }>({ code: '', roomId: 1, checkinDate: '', checkoutDate: '', numGuests: 1, status: 'PENDING', note: '' })
+  const [fieldErrors, setFieldErrors] = useState<{ [key: string]: string }>({})
+  const [confirmOpen, setConfirmOpen] = useState<{ open: boolean, id?: number, type?: 'delete' }>({ open: false })
+
+  useEffect(() => { if (!flash) return; const t = setTimeout(() => setFlash(null), 3000); return () => clearTimeout(t) }, [flash])
+
+  // Keyboard shortcuts for edit modal
+  useEffect(() => {
+    if (!editOpen) return
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault()
+        save()
+      } else if (e.key === 'Escape') {
+        e.preventDefault()
+        setEditOpen(false)
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [editOpen, edit])
+
+  // Sync dữ liệu từ API
+  useEffect(() => {
+    if (bookingsData && Array.isArray(bookingsData)) {
+      setRows(bookingsData as Booking[])
+    } else if (bookingsError) {
+      setRows([])
+    }
+    if (roomsData && Array.isArray(roomsData)) {
+      setRooms(roomsData as any[])
+    } else if (roomsError) {
+      setRooms([])
+    }
+  }, [bookingsData, roomsData, bookingsError, roomsError])
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    let list = rows.filter(r =>
+      r.code.toLowerCase().includes(q) ||
+      (r.userName || "").toLowerCase().includes(q) ||
+      (r.roomCode || "").toLowerCase().includes(q) ||
+      (r.note || "").toLowerCase().includes(q)
+    )
+    if (filterStatus !== 'ALL') list = list.filter(r => r.status === filterStatus)
+    if (dateFrom) list = list.filter(r => r.checkinDate >= dateFrom)
+    if (dateTo) list = list.filter(r => r.checkoutDate <= dateTo)
+    const dir = sortOrder === 'asc' ? 1 : -1
+    return [...list].sort((a, b) => {
+      if (sortKey === 'id') return (a.id - b.id) * dir
+      if (sortKey === 'code') return a.code.localeCompare(b.code) * dir
+      if (sortKey === 'checkin') return a.checkinDate.localeCompare(b.checkinDate) * dir
+      return a.checkoutDate.localeCompare(b.checkoutDate) * dir
+    })
+  }, [rows, query, filterStatus, dateFrom, dateTo, sortKey, sortOrder])
+
+  function openCreate() {
+    setEdit({ code: '', roomId: 1, checkinDate: '', checkoutDate: '', numGuests: 1, status: 'PENDING', note: '' })
+    setEditOpen(true)
+  }
+
+  function openEdit(r: Booking) {
+    setEdit({ 
+      id: r.id, 
+      code: r.code, 
+      roomId: r.roomId, 
+      checkinDate: r.checkinDate, 
+      checkoutDate: r.checkoutDate, 
+      numGuests: r.numGuests, 
+      status: r.status, 
+      note: r.note || '' 
+    })
+    setEditOpen(true)
+  }
+
+  async function save() {
+    // Clear previous errors
+    setFieldErrors({})
+    
+    const errors: { [key: string]: string } = {}
+    
+    // Validate required fields
+    if (!edit.code.trim()) {
+      errors.code = 'Vui lòng nhập Code đặt phòng'
+    }
+    if (!edit.roomId || edit.roomId === 0) {
+      errors.roomId = 'Vui lòng chọn phòng'
+    }
+    if (!edit.checkinDate) {
+      errors.checkinDate = 'Vui lòng nhập ngày check-in'
+    }
+    if (!edit.checkoutDate) {
+      errors.checkoutDate = 'Vui lòng nhập ngày check-out'
+    }
+    if (edit.numGuests < 1) {
+      errors.numGuests = 'Số khách phải lớn hơn 0'
+    }
+    
+    // Validate date logic
+    if (edit.checkinDate && edit.checkoutDate && new Date(edit.checkoutDate) <= new Date(edit.checkinDate)) {
+      errors.checkoutDate = 'Ngày check-out phải sau ngày check-in'
+    }
+    
+    // If there are errors, show them and return
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors)
+      return
+    }
+    
+    // Gọi API
+    const payload = {
+      code: edit.code.trim(),
+      userId: 1, // Default user ID for production
+      roomId: edit.roomId,
+      checkinDate: edit.checkinDate,
+      checkoutDate: edit.checkoutDate,
+      numGuests: edit.numGuests,
+      status: edit.status,
+      note: edit.note.trim() || '',
+    }
+    
+    try {
+      if (edit.id) {
+        const response = await fetch('/api/system/bookings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: edit.id, ...payload })
+        })
+        if (!response.ok) {
+          const error = await response.json()
+          throw new Error(error.error || 'Failed to update booking')
+        }
+        await refetchBookings()
+        setFlash({ type: 'success', text: 'Đã cập nhật đặt phòng.' })
+      } else {
+        const response = await fetch('/api/system/bookings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        })
+        if (!response.ok) {
+          const error = await response.json()
+          throw new Error(error.error || 'Failed to create booking')
+        }
+        await refetchBookings()
+        setFlash({ type: 'success', text: 'Đã tạo đặt phòng mới.' })
+      }
+      setEditOpen(false)
+    } catch (error: any) {
+      setFlash({ type: 'error', text: error.message || 'Có lỗi xảy ra' })
+    }
+  }
+
+  function confirmAction(id: number, type: 'delete') {
+    setConfirmOpen({ open: true, id, type })
+  }
+
+  async function doAction() {
+    if (!confirmOpen.id || !confirmOpen.type) return
+    const { id, type } = confirmOpen
+    
+    // Gọi API
+    try {
+      if (type === 'delete') {
+        const response = await fetch(`/api/system/bookings?id=${id}`, { method: 'DELETE' })
+        if (!response.ok) {
+          const error = await response.json()
+          throw new Error(error.error || 'Failed to deactivate booking')
+        }
+        await refetchBookings()
+        setFlash({ type: 'success', text: 'Đã vô hiệu hóa đặt phòng.' })
+      }
+    } catch (error: any) {
+      setFlash({ type: 'error', text: error.message || 'Có lỗi xảy ra' })
+    }
+    
+    setConfirmOpen({ open: false })
+  }
+
+  async function activateBooking(id: number) {
+    try {
+      const response = await fetch(`/api/system/bookings/${id}/activate`, { method: 'PUT' })
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.error || 'Failed to activate booking')
+      }
+      await refetchBookings()
+      setFlash({ type: 'success', text: 'Đã kích hoạt đặt phòng.' })
+    } catch (error: any) {
+      setFlash({ type: 'error', text: error.message || 'Có lỗi xảy ra' })
+    }
+  }
+
+  function renderStatusChip(s: BookingStatus) {
+    if (s === 'PENDING') return <Badge tone="pending">Chờ duyệt</Badge>
+    if (s === 'APPROVED') return <Badge tone="approved">Đã duyệt</Badge>
+    if (s === 'REJECTED') return <Badge tone="rejected">Đã từ chối</Badge>
+    if (s === 'CANCELLED') return <Badge tone="cancelled">Đã hủy</Badge>
+    if (s === 'CHECKED_IN') return <Badge tone="checked-in">Đã nhận phòng</Badge>
+    return <Badge tone="checked-out">Đã trả phòng</Badge>
+  }
+
+  const getRoomName = (roomId: number) => {
+    const room = rooms.find(r => r.id === roomId)
+    return room ? `${room.code} - ${room.name || ''}` : `Room ${roomId}`
+  }
+
+  return (
+    <>
+      {/* Header - Mobile Optimized */}
+      <div className="bg-white border-b border-gray-200 px-3 py-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3 min-w-0 flex-1">
+            <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center flex-shrink-0 shadow-sm">
+              <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+            </div>
+            <div className="min-w-0 flex-1">
+              <h1 className="text-lg font-bold text-gray-900 truncate">Đặt phòng</h1>
+              <p className="text-sm text-gray-500">{filtered.length} đặt phòng</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            
+            
+            <Button 
+              onClick={openCreate} 
+              className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 text-sm flex-shrink-0 rounded-lg"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+              </svg>
+              <span className="hidden sm:inline ml-1">Thêm đặt phòng</span>
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="w-full px-4 py-3">
+        <div className="space-y-3">
+          {/* Flash Messages */}
+          {flash && (
+            <div className={`rounded-md border p-2 sm:p-3 text-xs sm:text-sm shadow-sm ${
+              flash.type === 'success' 
+                ? 'bg-green-50 border-green-200 text-green-800' 
+                : 'bg-red-50 border-red-200 text-red-800'
+            }`}>
+              {flash.text}
+            </div>
+          )}
+
+          {/* Loading indicator */}
+          {(bookingsLoading || roomsLoading) && (
+            <div className="rounded-md border p-2 sm:p-3 text-xs sm:text-sm shadow-sm bg-yellow-50 border-yellow-200 text-yellow-800">
+              Đang tải dữ liệu đặt phòng...
+            </div>
+          )}
+
+          {/* Filters */}
+          <div className="bg-gray-50 border-b border-gray-200 px-4 py-3">
+            {/* Mobile layout - Optimized */}
+            <div className="lg:hidden space-y-3">
+              {/* Hàng 1: Tìm kiếm */}
+              <div className="flex flex-row items-center">
+                <div className="flex-1 min-w-0">
+                  <div className="relative">
+                    <Input
+                      placeholder="Tìm kiếm đặt phòng..."
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      className="w-full pl-4 pr-10 py-3 text-sm border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                    <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                      <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                      </svg>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Hàng 2: Ngày tháng - Mobile Optimized */}
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Từ ngày</label>
+                  <Input
+                    type="date"
+                    value={dateFrom}
+                    onChange={(e) => setDateFrom(e.target.value)}
+                    className="w-full px-4 py-3 text-base border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
+                    style={{ fontSize: '16px' }} // Prevent zoom on iOS
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Đến ngày</label>
+                  <Input
+                    type="date"
+                    value={dateTo}
+                    onChange={(e) => setDateTo(e.target.value)}
+                    className="w-full px-4 py-3 text-base border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
+                    style={{ fontSize: '16px' }} // Prevent zoom on iOS
+                  />
+                </div>
+              </div>
+
+              {/* Hàng 3: Sắp xếp và Thứ tự */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Sắp xếp</label>
+                  <select
+                    value={sortKey}
+                    onChange={(e) => setSortKey(e.target.value as 'id' | 'code' | 'checkin' | 'checkout')}
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="code">Theo Code</option>
+                    <option value="checkin">Theo Check-in</option>
+                    <option value="checkout">Theo Check-out</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Thứ tự</label>
+                  <select
+                    value={sortOrder}
+                    onChange={(e) => setSortOrder(e.target.value as 'asc' | 'desc')}
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="asc">Tăng dần</option>
+                    <option value="desc">Giảm dần</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Hàng 4: Trạng thái */}
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Trạng thái</label>
+                <select
+                  value={filterStatus}
+                  onChange={(e) => setFilterStatus(e.target.value as 'ALL' | BookingStatus)}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="ALL">Tất cả trạng thái</option>
+                  <option value="PENDING">Chờ duyệt</option>
+                  <option value="APPROVED">Đã duyệt</option>
+                  <option value="REJECTED">Đã từ chối</option>
+                  <option value="CANCELLED">Đã hủy</option>
+                  <option value="CHECKED_IN">Đã nhận phòng</option>
+                  <option value="CHECKED_OUT">Đã trả phòng</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Desktop layout */}
+            <div className="hidden lg:flex flex-row gap-4 items-center">
+              {/* Tìm kiếm */}
+              <div className="flex-1 min-w-0">
+                <div className="relative">
+                  <Input
+                    placeholder="Tìm kiếm đặt phòng..."
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    className="w-full pl-4 pr-10 py-2 text-sm border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  />
+                  <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                    <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Từ ngày */}
+              <div className="w-40 flex-shrink-0">
+                <Input
+                  type="date"
+                  value={dateFrom}
+                  onChange={(e) => setDateFrom(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              
+              {/* Đến ngày */}
+              <div className="w-40 flex-shrink-0">
+                <Input
+                  type="date"
+                  value={dateTo}
+                  onChange={(e) => setDateTo(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              
+              {/* Sắp xếp */}
+              <div className="w-36 flex-shrink-0">
+                <select
+                  value={sortKey}
+                  onChange={(e) => setSortKey(e.target.value as 'id' | 'code' | 'checkin' | 'checkout')}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="code">Theo Code</option>
+                  <option value="checkin">Theo Check-in</option>
+                  <option value="checkout">Theo Check-out</option>
+                </select>
+              </div>
+              
+              {/* Thứ tự */}
+              <div className="w-28 flex-shrink-0">
+                <select
+                  value={sortOrder}
+                  onChange={(e) => setSortOrder(e.target.value as 'asc' | 'desc')}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="asc">Tăng dần</option>
+                  <option value="desc">Giảm dần</option>
+                </select>
+              </div>
+              
+              {/* Trạng thái */}
+              <div className="w-36 flex-shrink-0">
+                <select
+                  value={filterStatus}
+                  onChange={(e) => setFilterStatus(e.target.value as 'ALL' | BookingStatus)}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="ALL">Tất cả</option>
+                  <option value="PENDING">Chờ duyệt</option>
+                  <option value="APPROVED">Đã duyệt</option>
+                  <option value="REJECTED">Đã từ chối</option>
+                  <option value="CANCELLED">Đã hủy</option>
+                  <option value="CHECKED_IN">Đã nhận phòng</option>
+                  <option value="CHECKED_OUT">Đã trả phòng</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+
+
+          {/* Table */}
+          <div className="px-4 py-3">
+            <div className="w-full">
+              <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-xl rounded-2xl overflow-hidden">
+                <CardHeader className="bg-gray-50 border-b border-gray-200 px-6 py-3">
+              <div className="flex items-center justify-between">
+                    <h2 className="text-lg text-left font-bold text-gray-900">Danh sách đặt phòng</h2>
+                    <span className="text-sm text-right font-semibold text-blue-600 bg-blue-100 px-3 py-1 rounded-full">{filtered.length} đặt phòng</span>
+              </div>
+            </CardHeader>
+            <CardBody className="p-0">
+                  {/* Desktop Table */}
+                  <div className="hidden lg:block overflow-x-auto">
+                    <table className="w-full text-sm">
+                  <colgroup>
+                        <col className="w-[8%]" />
+                        <col className="w-[12%]" />
+                        <col className="w-[12%]" />
+                    <col className="w-[10%]" />
+                    <col className="w-[10%]" />
+                        <col className="w-[8%]" />
+                        <col className="w-[12%]" />
+                        <col className="w-[18%]" />
+                  </colgroup>
+                  <thead>
+                        <tr className="bg-gray-50 text-gray-700">
+                          <th className="px-4 py-3 text-center font-semibold">Code</th>
+                          <th className="px-4 py-3 text-center font-semibold">Khách hàng</th>
+                          <th className="px-4 py-3 text-center font-semibold">Phòng</th>
+                          <th className="px-4 py-3 text-center font-semibold">Check-in</th>
+                          <th className="px-4 py-3 text-center font-semibold">Check-out</th>
+                          <th className="px-4 py-3 text-center font-semibold">Số khách</th>
+                          <th className="px-4 py-3 text-center font-semibold">Trạng thái</th>
+                          <th className="px-4 py-3 text-center font-semibold">Kích hoạt</th>
+                          <th className="px-4 py-3 text-center font-semibold">Thao tác</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.slice((page - 1) * size, page * size).map((row) => (
+                          <tr key={row.id} className="hover:bg-gray-50 border-b border-gray-100">
+                            <td className="px-4 py-3 text-center font-medium text-gray-900">{row.code}</td>
+                            <td className="px-4 py-3 text-center text-gray-700">{row.userName || `User ${row.userId}`}</td>
+                            <td className="px-4 py-3 text-center text-gray-700">{getRoomName(row.roomId)}</td>
+                            <td className="px-4 py-3 text-center text-gray-700">{row.checkinDate}</td>
+                            <td className="px-4 py-3 text-center text-gray-700">{row.checkoutDate}</td>
+                            <td className="px-4 py-3 text-center text-gray-700">{row.numGuests}</td>
+                            <td className="px-4 py-3 text-center">{renderStatusChip(row.status)}</td>
+                            <td className="px-4 py-3 text-center">
+                              {row.isActive !== false ? (
+                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                  Hoạt động
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                                  Vô hiệu
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-4 py-3 text-center">
+                              <div className="flex gap-2 justify-center">
+                                <Button
+                                  variant="secondary"
+                                  className="h-8 px-3 text-xs"
+                                  onClick={() => {
+                                    setSelected(row)
+                                    setDetailOpen(true)
+                                  }}
+                                >
+                                  Xem
+                                </Button>
+                                <Button
+                                  className="h-8 px-3 text-xs"
+                                  onClick={() => openEdit(row)}
+                                >
+                                  Sửa
+                                </Button>
+                                {row.isActive !== false ? (
+                                  <Button
+                                    variant="danger"
+                                    className="h-8 px-3 text-xs"
+                                    onClick={() => confirmAction(row.id, 'delete')}
+                                  >
+                                    Vô hiệu
+                                  </Button>
+                                ) : (
+                                  <Button
+                                    className="h-8 px-3 text-xs bg-green-600 hover:bg-green-700"
+                                    onClick={() => activateBooking(row.id)}
+                                  >
+                                    Kích hoạt
+                                  </Button>
+                                )}
+                              </div>
+                            </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+                  {/* Mobile Cards - Optimized */}
+                  <div className="lg:hidden p-3">
+                    <div className="space-y-3">
+                      {filtered.slice((page - 1) * size, page * size).map((row) => (
+                        <div
+                          key={row.id}
+                          className="bg-white rounded-2xl border border-gray-200 shadow-sm hover:shadow-lg transition-all duration-300 overflow-hidden"
+                        >
+                          {/* Header với Code và Status */}
+                          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 px-4 py-3 border-b border-gray-100">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl flex items-center justify-center shadow-sm">
+                                  <span className="text-white font-bold text-sm">
+                                    {row.code.charAt(0)}
+                                  </span>
+                                </div>
+                                <div>
+                                  <h3 className="font-bold text-gray-900 text-base">{row.code}</h3>
+                                  <p className="text-sm text-gray-600">{row.userName || `User ${row.userId}`}</p>
+                                </div>
+                              </div>
+                              <div className="flex-shrink-0">
+                                {renderStatusChip(row.status)}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Thông tin chính */}
+                          <div className="p-4">
+                            <div className="grid grid-cols-2 gap-3 mb-4">
+                              {/* Phòng */}
+                              <div className="flex items-center gap-2">
+                                <svg className="w-4 h-4 text-indigo-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                                </svg>
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-xs text-gray-500">Phòng</p>
+                                  <p className="text-sm font-semibold text-gray-900 truncate">{getRoomName(row.roomId)}</p>
+                                </div>
+                              </div>
+
+                              {/* Số khách */}
+                              <div className="flex items-center gap-2">
+                                <svg className="w-4 h-4 text-blue-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                                </svg>
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-xs text-gray-500">Số khách</p>
+                                  <p className="text-sm font-semibold text-gray-900">{row.numGuests} người</p>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Ngày tháng */}
+                            <div className="flex items-center gap-2 mb-4">
+                              <svg className="w-4 h-4 text-green-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                              </svg>
+                              <div className="min-w-0 flex-1">
+                                <p className="text-xs text-gray-500">Thời gian</p>
+                                <p className="text-sm font-semibold text-gray-900">{row.checkinDate} - {row.checkoutDate}</p>
+                              </div>
+                            </div>
+
+                            {/* Ghi chú nếu có */}
+                            {row.note && (
+                              <div className="mb-4 p-3 bg-gray-50 rounded-lg">
+                                <p className="text-xs text-gray-500 mb-1">Ghi chú</p>
+                                <p className="text-sm text-gray-700">{row.note}</p>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Nút thao tác - Mobile Fixed */}
+                          <div className="px-3 py-3 bg-gray-50 border-t border-gray-100">
+                            <div className="grid grid-cols-3 gap-2">
+                              <Button
+                                variant="secondary"
+                                className="h-10 text-xs font-medium px-2"
+                                onClick={() => {
+                                  setSelected(row);
+                                  setDetailOpen(true);
+                                }}
+                              >
+                                <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                                </svg>
+                                Xem
+                              </Button>
+
+                              <Button
+                                className="h-10 text-xs font-medium px-2"
+                                onClick={() => openEdit(row)}
+                              >
+                                <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                </svg>
+                                Sửa
+                              </Button>
+
+                              {row.isActive !== false ? (
+                                <Button
+                                  variant="danger"
+                                  className="h-10 text-xs font-medium px-2"
+                                  onClick={() => confirmAction(row.id, 'delete')}
+                                >
+                                  <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+                                  </svg>
+                                  Vô hiệu
+                                </Button>
+                              ) : (
+                                <Button
+                                  className="h-10 text-xs font-medium px-2 bg-green-600 hover:bg-green-700"
+                                  onClick={() => activateBooking(row.id)}
+                                >
+                                  <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                  </svg>
+                                  Kích hoạt
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+            </CardBody>
+
+                {/* Pagination - Mobile Optimized */}
+                {filtered.length > size && (
+                  <div className="bg-gradient-to-r from-gray-50 to-blue-50 px-3 py-4 border-t border-gray-200/50">
+                    {/* Mobile Layout */}
+                    <div className="lg:hidden">
+                      <div className="text-center mb-4">
+                        <div className="text-sm text-gray-600 mb-1">Hiển thị kết quả</div>
+                        <div className="text-lg font-bold text-gray-900">
+                          <span className="text-blue-600">{(page - 1) * size + 1}</span> - <span className="text-blue-600">{Math.min(page * size, filtered.length)}</span> / <span className="text-gray-600">{filtered.length}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-center gap-3">
+                        <Button
+                          variant="secondary"
+                          disabled={page === 1}
+                          onClick={() => setPage(page - 1)}
+                          className="h-10 px-4 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                          </svg>
+                          Trước
+                        </Button>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-bold text-gray-700 bg-white px-4 py-2 rounded-xl border-2 border-blue-200 shadow-sm">
+                            {page}
+                          </span>
+                          <span className="text-sm text-gray-500">/ {Math.ceil(filtered.length / size)}</span>
+                        </div>
+                        <Button
+                          variant="secondary"
+                          disabled={page >= Math.ceil(filtered.length / size)}
+                          onClick={() => setPage(page + 1)}
+                          className="h-10 px-4 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          Sau
+                          <svg className="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                          </svg>
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* Desktop Layout */}
+                    <div className="hidden lg:flex flex-row items-center justify-between gap-6">
+                      <div className="text-left">
+                        <div className="text-sm text-gray-600 mb-1">Hiển thị kết quả</div>
+                        <div className="text-lg font-bold text-gray-900">
+                          <span className="text-blue-600">{(page - 1) * size + 1}</span> - <span className="text-blue-600">{Math.min(page * size, filtered.length)}</span> / <span className="text-gray-600">{filtered.length}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <Button
+                          variant="secondary"
+                          disabled={page === 1}
+                          onClick={() => setPage(page - 1)}
+                          className="h-10 px-4 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                          </svg>
+                          Trước
+                        </Button>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-bold text-gray-700 bg-white px-4 py-2 rounded-xl border-2 border-blue-200 shadow-sm">
+                            {page}
+                          </span>
+                          <span className="text-sm text-gray-500">/ {Math.ceil(filtered.length / size)}</span>
+                        </div>
+                        <Button
+                          variant="secondary"
+                          disabled={page >= Math.ceil(filtered.length / size)}
+                          onClick={() => setPage(page + 1)}
+                          className="h-10 px-4 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          Sau
+                          <svg className="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                          </svg>
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+          </Card>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Detail Modal - Compact */}
+      <Modal open={detailOpen} onClose={() => setDetailOpen(false)} title="Chi tiết đặt phòng">
+        <div className="p-3 sm:p-4">
+          {selected && (
+            <div className="space-y-4">
+              {/* Header với thông tin chính */}
+              <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-3 sm:p-4 border border-blue-200">
+                {/* Thông tin đặt phòng chính */}
+                <div className="space-y-3">
+                  {/* Header với icon */}
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+                    <div className="flex items-center gap-3 w-full sm:w-auto">
+                      <div className="w-12 h-12 sm:w-14 sm:h-14 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg flex-shrink-0">
+                        <svg className="w-6 h-6 sm:w-7 sm:h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+              </div>
+                      <div className="flex-1 min-w-0">
+                        <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold text-gray-900">Đặt phòng {selected.code}</h2>
+                        <p className="text-base sm:text-lg lg:text-xl text-gray-600 truncate">{selected.userName || `User ${selected.userId}`}</p>
+              </div>
+              </div>
+              </div>
+
+                  {/* Thông tin nhanh */}
+                  <div className="grid grid-cols-2 gap-2 sm:gap-3">
+                    <div className="bg-white/70 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
+                      <div className="flex items-center gap-2 mb-1">
+                        <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+                        </svg>
+                        <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">ID</span>
+                      </div>
+                      <p className="text-base sm:text-lg font-bold text-blue-900">{selected.id}</p>
+                    </div>
+
+                    <div className="bg-white/70 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
+                      <div className="flex items-center gap-2 mb-1">
+                        <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                        </svg>
+                        <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Số khách</span>
+                      </div>
+                      <p className="text-base sm:text-lg font-bold text-blue-900">{selected.numGuests}</p>
+                    </div>
+                  </div>
+
+                  {/* Phòng và ngày */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
+                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
+                      <div className="flex items-center gap-2 mb-1">
+                        <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                        </svg>
+                        <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Phòng</span>
+                      </div>
+                      <p className="text-sm sm:text-base font-bold text-blue-900">{getRoomName(selected.roomId)}</p>
+                    </div>
+
+                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
+                      <div className="flex items-center gap-2 mb-1">
+                        <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                        <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Ngày</span>
+                      </div>
+                      <p className="text-sm sm:text-base font-bold text-blue-900">
+                        {selected.checkinDate} - {selected.checkoutDate}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Trạng thái và ghi chú */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
+                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
+                      <div className="flex items-center gap-2 mb-1">
+                        <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Trạng thái</span>
+                      </div>
+                      <div className="mt-1">{renderStatusChip(selected.status)}</div>
+                    </div>
+
+                    {selected.note && (
+                      <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
+                        <div className="flex items-center gap-2 mb-1">
+                          <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                          </svg>
+                          <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Ghi chú</span>
+                        </div>
+                        <p className="text-sm sm:text-base font-bold text-blue-900">{selected.note}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      {/* Edit Modal - Mobile Optimized */}
+      <Modal open={editOpen} onClose={() => setEditOpen(false)} title={edit.id ? 'Sửa đặt phòng' : 'Thêm đặt phòng mới'}>
+        <div className="p-4 sm:p-6">
+          <div className="space-y-4">
+            {/* Form */}
+            <div className="space-y-4">
+              {/* Code và Số khách */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Code *</label>
+                  <Input
+                    value={edit.code}
+                    onChange={(e) => {
+                      setEdit({ ...edit, code: e.target.value })
+                      if (fieldErrors.code) {
+                        setFieldErrors(prev => ({ ...prev, code: '' }))
+                      }
+                    }}
+                    placeholder="Nhập code đặt phòng"
+                    className={`w-full px-4 py-3 text-base border rounded-xl focus:ring-2 focus:ring-blue-500 ${
+                      fieldErrors.code ? 'border-red-500' : 'border-gray-300'
+                    }`}
+                  />
+                  {fieldErrors.code && (
+                    <p className="text-xs text-red-500 mt-1">{fieldErrors.code}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Số khách *</label>
+                  <Input
+                    type="number"
+                    min="1"
+                    max="10"
+                    value={edit.numGuests}
+                    onChange={(e) => {
+                      setEdit({ ...edit, numGuests: Number(e.target.value) })
+                      if (fieldErrors.numGuests) {
+                        setFieldErrors(prev => ({ ...prev, numGuests: '' }))
+                      }
+                    }}
+                    placeholder="Số lượng khách"
+                    className={`w-full px-4 py-3 text-base border rounded-xl focus:ring-2 focus:ring-blue-500 ${
+                      fieldErrors.numGuests ? 'border-red-500' : 'border-gray-300'
+                    }`}
+                  />
+                  {fieldErrors.numGuests && (
+                    <p className="text-xs text-red-500 mt-1">{fieldErrors.numGuests}</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Phòng và Trạng thái */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Phòng *</label>
+                  <select
+                    value={edit.roomId}
+                    onChange={(e) => {
+                      setEdit({ ...edit, roomId: Number(e.target.value) })
+                      if (fieldErrors.roomId) {
+                        setFieldErrors(prev => ({ ...prev, roomId: '' }))
+                      }
+                    }}
+                    className={`w-full px-4 py-3 text-base border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white ${
+                      fieldErrors.roomId ? 'border-red-500' : 'border-gray-300'
+                    }`}
+                  >
+                    <option value="">Chọn phòng</option>
+                    {rooms.map(room => (
+                      <option key={room.id} value={room.id}>{room.code} - {room.name || 'Phòng'}</option>
+                    ))}
+                  </select>
+                  {fieldErrors.roomId && (
+                    <p className="text-xs text-red-500 mt-1">{fieldErrors.roomId}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Trạng thái</label>
+                  <select
+                    value={edit.status}
+                    onChange={(e) => setEdit({ ...edit, status: e.target.value as BookingStatus })}
+                    className="w-full px-4 py-3 text-base border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                  >
+                    <option value="PENDING">Chờ duyệt</option>
+                    <option value="APPROVED">Đã duyệt</option>
+                    <option value="REJECTED">Đã từ chối</option>
+                    <option value="CANCELLED">Đã hủy</option>
+                    <option value="CHECKED_IN">Đã nhận phòng</option>
+                    <option value="CHECKED_OUT">Đã trả phòng</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Ngày check-in và check-out */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Ngày check-in *</label>
+                  <Input
+                    type="date"
+                    value={edit.checkinDate}
+                    onChange={(e) => {
+                      setEdit({ ...edit, checkinDate: e.target.value })
+                      if (fieldErrors.checkinDate) {
+                        setFieldErrors(prev => ({ ...prev, checkinDate: '' }))
+                      }
+                    }}
+                    className={`w-full px-4 py-3 text-base border rounded-xl focus:ring-2 focus:ring-blue-500 ${
+                      fieldErrors.checkinDate ? 'border-red-500' : 'border-gray-300'
+                    }`}
+                    style={{ fontSize: '16px' }} // Prevent zoom on iOS
+                  />
+                  {fieldErrors.checkinDate && (
+                    <p className="text-xs text-red-500 mt-1">{fieldErrors.checkinDate}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Ngày check-out *</label>
+                  <Input
+                    type="date"
+                    value={edit.checkoutDate}
+                    onChange={(e) => {
+                      setEdit({ ...edit, checkoutDate: e.target.value })
+                      if (fieldErrors.checkoutDate) {
+                        setFieldErrors(prev => ({ ...prev, checkoutDate: '' }))
+                      }
+                    }}
+                    className={`w-full px-4 py-3 text-base border rounded-xl focus:ring-2 focus:ring-blue-500 ${
+                      fieldErrors.checkoutDate ? 'border-red-500' : 'border-gray-300'
+                    }`}
+                    style={{ fontSize: '16px' }} // Prevent zoom on iOS
+                  />
+                  {fieldErrors.checkoutDate && (
+                    <p className="text-xs text-red-500 mt-1">{fieldErrors.checkoutDate}</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Ghi chú - Full width */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Ghi chú</label>
+                <textarea
+                  value={edit.note}
+                  onChange={(e) => setEdit({ ...edit, note: e.target.value })}
+                  placeholder="Nhập ghi chú (tùy chọn)"
+                  className="w-full px-4 py-3 text-base border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                  rows={3}
+                />
+              </div>
+            </div>
+
+            {/* Action Buttons - Same Row */}
+            <div className="flex gap-3 pt-4 border-t border-gray-200">
+              <Button 
+                variant="secondary" 
+                onClick={() => setEditOpen(false)}
+                className="flex-1 h-12 text-base font-medium"
+              >
+                Hủy
+              </Button>
+              <Button 
+                onClick={save}
+                className="flex-1 h-12 text-base font-medium bg-blue-600 hover:bg-blue-700"
+              >
+                {edit.id ? 'Cập nhật' : 'Tạo mới'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Confirmation Modal */}
+      <Modal open={confirmOpen.open} onClose={() => setConfirmOpen({ open: false })} title="Xác nhận vô hiệu hóa">
+        <div className="p-6">
+          <h2 className="text-xl font-semibold text-gray-900 mb-4">Xác nhận vô hiệu hóa</h2>
+          <p className="text-gray-600 mb-6">
+            Bạn có chắc chắn muốn vô hiệu hóa đặt phòng này không? Hành động này không thể hoàn tác, nhưng bạn có thể kích hoạt lại sau.
+          </p>
+          <div className="flex justify-end gap-3">
+            <Button variant="secondary" onClick={() => setConfirmOpen({ open: false })}>
+              Hủy
+            </Button>
+            <Button 
+              variant="danger" 
+              onClick={doAction}
+            >
+              Vô hiệu hóa
+            </Button>
+          </div>
+        </div>
+      </Modal>
+    </>
+  )
+}
