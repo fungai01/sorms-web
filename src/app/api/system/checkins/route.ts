@@ -16,9 +16,10 @@ export async function GET(req: NextRequest) {
       // For now, we'll fetch all and filter - can be optimized later
       const response = await apiClient.getBookings();
       if (response.success) {
-        const bookings = Array.isArray(response.data?.content) 
-          ? response.data.content 
-          : (Array.isArray(response.data) ? response.data : []);
+        const responseData = response.data as any;
+        const bookings = Array.isArray(responseData?.content) 
+          ? responseData.content 
+          : (Array.isArray(responseData) ? responseData : []);
         
         const checkin = bookings.find((b: any) => b.id === checkinId && b.status === 'CHECKED_IN');
         if (checkin) {
@@ -40,9 +41,10 @@ export async function GET(req: NextRequest) {
     }
     
     // Extract bookings array from response
-    const bookings = Array.isArray(response.data?.content) 
-      ? response.data.content 
-      : (Array.isArray(response.data) ? response.data : []);
+    const responseData = response.data as any;
+    const bookings = Array.isArray(responseData?.content) 
+      ? responseData.content 
+      : (Array.isArray(responseData) ? responseData : []);
     
     // Filter for checked-in bookings
     const checkins = bookings.filter((booking: any) => 
