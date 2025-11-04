@@ -14,6 +14,13 @@ type ReportItem = {
   count?: number
 }
 
+type StaffRevenue = {
+  staffId: number
+  staffName: string
+  totalAmount: number
+  orderCount: number
+}
+
 type ReportResponse = {
   summary: {
     totalBookings: number
@@ -22,15 +29,16 @@ type ReportResponse = {
     openTasks: number
   }
   items: ReportItem[]
+  staffRevenues: StaffRevenue[]
 }
 
 export default function ReportsPage() {
-  const [data, setData] = useState<ReportResponse>({ summary: { totalBookings: 0, totalRevenue: 0, totalServices: 0, openTasks: 0 }, items: [] })
+  const [data, setData] = useState<ReportResponse>({ summary: { totalBookings: 0, totalRevenue: 0, totalServices: 0, openTasks: 0 }, items: [], staffRevenues: [] })
   const [loading, setLoading] = useState(false)
   const [dateFrom, setDateFrom] = useState("")
   const [dateTo, setDateTo] = useState("")
   const [query, setQuery] = useState("")
-  const [activeTab, setActiveTab] = useState<'overview'|'revenue'|'bookings'|'services'|'tasks'>('overview')
+  const [activeTab, setActiveTab] = useState<'overview'|'revenue'|'bookings'|'services'|'tasks'|'staff'>('overview')
 
   // Removed local mock; always use API
 
@@ -43,7 +51,7 @@ export default function ReportsPage() {
         const json = await res.json()
         if (!aborted) setData(json)
       } catch {
-        if (!aborted) setData({ summary: { totalBookings: 0, totalRevenue: 0, totalServices: 0, openTasks: 0 }, items: [] })
+        if (!aborted) setData({ summary: { totalBookings: 0, totalRevenue: 0, totalServices: 0, openTasks: 0 }, items: [], staffRevenues: [] })
       } finally {
         if (!aborted) setLoading(false)
       }
@@ -54,12 +62,25 @@ export default function ReportsPage() {
 
   const filtered = useMemo(() => {
     let items = data.items
+
+    // Filter by active tab
+    if (activeTab === 'revenue') {
+      items = items.filter(i => i.type === 'PAYMENT' || i.type === 'SERVICE')
+    } else if (activeTab === 'bookings') {
+      items = items.filter(i => i.type === 'BOOKING')
+    } else if (activeTab === 'services') {
+      items = items.filter(i => i.type === 'SERVICE')
+    } else if (activeTab === 'tasks') {
+      items = items.filter(i => i.type === 'TASK')
+    }
+    // 'overview' and 'staff' show all items
+
     if (dateFrom) items = items.filter(i => i.date >= dateFrom)
     if (dateTo) items = items.filter(i => i.date <= dateTo)
     const q = query.trim().toLowerCase()
     if (q) items = items.filter(i => i.title.toLowerCase().includes(q) || i.type.toLowerCase().includes(q))
     return items
-  }, [data.items, dateFrom, dateTo, query])
+  }, [data.items, dateFrom, dateTo, query, activeTab])
 
   // Build series for charts from filtered items
   const chartData = useMemo(() => {
@@ -295,6 +316,7 @@ export default function ReportsPage() {
               { key: 'bookings', label: 'Đặt phòng' },
               { key: 'services', label: 'Dịch vụ' },
               { key: 'tasks', label: 'Công việc' },
+              { key: 'staff', label: 'Nhân viên' },
             ].map(t => (
               <button key={t.key} type="button" onClick={() => setActiveTab(t.key as any)} className={`px-3 py-2 rounded-lg text-sm border ${activeTab===t.key ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}>{t.label}</button>
             ))}
@@ -380,6 +402,48 @@ export default function ReportsPage() {
               </div>
             </div>
           </div>
+
+          {/* Staff Revenue Table - Only show when staff tab is active */}
+          {activeTab === 'staff' && (
+            <div className="rounded-xl border border-gray-200 bg-white">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+                <div className="text-gray-700 font-semibold">Doanh thu theo nhân viên</div>
+                <button className="text-xs px-3 py-1.5 rounded-md border border-gray-300 bg-white hover:bg-gray-50" onClick={() => {
+                  const rows = data.staffRevenues.map(s => [s.staffName, s.orderCount, s.totalAmount])
+                  const csv = [['Nhân viên','Số đơn','Doanh thu'], ...rows]
+                  const blob = new Blob([csv.map(r => r.join(',')).join('\n')], { type: 'text/csv' })
+                  const url = URL.createObjectURL(blob)
+                  const a = document.createElement('a'); a.href = url; a.download = 'staff_revenue.csv'; a.click(); URL.revokeObjectURL(url)
+                }}>Xuất CSV</button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="min-w-[480px] w-full text-sm">
+                  <thead>
+                    <tr className="bg-gray-50 border-b border-gray-200">
+                      <th className="px-3 py-2 text-left">Nhân viên</th>
+                      <th className="px-3 py-2 text-right">Số đơn</th>
+                      <th className="px-3 py-2 text-right">Doanh thu</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.staffRevenues.length === 0 ? (
+                      <tr>
+                        <td colSpan={3} className="px-3 py-4 text-center text-gray-500">Chưa có dữ liệu</td>
+                      </tr>
+                    ) : (
+                      data.staffRevenues.map(s => (
+                        <tr key={s.staffId} className="border-b border-gray-100 hover:bg-gray-50">
+                          <td className="px-3 py-2">{s.staffName}</td>
+                          <td className="px-3 py-2 text-right">{s.orderCount}</td>
+                          <td className="px-3 py-2 text-right font-semibold text-green-600">{s.totalAmount.toLocaleString('vi-VN')}₫</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           {/* Card/Table */}
           <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-xl rounded-2xl overflow-hidden">

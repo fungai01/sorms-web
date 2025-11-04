@@ -10,6 +10,13 @@ type ReportItem = {
   count?: number
 }
 
+type StaffRevenue = {
+  staffId: number
+  staffName: string
+  totalAmount: number
+  orderCount: number
+}
+
 type ReportResponse = {
   summary: {
     totalBookings: number
@@ -18,6 +25,7 @@ type ReportResponse = {
     openTasks: number
   }
   items: ReportItem[]
+  staffRevenues: StaffRevenue[]
 }
 
 /**
@@ -27,42 +35,41 @@ type ReportResponse = {
 async function buildReportFromAPI(): Promise<ReportResponse> {
   try {
     // Fetch all data in parallel from backend API
-    const [bookingsResponse, servicesResponse, roomsResponse, roomTypesResponse] = await Promise.all([
+    const [bookingsResponse, serviceOrdersResponse, roomsResponse, roomTypesResponse, usersResponse] = await Promise.all([
       apiClient.getBookings(),
-      apiClient.getServices(),
+      apiClient.getServiceOrders(),
       apiClient.getRooms(),
       apiClient.getRoomTypes(),
+      apiClient.getStaffUsers(),
     ])
 
     const bookings = (bookingsResponse.data || []) as any[]
-    const services = (servicesResponse.data || []) as any[]
+    const serviceOrders = (serviceOrdersResponse.data || []) as any[]
     const rooms = (roomsResponse.data || []) as any[]
     const roomTypes = (roomTypesResponse.data || []) as any[]
+    const staffUsers = (usersResponse.data || []) as any[]
+
+    // Debug: Log data to check if it's real or mock
+    console.log('[REPORTS API] Data from backend:', {
+      bookingsCount: bookings.length,
+      serviceOrdersCount: serviceOrders.length,
+      roomsCount: rooms.length,
+      roomTypesCount: roomTypes.length,
+      sampleBooking: bookings[0],
+      sampleServiceOrder: serviceOrders[0],
+      sampleRoom: rooms[0],
+      sampleRoomType: roomTypes[0]
+    })
 
     // Calculate summary statistics from real data
     const totalBookings = bookings.length
-    const totalServices = services.filter((s: any) => s.isActive).length
+    const totalServices = serviceOrders.length
 
-    // Calculate total revenue from bookings using REAL room prices from API
-    const totalRevenue = bookings.reduce((sum: number, booking: any) => {
-      // Find room for this booking
-      const room = rooms.find((r: any) => r.id === booking.roomId)
-      if (!room) return sum
-
-      // Find room type to get base price
-      const roomType = roomTypes.find((rt: any) => rt.id === room.roomTypeId)
-      if (!roomType) return sum
-
-      const basePrice = roomType.basePrice || 0
-
-      // Calculate number of days
-      const checkinDate = new Date(booking.checkinDate)
-      const checkoutDate = new Date(booking.checkoutDate)
-      const days = Math.max(1, Math.ceil((checkoutDate.getTime() - checkinDate.getTime()) / (1000 * 60 * 60 * 24)))
-
-      // Calculate revenue: basePrice * days * numGuests
-      const bookingRevenue = basePrice * days * (booking.numGuests || 1)
-      return sum + bookingRevenue
+    // Calculate total revenue from SERVICE ORDERS (not bookings)
+    const totalRevenue = serviceOrders.reduce((sum: number, order: any) => {
+      // Use total_amount from service order
+      const orderAmount = order.total_amount || order.totalAmount || 0
+      return sum + orderAmount
     }, 0)
 
     // Tasks not implemented yet
@@ -90,26 +97,73 @@ async function buildReportFromAPI(): Promise<ReportResponse> {
       })
     })
 
-    // Group services by date (using service orders when available)
-    const servicesByDate = new Map<string, number>()
-    services.forEach((service: any) => {
-      const date = service.created_at?.slice(0, 10) || new Date().toISOString().slice(0, 10)
-      servicesByDate.set(date, (servicesByDate.get(date) || 0) + (service.unitPrice || 0))
+    // Group service orders by date - count orders and sum revenue
+    const ordersByDate = new Map<string, { count: number; amount: number }>()
+    serviceOrders.forEach((order: any) => {
+      const date = order.created_at?.slice(0, 10) || new Date().toISOString().slice(0, 10)
+      const orderAmount = order.total_amount || order.totalAmount || 0
+
+      const existing = ordersByDate.get(date)
+      if (existing) {
+        existing.count += 1
+        existing.amount += orderAmount
+      } else {
+        ordersByDate.set(date, {
+          count: 1,
+          amount: orderAmount
+        })
+      }
     })
 
-    // Add service items
-    servicesByDate.forEach((amount, date) => {
+    // Add service order items
+    ordersByDate.forEach((data, date) => {
       items.push({
         id: itemId++,
         date,
         type: 'SERVICE',
-        title: 'Dịch vụ',
-        amount,
+        title: 'Đơn dịch vụ',
+        count: data.count,
+        amount: data.amount,
       })
     })
 
     // Sort items by date (newest first)
     items.sort((a, b) => b.date.localeCompare(a.date))
+
+    // Calculate revenue by staff
+    // Assuming service orders have a field like 'assigned_to' or 'staff_id' for the staff who handled it
+    const staffRevenueMap = new Map<number, { name: string; amount: number; count: number }>()
+
+    serviceOrders.forEach((order: any) => {
+      const staffId = order.assigned_to || order.staff_id || order.requested_by
+      if (!staffId) return
+
+      const orderAmount = order.total_amount || order.totalAmount || 0
+      const staff = staffUsers.find((s: any) => s.id === staffId)
+      const staffName = staff ? (staff.name || staff.email || `Staff #${staffId}`) : `Staff #${staffId}`
+
+      const existing = staffRevenueMap.get(staffId)
+      if (existing) {
+        existing.amount += orderAmount
+        existing.count += 1
+      } else {
+        staffRevenueMap.set(staffId, {
+          name: staffName,
+          amount: orderAmount,
+          count: 1
+        })
+      }
+    })
+
+    // Convert to array and sort by revenue (highest first)
+    const staffRevenues: StaffRevenue[] = Array.from(staffRevenueMap.entries())
+      .map(([staffId, data]) => ({
+        staffId,
+        staffName: data.name,
+        totalAmount: data.amount,
+        orderCount: data.count
+      }))
+      .sort((a, b) => b.totalAmount - a.totalAmount)
 
     return {
       summary: {
@@ -119,6 +173,7 @@ async function buildReportFromAPI(): Promise<ReportResponse> {
         openTasks,
       },
       items,
+      staffRevenues,
     }
   } catch (error) {
     console.error('Error building report from API:', error)
@@ -131,6 +186,7 @@ async function buildReportFromAPI(): Promise<ReportResponse> {
         openTasks: 0,
       },
       items: [],
+      staffRevenues: [],
     }
   }
 }
