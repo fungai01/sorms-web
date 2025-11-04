@@ -63,6 +63,16 @@ class ApiClient {
   ): Promise<ApiResponse<T>> {
     try {
       const url = `${this.baseURL}${endpoint}`
+
+      // Log request details for debugging
+      console.log(`[API Client] 🚀 Request:`, {
+        url,
+        method: options.method || 'GET',
+        baseURL: this.baseURL,
+        endpoint,
+        timestamp: new Date().toISOString()
+      })
+
       const response = await fetch(url, {
         headers: {
           'Content-Type': 'application/json',
@@ -149,13 +159,20 @@ class ApiClient {
         data,
       }
     } catch (error) {
-      console.error(`API request failed for ${endpoint}:`, error)
-      
+      console.error(`[API Client] ❌ Request failed for ${endpoint}:`, {
+        error,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        errorType: error instanceof Error ? error.constructor.name : typeof error,
+        baseURL: this.baseURL,
+        endpoint,
+        timestamp: new Date().toISOString()
+      })
+
       // Handle network errors and other exceptions
       let errorMessage = 'Unknown error occurred'
-      
+
       if (error instanceof TypeError && error.message.includes('fetch')) {
-        errorMessage = 'Network error: Unable to connect to server'
+        errorMessage = 'Không thể kết nối đến server. Vui lòng kiểm tra kết nối mạng.'
       } else if (error instanceof Error) {
         errorMessage = error.message
       }

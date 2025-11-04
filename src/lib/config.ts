@@ -1,8 +1,9 @@
 // Configuration for API endpoints
 export const API_CONFIG = {
   // Backend API base URL
-  BASE_URL: process.env.NEXT_PUBLIC_API_URL || 'http://103.81.87.99:5656/api',
-  
+  // Support both NEXT_PUBLIC_API_BASE_URL and NEXT_PUBLIC_API_URL for backward compatibility
+  BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || 'http://103.81.87.99:5656/api',
+
   // API endpoints
   ENDPOINTS: {
     ROOMS: '/rooms',
@@ -14,10 +15,10 @@ export const API_CONFIG = {
     AUTH: '/auth',
     USERS: '/users',
   },
-  
+
   // Request timeout (in milliseconds)
-  TIMEOUT: 10000,
-  
+  TIMEOUT: 30000, // Increased to 30s for Vercel cold starts
+
   // Retry configuration
   RETRY: {
     MAX_ATTEMPTS: 3,
@@ -28,3 +29,12 @@ export const API_CONFIG = {
 // Environment check
 export const isDevelopment = process.env.NODE_ENV === 'development'
 export const isProduction = process.env.NODE_ENV === 'production'
+
+// Log API configuration in development
+if (isDevelopment) {
+  console.log('🔧 API Configuration:', {
+    BASE_URL: API_CONFIG.BASE_URL,
+    TIMEOUT: API_CONFIG.TIMEOUT,
+    ENV: process.env.NODE_ENV
+  })
+}
