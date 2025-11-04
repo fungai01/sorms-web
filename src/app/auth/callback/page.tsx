@@ -16,7 +16,6 @@ function AuthCallbackInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { data: session, status } = useSession();
-  const [selectedRole, setSelectedRole] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
 
   const role = searchParams.get("role");
@@ -41,66 +40,55 @@ function AuthCallbackInner() {
           let userStatus = 'ACTIVE';
           let actualRole = 'user'; // Default role for new users
 
-          // Bước 1: Kiểm tra user đã tồn tại chưa
-          console.log('👤 Checking if user exists...');
-          const checkResponse = await fetch(`/api/system/users/check?email=${encodeURIComponent(userEmail)}`);
+          // Check if super admin FIRST - skip backend check entirely
+          const isSuperAdmin = isSuperAdminEmail(userEmail);
 
-          if (checkResponse.ok) {
-            const checkData = await checkResponse.json();
+          if (isSuperAdmin) {
+            // Super admin: KHÔNG CẦN check backend, chỉ dùng role từ URL
+            console.log('🔑 Super admin detected, skipping backend check');
+            userStatus = 'ACTIVE';
+            actualRole = role || 'admin'; // Use selected role or default to admin
+            console.log('🔑 Super admin role:', actualRole);
+          } else {
+            // Regular user: PHẢI check backend
+            console.log('👤 Regular user, checking backend...');
+            const checkResponse = await fetch(`/api/system/users/check?email=${encodeURIComponent(userEmail)}`);
 
-            if (checkData.exists && checkData.user) {
-              // User đã tồn tại - lấy role và status từ backend
-              console.log('✅ User exists in database');
-              userStatus = checkData.user.status || checkData.status || 'ACTIVE';
+            if (checkResponse.ok) {
+              const checkData = await checkResponse.json();
 
-              // Check if super admin
-              const isSuperAdmin = isSuperAdminEmail(userEmail);
-              if (isSuperAdmin) {
-                // Super admin can choose role from URL parameter
-                actualRole = role || 'admin';
-                console.log('🔑 Super admin can choose role:', actualRole);
-              } else {
-                // Regular user - use role from backend
+              if (checkData.exists && checkData.user) {
+                // User đã tồn tại - lấy role và status từ backend
+                console.log('✅ User exists in database');
+                userStatus = checkData.user.status || checkData.status || 'ACTIVE';
                 actualRole = checkData.user.role || checkData.role || 'user';
                 console.log('📋 Regular user role from backend:', actualRole);
-              }
-            } else {
-              // User mới - tạo với role "user" mặc định
-              console.log('🆕 New user detected, creating with role "user"...');
-              const createResponse = await fetch('/api/system/users?action=create', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  email: userEmail,
-                  full_name: userName || userEmail,
-                  role: 'user' // ALWAYS create new users as "user"
-                })
-              });
-
-              if (createResponse.ok) {
-                console.log('✅ User created successfully with role "user"');
-                const createData = await createResponse.json();
-                userStatus = createData.status || 'ACTIVE';
-                actualRole = 'user';
               } else {
-                // Kiểm tra nếu lỗi là "User already exists" (U0002)
-                const errorData = await createResponse.json().catch(() => ({}));
-                console.log('⚠️ Create user response:', errorData);
+                // User mới - tạo với role "user" mặc định
+                console.log('🆕 New user detected, creating with role "user"...');
+                const createResponse = await fetch('/api/system/users?action=create', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    email: userEmail,
+                    full_name: userName || userEmail,
+                    role: 'user' // ALWAYS create new users as "user"
+                  })
+                });
 
-                if (errorData.responseCode === 'U0002') {
-                  // User đã tồn tại - thử fetch lại thông tin user
-                  console.log('✅ User already exists in backend, fetching user info...');
+                if (createResponse.ok) {
+                  console.log('✅ User created successfully with role "user"');
+                  const createData = await createResponse.json();
+                  userStatus = createData.status || 'ACTIVE';
+                  actualRole = 'user';
+                } else {
+                  // Kiểm tra nếu lỗi là "User already exists" (U0002)
+                  const errorData = await createResponse.json().catch(() => ({}));
+                  console.log('⚠️ Create user response:', errorData);
 
-                  // Check if super admin first
-                  const isSuperAdmin = isSuperAdminEmail(userEmail);
-                  if (isSuperAdmin) {
-                    console.log('🔑 Super admin detected, can choose any role');
-                    userStatus = 'ACTIVE';
-                    // Super admin can choose role from URL parameter
-                    actualRole = role || 'admin'; // Use selected role or default to admin
-                    console.log('🔑 Super admin selected role:', actualRole);
-                  } else {
-                    // Try to fetch role from backend for non-super-admin users
+                  if (errorData.responseCode === 'U0002') {
+                    // User đã tồn tại - thử fetch lại thông tin user
+                    console.log('✅ User already exists in backend, fetching user info...');
                     try {
                       const recheckResponse = await fetch(`/api/system/users/check?email=${encodeURIComponent(userEmail)}`);
                       if (recheckResponse.ok) {
@@ -126,17 +114,17 @@ function AuthCallbackInner() {
                       userStatus = 'ACTIVE';
                       actualRole = 'user';
                     }
+                  } else {
+                    // Lỗi khác - thực sự fail
+                    console.error('❌ Failed to create user:', errorData);
+                    throw new Error('Failed to create user');
                   }
-                } else {
-                  // Lỗi khác - thực sự fail
-                  console.error('❌ Failed to create user:', errorData);
-                  throw new Error('Failed to create user');
                 }
               }
+            } else {
+              console.error('❌ Failed to check user existence');
+              throw new Error('Failed to check user');
             }
-          } else {
-            console.error('❌ Failed to check user existence');
-            throw new Error('Failed to check user');
           }
 
           // Kiểm tra status
