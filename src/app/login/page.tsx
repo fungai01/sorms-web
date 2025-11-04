@@ -3,6 +3,9 @@
 import { useState, useEffect } from "react";
 import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
+import Logo from "@/img/Logo.png";
+import Bg from "@/img/bg.jpg";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -32,10 +35,17 @@ export default function LoginPage() {
   const roles = [
     { id: "admin", name: "Admin" },
     { id: "office", name: "Phòng Hành chính" },
-    { id: "lecturer", name: "Giảng viên" },
     { id: "staff", name: "Nhân viên" },
-    { id: "guest", name: "Khách mời" },
+    { id: "user", name: "Người dùng" },
   ];
+
+  // Tailwind màu cho từng option - Màu đẹp hơn với gradient và độ tương phản cao
+  const roleStyles: Record<string, { bg: string; hover: string; activeBg: string; text: string; ring: string; border: string; }> = {
+    admin:  { bg: "bg-gradient-to-r from-rose-100 to-pink-100",       hover: "hover:from-rose-200 hover:to-pink-200",       activeBg: "bg-gradient-to-r from-rose-200 to-pink-200",       text: "text-gray-800",       ring: "hover:ring-rose-300",       border: "border-rose-300" },
+    office: { bg: "bg-gradient-to-r from-sky-100 to-blue-100",        hover: "hover:from-sky-200 hover:to-blue-200",        activeBg: "bg-gradient-to-r from-sky-200 to-blue-200",        text: "text-gray-800",        ring: "hover:ring-sky-300",        border: "border-sky-300" },
+    staff:  { bg: "bg-gradient-to-r from-amber-100 to-orange-100",    hover: "hover:from-amber-200 hover:to-orange-200",    activeBg: "bg-gradient-to-r from-amber-200 to-orange-200",    text: "text-gray-800",      ring: "hover:ring-amber-300",      border: "border-amber-300" },
+    user:   { bg: "bg-gradient-to-r from-emerald-100 to-teal-100",    hover: "hover:from-emerald-200 hover:to-teal-200",    activeBg: "bg-gradient-to-r from-emerald-200 to-teal-200",    text: "text-gray-800",    ring: "hover:ring-emerald-300",    border: "border-emerald-300" },
+  };
 
   const handleRoleSelect = (roleId: string) => {
     setSelectedRole(roleId);
@@ -77,8 +87,7 @@ export default function LoginPage() {
       <div
         className="absolute inset-0 bg-cover bg-center bg-no-repeat"
         style={{
-          backgroundImage:
-            "url('https://cdn.tienphong.vn/images/814b5533c866dc3540018a126103e935e41e658c37f7e8dcbdb6292ed05c91a360f30cb27834f97679b7241f77c48cc540bbcbd3a527fa3765766ab79535fdcf/image003-7518-2471.jpg')",
+          backgroundImage: `url(${Bg.src})`,
         }}
       />
 
@@ -103,9 +112,7 @@ export default function LoginPage() {
         <div className="bg-white/95 backdrop-blur-sm rounded-3xl shadow-2xl p-8 w-full max-w-md">
           {/* Logo */}
           <div className="flex justify-center mb-6">
-            <div className="w-20 h-20 bg-gradient-to-br from-blue-500 via-indigo-500 to-purple-600 rounded-2xl flex items-center justify-center shadow-xl">
-              <span className="text-white font-black text-3xl">S</span>
-            </div>
+            <Image src={Logo} alt="SORMS logo" width={100} height={100} priority className="rounded-2xl shadow-xl" />
           </div>
 
           {/* Title */}
@@ -131,15 +138,15 @@ export default function LoginPage() {
             <div className="relative">
               <button
                 onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                className="w-full px-4 py-3 bg-white border-2 border-gray-300 rounded-xl text-left flex items-center justify-between hover:border-blue-500 focus:outline-none focus:border-blue-500 transition-colors"
+                className={`w-full px-4 py-3 border-2 rounded-xl text-left flex items-center justify-between transition-colors focus:outline-none ${selectedRole ? `${roleStyles[selectedRole]?.bg ?? 'bg-white'} ${roleStyles[selectedRole]?.border ?? 'border-gray-300'}` : 'bg-white border-gray-300'}`}
               >
-                <span className={selectedRole ? "text-gray-800" : "text-gray-400"}>
+                <span className={selectedRole ? (roleStyles[selectedRole]?.text ?? "text-gray-800") : "text-gray-400"}>
                   {selectedRole
                     ? roles.find((r) => r.id === selectedRole)?.name
                     : "Chọn vai trò..."}
                 </span>
                 <svg
-                  className={`w-5 h-5 text-gray-400 transition-transform ${
+                  className={`w-5 h-5 ${selectedRole ? (roleStyles[selectedRole]?.text ?? 'text-gray-400') : 'text-gray-400'} transition-transform ${
                     isDropdownOpen ? "rotate-180" : ""
                   }`}
                   fill="none"
@@ -158,15 +165,19 @@ export default function LoginPage() {
               {/* Dropdown Menu */}
               {isDropdownOpen && (
                 <div className="absolute z-20 w-full mt-2 bg-white border-2 border-gray-200 rounded-xl shadow-lg overflow-hidden">
-                  {roles.map((role) => (
-                    <button
-                      key={role.id}
-                      onClick={() => handleRoleSelect(role.id)}
-                      className="w-full px-4 py-3 text-left hover:bg-blue-50 transition-colors text-gray-700 hover:text-blue-600"
-                    >
-                      {role.name}
-                    </button>
-                  ))}
+                  {roles.map((role) => {
+                    const style = roleStyles[role.id] ?? { bg: "bg-gray-50", hover: "hover:bg-gray-100", activeBg: "bg-gray-100", text: "text-gray-800", ring: "hover:ring-gray-200", border: "border-gray-300" };
+                    const isActive = selectedRole === role.id;
+                    return (
+                      <button
+                        key={role.id}
+                        onClick={() => handleRoleSelect(role.id)}
+                        className={`w-full px-4 py-3 text-left transition-colors ${isActive ? style.activeBg : style.bg} ${style.hover} ${style.text} ${style.ring} focus:outline-none focus:ring-2 ${isActive ? "ring-2 ring-offset-0 ring-black/10 font-semibold" : ""}`}
+                      >
+                        {role.name}
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -176,10 +187,10 @@ export default function LoginPage() {
           <button
             onClick={handleGoogleSignIn}
             disabled={!selectedRole || isLoading}
-            className={`w-full py-3 px-4 rounded-xl font-semibold text-white transition-all duration-300 ${
+            className={`w-full py-3 px-4 rounded-xl font-semibold transition-all duration-300 ${
               !selectedRole || isLoading
-                ? "bg-gray-300 cursor-not-allowed"
-                : "bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500 hover:shadow-lg hover:scale-105"
+                ? "bg-gray-300 text-gray-500 cursor-not-allowed"
+                : "bg-gradient-to-r from-blue-500 to-indigo-500 text-white hover:from-blue-600 hover:to-indigo-600 shadow-md hover:shadow-lg hover:scale-[1.01] active:scale-[0.99]"
             }`}
           >
             {isLoading ? (
@@ -212,10 +223,6 @@ export default function LoginPage() {
             )}
           </button>
 
-          {/* Info Text */}
-          <p className="mt-6 text-xs text-center text-gray-500">
-            Chỉ cho phép đăng nhập bằng email @fpt.edu.vn, @fe.edu.vn, @gmail.com hoặc @outlook.com
-          </p>
         </div>
 
         {/* Footer */}

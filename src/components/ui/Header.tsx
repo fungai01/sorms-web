@@ -7,6 +7,8 @@ import { useCurrentRole } from "@/hooks/useCurrentRole";
 import Button from "./Button";
 import Input from "./Input";
 import { getNotificationsByRole, markAsRead, markAllAsRead, type Notification } from "@/lib/notifications";
+import Image from "next/image";
+import Logo from "@/img/Logo.png";
 
 interface HeaderProps {
   onToggleSidebar?: () => void;
@@ -205,8 +207,8 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
               href={isAdmin ? "/admin/dashboard" : isOffice ? "/office/dashboard" : isStaff ? "/staff/dashboard" : isUser ? "/user/dashboard" : "/"}
               className="flex items-center space-x-2 sm:space-x-3 ml-3 sm:ml-6"
             >
-              <div className="w-6 h-6 sm:w-8 sm:h-8 bg-gray-900 rounded-md flex items-center justify-center">
-                <span className="text-white font-semibold text-xs sm:text-sm">S</span>
+              <div className="relative w-10 h-10 sm:w-12 sm:h-12 rounded-md overflow-hidden">
+                <Image src={Logo} alt="SORMS logo" fill sizes="(max-width: 640px) 40px, 60px" className="object-cover" />
               </div>
               <div className="flex flex-col">
                 <span className="text-sm sm:text-lg font-semibold text-gray-900">SORMS</span>
