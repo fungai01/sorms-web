@@ -6,11 +6,11 @@ export async function GET(req: NextRequest) {
     const days = Math.min(Math.max(Number(searchParams.get('days') || '14'), 7), 30)
 
     // Fetch real checkins from system API
-    const baseUrl = process.env.NEXT_PUBLIC_BASE_PATH || ''
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_PATH || `http://localhost:${process.env.PORT || 3002}`
     const url = `${baseUrl}/api/system/checkins`
-    
+
     console.log('[Dashboard Checkins] Fetching from:', url)
-    
+
     const res = await fetch(url, {
       headers: { 'Content-Type': 'application/json' },
       cache: 'no-store',

@@ -2,11 +2,11 @@ import { NextResponse } from 'next/server'
 
 export async function GET() {
   try {
-    const baseUrl = process.env.NEXT_PUBLIC_BASE_PATH || ''
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_PATH || `http://localhost:${process.env.PORT || 3002}`
     const url = `${baseUrl}/api/system/orders`
-    
+
     console.log('[Dashboard Service Orders] Fetching from:', url)
-    
+
     const res = await fetch(url, {
       headers: { 'Content-Type': 'application/json' },
       cache: 'no-store',

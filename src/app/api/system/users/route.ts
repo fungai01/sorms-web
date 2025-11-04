@@ -3,21 +3,52 @@ import { getToken } from 'next-auth/jwt'
 import { API_CONFIG } from '@/lib/config'
 
 const BASE = API_CONFIG.BASE_URL
-const adminEmail = process.env.ADMIN_EMAIL_WHITELIST || 'quyentnqe170062@fpt.edu.vn'
+
+// Helper: Check if email is admin (supports multiple admins)
+function isAdminEmail(email: string): boolean {
+  const adminEmails = (process.env.ADMIN_EMAIL_WHITELIST || 'quyentnqe170062@fpt.edu.vn').split(',');
+  return adminEmails.some(adminEmail =>
+    email.toLowerCase() === adminEmail.trim().toLowerCase()
+  );
+}
 
 // Helper: Check if user is admin
 async function isAdmin(req: NextRequest): Promise<boolean> {
-  const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET })
-  const email = (token as any)?.email as string | undefined
-  return email?.toLowerCase() === adminEmail.toLowerCase()
+  try {
+    const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET })
+    const email = (token as any)?.email as string | undefined
+
+    if (!email) {
+      return false;
+    }
+
+    const adminCheck = isAdminEmail(email);
+
+    console.log('[API] Admin check:', {
+      hasToken: !!token,
+      email: email,
+      adminEmails: process.env.ADMIN_EMAIL_WHITELIST,
+      isAdmin: adminCheck
+    })
+
+    return adminCheck;
+  } catch (error) {
+    console.error('[API] Error checking admin:', error)
+    return false
+  }
 }
 
 // GET - Lấy danh sách users (chỉ admin)
 export async function GET(req: NextRequest) {
   try {
     // Admin only for list
-    if (!await isAdmin(req)) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
+    const adminCheck = await isAdmin(req)
+    if (!adminCheck) {
+      console.warn('[API] Unauthorized access attempt to /api/system/users')
+      return NextResponse.json({ 
+        error: 'Unauthorized - Admin access required',
+        message: 'You must be an admin to access this resource'
+      }, { status: 403 })
     }
     const { searchParams } = new URL(req.url)
     const page = searchParams.get('page') || '0'
@@ -29,7 +60,12 @@ export async function GET(req: NextRequest) {
     const url = new URL(`${BASE}/users/search`)
     url.searchParams.set('page', page)
     url.searchParams.set('size', size)
-    if (keyword) url.searchParams.set('keyword', keyword)
+    // Backend có thể dùng 'keyword' hoặc 'q' cho search
+    if (keyword) {
+      url.searchParams.set('keyword', keyword)
+      // Thử cả 'q' nếu backend hỗ trợ
+      url.searchParams.set('q', keyword)
+    }
 
     console.log('[API] Fetching users from:', url.toString())
     const res = await fetch(url.toString(), { headers: { 'Content-Type': 'application/json', accept: '*/*' }, cache: 'no-store' })
@@ -40,18 +76,56 @@ export async function GET(req: NextRequest) {
       const errorText = await res.text();
       console.error('[API] Backend returned error. Status:', res.status);
       console.error('[API] Backend error response:', errorText);
-      console.warn('[API] Returning empty array as fallback')
-      return NextResponse.json({ items: [] })
+      
+      // Try to parse error response
+      let errorData: any = {}
+      try {
+        errorData = JSON.parse(errorText)
+      } catch (e) {
+        errorData = { message: errorText }
+      }
+      
+      // Return error information instead of empty array
+      return NextResponse.json({ 
+        items: [],
+        error: errorData.message || errorData.responseCode || `Backend error: ${res.status}`,
+        responseCode: errorData.responseCode,
+        backendStatus: res.status
+      }, { status: 200 }) // Return 200 but with error info
     }
 
     const data = await res.json().catch(() => ({}))
     console.log('[API] Backend response data:', JSON.stringify(data, null, 2))
 
-    const items = Array.isArray(data?.data?.content) ? data.data.content :
-                  (Array.isArray(data?.data) ? data.data :
-                  (Array.isArray(data) ? data : []))
+    // Handle multiple response formats
+    let items = []
+    if (Array.isArray(data?.data?.content)) {
+      items = data.data.content
+      console.log('[API] Format: data.data.content (Pageable)')
+    } else if (Array.isArray(data?.data)) {
+      items = data.data
+      console.log('[API] Format: data.data (Array)')
+    } else if (Array.isArray(data?.content)) {
+      items = data.content
+      console.log('[API] Format: data.content (Pageable direct)')
+    } else if (Array.isArray(data)) {
+      items = data
+      console.log('[API] Format: root array')
+    } else if (data?.data && typeof data.data === 'object' && !Array.isArray(data.data)) {
+      // Single object wrapped in data
+      items = [data.data]
+      console.log('[API] Format: single object in data')
+    }
+    
     console.log('[API] Extracted items count:', items.length)
-    console.log('[API] Sample item:', items[0] ? JSON.stringify(items[0], null, 2) : 'No items')
+    if (items.length > 0) {
+      console.log('[API] Sample item:', JSON.stringify(items[0], null, 2))
+      console.log('[API] Sample item email:', items[0]?.email)
+    } else {
+      console.warn('[API] No items found in response')
+      console.log('[API] Full response structure:', Object.keys(data))
+    }
+    
     return NextResponse.json({ items })
   } catch (e: any) {
     console.error('[API] GET error:', e)
@@ -97,11 +171,15 @@ export async function POST(req: NextRequest) {
 
         // Check if it's a duplicate user error
         if (data.responseCode === 'U0002') {
-          return NextResponse.json({ error: 'Email đã tồn tại trong hệ thống' }, { status: 400 });
+          return NextResponse.json({ 
+            error: 'Email đã tồn tại trong hệ thống',
+            responseCode: 'U0002'
+          }, { status: 400 });
         }
 
         return NextResponse.json({
-          error: data.message || `Backend error: ${res.status}`
+          error: data.message || data.error || `Backend error: ${res.status}`,
+          responseCode: data.responseCode || null
         }, { status: res.status });
       }
 

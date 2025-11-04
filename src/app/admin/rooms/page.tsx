@@ -352,11 +352,12 @@ export default function RoomsPage() {
             <div className="hidden lg:block overflow-x-auto">
               <table className="w-full text-sm">
                 <colgroup>
-                  <col className="w-[5%]" />
-                  <col className="w-[5%]" />
                   <col className="w-[10%]" />
-                  <col className="w-[5%]" />
                   <col className="w-[10%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[15%]" />
+                  <col className="w-[15%]" />
                   <col className="w-[15%]" />
                 </colgroup>
                 <thead>

@@ -1,10 +1,12 @@
 import NextAuth, { type NextAuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
 
-// Helper: Check if email is admin
+// Helper: Check if email is admin (supports multiple admins)
 function isAdminEmail(email: string): boolean {
-  const adminEmail = process.env.ADMIN_EMAIL_WHITELIST || 'quyentnqe170062@fpt.edu.vn';
-  return email.toLowerCase() === adminEmail.toLowerCase();
+  const adminEmails = (process.env.ADMIN_EMAIL_WHITELIST || 'quyentnqe170062@fpt.edu.vn').split(',');
+  return adminEmails.some(adminEmail =>
+    email.toLowerCase() === adminEmail.trim().toLowerCase()
+  );
 }
 
 // Helper: Check if email domain is allowed
@@ -35,16 +37,18 @@ async function getUserStatus(email: string): Promise<{ status: 'ACTIVE' | 'INACT
   };
 }
 
-// Log environment variables for debugging
-console.log('🔐 NEXTAUTH_SECRET:', process.env.NEXTAUTH_SECRET ? 'Loaded' : 'MISSING');
-console.log('🔐 GOOGLE_CLIENT_ID:', process.env.GOOGLE_CLIENT_ID ? 'Loaded' : 'MISSING');
-console.log('🔐 GOOGLE_CLIENT_SECRET:', process.env.GOOGLE_CLIENT_SECRET ? 'Loaded' : 'MISSING');
+// Log environment variables for debugging (only in development)
+if (process.env.NODE_ENV === 'development') {
+  console.log('🔐 NEXTAUTH_SECRET:', process.env.NEXTAUTH_SECRET ? 'Loaded' : 'MISSING');
+  console.log('🔐 GOOGLE_CLIENT_ID:', process.env.GOOGLE_CLIENT_ID ? 'Loaded' : 'MISSING');
+  console.log('🔐 GOOGLE_CLIENT_SECRET:', process.env.GOOGLE_CLIENT_SECRET ? 'Loaded' : 'MISSING');
+}
 
 export const authOptions: NextAuthOptions = {
   providers: [
     GoogleProvider({
-      clientId: process.env.GOOGLE_CLIENT_ID || "",
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
+      clientId: process.env.GOOGLE_CLIENT_ID || "dummy",
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET || "dummy",
     }),
   ],
   pages: {
@@ -105,9 +109,12 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
   },
-  secret: process.env.NEXTAUTH_SECRET,
+  secret: process.env.NEXTAUTH_SECRET || "development-secret-key-change-in-production",
 };
 
 const handler = NextAuth(authOptions);
 export { handler as GET, handler as POST };
+
+
+
 

@@ -7,7 +7,7 @@ import Badge from "@/components/ui/Badge";
 import Modal from "@/components/ui/Modal";
 import Input from "@/components/ui/Input";
 import { createBookingNotification } from "@/lib/notifications";
-import { useRooms, useBookings, useServices } from "@/hooks/useApi";
+import { useRooms, useBookings, useServiceOrders, useServices, useStaffUsers } from "@/hooks/useApi";
 import { apiClient } from "@/lib/api-client";
 
 type Room = {
@@ -40,23 +40,17 @@ type RoomBooking = {
   confirmedAt?: string;
 };
 
-type Service = {
-  id: number;
-  name: string;
-  description: string;
-  price: number;
-  status: 'AVAILABLE' | 'COMPLETED' | 'CANCELLED';
-};
-
 type ServiceOrder = {
   id: number;
   serviceName: string;
+  serviceCode: string;
   quantity: number;
   unitPrice: number;
   totalPrice: number;
   status: 'PENDING' | 'CONFIRMED' | 'COMPLETED' | 'CANCELLED';
   orderDate: string;
   deliveryDate?: string;
+  note?: string;
 };
 
 type Payment = {
@@ -95,7 +89,7 @@ export default function UserPage() {
     }
   }, []);
 
-  const [activeTab, setActiveTab] = useState<'rooms' | 'booking' | 'services' | 'payments' | 'history' | 'calendar'>('rooms');
+  const [activeTab, setActiveTab] = useState<'rooms' | 'booking' | 'services' | 'payments' | 'history'>('rooms');
   const [loading, setLoading] = useState({ rooms: true, bookings: true, services: true });
   
   // Determine if user is lecturer
@@ -111,16 +105,58 @@ export default function UserPage() {
   // Use API hooks for data fetching
   const { data: roomsData, loading: roomsLoading, error: roomsError, refetch: refetchRooms } = useRooms();
   const { data: bookingsData, loading: bookingsLoading, error: bookingsError, refetch: refetchBookings } = useBookings();
-  const { data: servicesData, loading: servicesLoading, error: servicesError, refetch: refetchServices } = useServices();
+  const { data: serviceOrdersData, loading: serviceOrdersLoading, error: serviceOrdersError, refetch: refetchServiceOrders } = useServiceOrders();
+  const { data: servicesData, loading: servicesLoading } = useServices(); // Danh sách dịch vụ có sẵn
+  const { data: staffUsersData, loading: staffUsersLoading } = useStaffUsers(); // Danh sách nhân viên
 
   useEffect(() => {
-    setLoading({ rooms: roomsLoading, bookings: bookingsLoading, services: servicesLoading })
-  }, [roomsLoading, bookingsLoading, servicesLoading])
+    setLoading({ rooms: roomsLoading, bookings: bookingsLoading, services: serviceOrdersLoading })
+  }, [roomsLoading, bookingsLoading, serviceOrdersLoading])
 
   // Transform API data to match component types
-  const rooms: Room[] = (roomsData as any) || [];
-  const bookings: RoomBooking[] = (bookingsData as any) || [];
-  const services: Service[] = (servicesData as any) || [];
+  // Backend returns different field names, so we need to transform
+  const rooms: Room[] = ((roomsData as any[]) || []).map((room: any) => ({
+    id: room.id,
+    building: room.code?.charAt(0) || 'A',
+    roomNumber: room.code?.slice(1) || room.id.toString(),
+    roomType: room.roomTypeName || room.name || 'Phòng tiêu chuẩn',
+    capacity: room.maxOccupancy || 2,
+    amenities: room.description ? room.description.split(',').map((a: string) => a.trim()) : ['WiFi', 'Điều hòa'],
+    status: room.status === 'OUT_OF_SERVICE' ? 'MAINTENANCE' : room.status,
+    description: room.description || room.name || `Phòng ${room.code}`,
+  }));
+
+  const bookings: RoomBooking[] = ((bookingsData as any[]) || []).map((booking: any) => ({
+    id: booking.id,
+    roomId: booking.roomId,
+    roomType: booking.roomTypeName || 'Phòng tiêu chuẩn',
+    checkIn: booking.checkinDate,
+    checkOut: booking.checkoutDate,
+    guests: booking.numGuests,
+    status: booking.status === 'APPROVED' || booking.status === 'CHECKED_IN' ? 'CONFIRMED' :
+            booking.status === 'REJECTED' || booking.status === 'CANCELLED' ? 'REJECTED' : 'PENDING',
+    createdAt: booking.createdDate || booking.created_at || new Date().toISOString(),
+    purpose: booking.note || 'Công tác để ở',
+    guestName: booking.userName || 'N/A',
+    guestEmail: booking.userEmail || 'N/A',
+    phoneNumber: booking.phoneNumber || 'N/A',
+    building: booking.roomCode?.charAt(0) || 'A',
+    roomNumber: booking.roomCode?.slice(1) || booking.roomId.toString(),
+  }));
+
+  // Transform service orders from backend format
+  const serviceOrders: ServiceOrder[] = ((serviceOrdersData as any) || []).map((order: any) => ({
+    id: order.id,
+    serviceName: order.serviceName || order.service_name || 'N/A',
+    serviceCode: order.serviceCode || order.service_code || '',
+    quantity: order.quantity || 1,
+    unitPrice: order.unitPrice || order.unit_price || 0,
+    totalPrice: order.totalPrice || order.total_price || 0,
+    status: order.status || 'PENDING',
+    orderDate: order.createdDate || order.created_at || new Date().toISOString(),
+    deliveryDate: order.deliveryDate || order.delivery_date,
+    note: order.note || '',
+  }));
   
   // Bookings are now loaded from API via useBookings hook
 
@@ -153,10 +189,119 @@ export default function UserPage() {
 
   // Form states for new service order
   const [newServiceOrder, setNewServiceOrder] = useState({
+    serviceId: 0,
     serviceName: '',
+    serviceCode: '',
     quantity: 1,
-    unitPrice: 0
+    unitPrice: 0,
+    unitName: '',
+    userName: '',
+    userEmail: '',
+    userPhone: '',
+    note: '',
+    staffId: 0, // ID nhân viên được chọn
+    staffName: '' // Tên nhân viên được chọn
   });
+
+  // Get user info from session and API for Service Order Modal
+  useEffect(() => {
+    const loadUserInfo = async () => {
+      if (typeof window === 'undefined' || !serviceModalOpen) return;
+
+      // Lấy email từ localStorage hoặc session
+      const userEmail = localStorage.getItem('userEmail') || sessionStorage.getItem('userEmail') || '';
+      const userName = localStorage.getItem('userName') || sessionStorage.getItem('userName') || '';
+
+      // Nếu có email, fetch thông tin đầy đủ từ API
+      if (userEmail) {
+        try {
+          const res = await fetch('/api/system/users', {
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include'
+          });
+
+          if (res.ok) {
+            const data = await res.json();
+            const list = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []);
+            const found = list.find((u: any) => (u.email || '').toLowerCase() === userEmail.toLowerCase());
+
+            if (found) {
+              // Tìm thấy user trong database - dùng thông tin từ API
+              setNewServiceOrder(prev => ({
+                ...prev,
+                userEmail: found.email || userEmail,
+                userName: found.full_name || found.fullName || userName || userEmail,
+                userPhone: found.phone_number || found.phoneNumber || ''
+              }));
+              return;
+            }
+          }
+        } catch (error) {
+          console.error('Error fetching user info:', error);
+        }
+      }
+
+      // Fallback: dùng thông tin từ localStorage/sessionStorage
+      setNewServiceOrder(prev => ({
+        ...prev,
+        userEmail,
+        userName: userName || userEmail,
+        userPhone: ''
+      }));
+    };
+
+    loadUserInfo();
+  }, [serviceModalOpen]);
+
+  // Get user info from session and API for Booking Modal
+  useEffect(() => {
+    const loadUserInfoForBooking = async () => {
+      if (typeof window === 'undefined' || !bookingModalOpen) return;
+
+      // Lấy email từ localStorage hoặc session
+      const userEmail = localStorage.getItem('userEmail') || sessionStorage.getItem('userEmail') || '';
+      const userName = localStorage.getItem('userName') || sessionStorage.getItem('userName') || '';
+
+      // Nếu có email, fetch thông tin đầy đủ từ API
+      if (userEmail) {
+        try {
+          const res = await fetch('/api/system/users', {
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include'
+          });
+
+          if (res.ok) {
+            const data = await res.json();
+            const list = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []);
+            const found = list.find((u: any) => (u.email || '').toLowerCase() === userEmail.toLowerCase());
+
+            if (found) {
+              // Tìm thấy user trong database - dùng thông tin từ API
+              setNewBooking(prev => ({
+                ...prev,
+                guestEmail: found.email || userEmail,
+                guestName: found.full_name || found.fullName || userName || userEmail,
+                phoneNumber: found.phone_number || found.phoneNumber || ''
+              }));
+              return;
+            }
+          }
+        } catch (error) {
+          console.error('Error fetching user info for booking:', error);
+        }
+      }
+
+      // Fallback: dùng thông tin từ localStorage/sessionStorage
+      setNewBooking(prev => ({
+        ...prev,
+        guestEmail: userEmail,
+        guestName: userName || userEmail,
+        phoneNumber: ''
+      }));
+    };
+
+    loadUserInfoForBooking();
+  }, [bookingModalOpen]);
 
   // Form states for payment
   const [paymentData, setPaymentData] = useState({
@@ -249,17 +394,34 @@ export default function UserPage() {
   };
 
   const handleCreateServiceOrder = async () => {
-    if (!newServiceOrder.serviceName || newServiceOrder.quantity <= 0) {
-      setFlash({ type: 'error', text: 'Vui lòng điền đầy đủ thông tin đặt dịch vụ' });
+    // Validation
+    if (newServiceOrder.serviceId <= 0) {
+      setFlash({ type: 'error', text: 'Vui lòng chọn dịch vụ' });
+      return;
+    }
+    if (newServiceOrder.quantity <= 0) {
+      setFlash({ type: 'error', text: 'Số lượng phải lớn hơn 0' });
+      return;
+    }
+    if (!newServiceOrder.userName || !newServiceOrder.userEmail) {
+      setFlash({ type: 'error', text: 'Vui lòng điền đầy đủ thông tin người đặt' });
       return;
     }
 
     try {
       const serviceOrderData = {
+        serviceId: newServiceOrder.serviceId,
         serviceName: newServiceOrder.serviceName,
+        serviceCode: newServiceOrder.serviceCode,
         quantity: newServiceOrder.quantity,
         unitPrice: newServiceOrder.unitPrice,
-        totalPrice: newServiceOrder.quantity * newServiceOrder.unitPrice
+        totalPrice: newServiceOrder.quantity * newServiceOrder.unitPrice,
+        userName: newServiceOrder.userName,
+        userEmail: newServiceOrder.userEmail,
+        userPhone: newServiceOrder.userPhone,
+        note: newServiceOrder.note,
+        staffId: newServiceOrder.staffId > 0 ? newServiceOrder.staffId : undefined, // Chỉ gửi nếu đã chọn staff
+        staffName: newServiceOrder.staffName || undefined
       };
 
       const res = await fetch('/api/system/orders?action=cart', {
@@ -267,14 +429,27 @@ export default function UserPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(serviceOrderData)
       })
-      
+
       if (res.ok) {
         setServiceModalOpen(false);
-        setNewServiceOrder({ serviceName: '', quantity: 1, unitPrice: 0 });
+        setNewServiceOrder({
+          serviceId: 0,
+          serviceName: '',
+          serviceCode: '',
+          quantity: 1,
+          unitPrice: 0,
+          unitName: '',
+          userName: '',
+          userEmail: '',
+          userPhone: '',
+          note: '',
+          staffId: 0,
+          staffName: ''
+        });
         setFlash({ type: 'success', text: 'Đặt dịch vụ thành công!' });
-        
+
         // Refresh service orders data
-        refetchServices();
+        refetchServiceOrders();
         if (serviceOrderData.totalPrice > 0) {
           try {
             const payRes = await fetch('/api/system/payments?action=create', {
@@ -351,8 +526,8 @@ export default function UserPage() {
 
   const totalBookings = bookings.length;
   const confirmedBookings = bookings.filter(b => b.status === 'CONFIRMED').length;
-  const totalServices = services.length;
-  const completedServices = services.filter(s => s.status === 'COMPLETED').length;
+  const totalServiceOrders = serviceOrders.length;
+  const completedServiceOrders = serviceOrders.filter(so => so.status === 'COMPLETED').length;
   // Payments functionality temporarily disabled
   const totalPayments = 0;
   const paidPayments = 0;
@@ -396,7 +571,7 @@ export default function UserPage() {
             <Card>
               <CardBody>
                 <div className="text-center">
-                  <div className="text-2xl font-bold text-blue-600">{totalBookings}</div>
+                  <div className="text-2xl font-bold text-gray-800">{totalBookings}</div>
                   <div className="text-sm text-gray-600">Tổng đặt phòng</div>
                   <div className="text-xs text-gray-500">{confirmedBookings} đã xác nhận</div>
                 </div>
@@ -405,9 +580,9 @@ export default function UserPage() {
             <Card>
               <CardBody>
                 <div className="text-center">
-                  <div className="text-2xl font-bold text-green-600">{totalServices}</div>
+                  <div className="text-2xl font-bold text-green-600">{totalServiceOrders}</div>
                   <div className="text-sm text-gray-600">Dịch vụ đã đặt</div>
-                  <div className="text-xs text-gray-500">{completedServices} hoàn thành</div>
+                  <div className="text-xs text-gray-500">{completedServiceOrders} hoàn thành</div>
                 </div>
               </CardBody>
             </Card>
@@ -468,7 +643,7 @@ export default function UserPage() {
                 role="tab"
                 aria-selected={activeTab === 'services'}
               >
-                Dịch vụ ({totalServices})
+                Dịch vụ ({totalServiceOrders})
               </button>
               <button
                 onClick={() => setActiveTab('payments')}
@@ -482,18 +657,7 @@ export default function UserPage() {
               >
                 Hóa đơn ({totalPayments})
               </button>
-              <button
-                onClick={() => setActiveTab('calendar')}
-                className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                  activeTab === 'calendar'
-                    ? 'border-blue-500 text-blue-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-                role="tab"
-                aria-selected={activeTab === 'calendar'}
-              >
-                Lịch
-              </button>
+
               <button
                 onClick={() => setActiveTab('history')}
                 className={`py-2 px-1 border-b-2 font-medium text-sm ${
@@ -540,7 +704,7 @@ export default function UserPage() {
                     className="group relative bg-white rounded-xl shadow-md hover:shadow-2xl transition-all duration-300 overflow-hidden border border-gray-100"
                   >
                     {/* Gradient Header with Status */}
-                    <div className="relative h-32 bg-gradient-to-br from-blue-500 via-blue-600 to-indigo-600 overflow-hidden">
+                    <div className="relative h-32 bg-gradient-to-br from-gray-500 via-gray-600 to-gray-700 overflow-hidden">
                       {/* Pattern Overlay */}
                       <div className="absolute inset-0 opacity-10">
                         <div className="absolute inset-0" style={{
@@ -582,7 +746,7 @@ export default function UserPage() {
                       {/* Room Type */}
                       <div>
                         <div className="flex items-center gap-2 mb-1">
-                          <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
                           </svg>
                           <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Loại phòng</span>
@@ -595,7 +759,7 @@ export default function UserPage() {
                         {/* Capacity */}
                         <div className="flex items-start gap-2">
                           <div className="flex-shrink-0 mt-0.5">
-                            <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
                             </svg>
                           </div>
@@ -652,7 +816,7 @@ export default function UserPage() {
                             setSelectedRoom(room);
                             setBookingModalOpen(true);
                           }}
-                          className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold py-2.5 shadow-md hover:shadow-lg transition-all duration-200 transform hover:scale-[1.02]"
+                          className="w-full bg-gray-700 hover:bg-gray-800 text-white font-semibold py-2.5 shadow-md hover:shadow-lg transition-all duration-200 transform hover:scale-[1.02]"
                         >
                           <span className="flex items-center justify-center gap-2">
                             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -665,7 +829,7 @@ export default function UserPage() {
                     </div>
                     
                     {/* Hover Effect Overlay */}
-                    <div className="absolute inset-0 bg-gradient-to-br from-blue-600/0 to-indigo-600/0 group-hover:from-blue-600/5 group-hover:to-indigo-600/5 transition-opacity duration-300 pointer-events-none rounded-xl"></div>
+                    <div className="absolute inset-0 bg-gradient-to-br from-gray-600/0 to-gray-700/0 group-hover:from-gray-600/5 group-hover:to-gray-700/5 transition-opacity duration-300 pointer-events-none rounded-xl"></div>
                   </div>
                 ))}
               </div>
@@ -687,7 +851,7 @@ export default function UserPage() {
               )}
               <div className="flex justify-between items-center">
                 <h2 className="text-lg font-semibold text-gray-900">Đặt phòng</h2>
-                <Button onClick={() => setBookingModalOpen(true)}>
+                <Button onClick={() => setBookingModalOpen(true)} className="bg-gray-700 hover:bg-gray-800 text-white">
                   Đặt phòng mới
                 </Button>
               </div>
@@ -748,35 +912,68 @@ export default function UserPage() {
                 </Card>
               )}
               <div className="flex justify-between items-center">
-                <h2 className="text-lg font-semibold text-gray-900">Dịch vụ</h2>
-                <Button onClick={() => setServiceModalOpen(true)}>
+                <h2 className="text-lg font-semibold text-gray-900">Dịch vụ đã đặt</h2>
+                <Button onClick={() => setServiceModalOpen(true)} className="bg-gray-700 hover:bg-gray-800 text-white">
                   Đặt dịch vụ mới
                 </Button>
               </div>
-              
-              <div className="grid gap-4">
-                {services.map((service) => (
-                  <Card key={service.id}>
-                    <CardBody>
-                      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-                        <div className="flex-1">
-                          <div className="flex flex-wrap items-center gap-2 mb-2">
-                            <h3 className="text-lg font-semibold text-gray-900">
-                              {service.name}
-                            </h3>
-                            {getStatusBadge(service.status)}
-                          </div>
-                          <p className="text-sm text-gray-600 mb-2">{service.description}</p>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm text-gray-600">
-                            <div><span className="font-medium">Giá:</span> {service.price.toLocaleString()} VND</div>
-                            <div><span className="font-medium">Trạng thái:</span> {service.status}</div>
+
+              {serviceOrders.length === 0 ? (
+                <Card>
+                  <CardBody>
+                    <div className="text-center py-8 text-gray-500">
+                      <p>Bạn chưa đặt dịch vụ nào</p>
+                      <p className="text-sm mt-2">Nhấn "Đặt dịch vụ mới" để bắt đầu</p>
+                    </div>
+                  </CardBody>
+                </Card>
+              ) : (
+                <div className="grid gap-4">
+                  {serviceOrders.map((order) => (
+                    <Card key={order.id}>
+                      <CardBody>
+                        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                          <div className="flex-1">
+                            <div className="flex flex-wrap items-center gap-2 mb-2">
+                              <h3 className="text-lg font-semibold text-gray-900">
+                                {order.serviceName}
+                              </h3>
+                              {getStatusBadge(order.status)}
+                            </div>
+                            {order.note && (
+                              <p className="text-sm text-gray-600 mb-2">{order.note}</p>
+                            )}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-sm text-gray-600">
+                              <div><span className="font-medium">Số lượng:</span> {order.quantity}</div>
+                              <div><span className="font-medium">Đơn giá:</span> {order.unitPrice.toLocaleString()} VND</div>
+                              <div><span className="font-medium">Tổng tiền:</span> <span className="text-green-600 font-semibold">{order.totalPrice.toLocaleString()} VND</span></div>
+                            </div>
+
+                            {/* Hiển thị thông tin nhân viên nếu có */}
+                            {(order as any).staffName && (
+                              <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded-lg">
+                                <div className="flex items-center gap-2 text-sm">
+                                  <span className="text-blue-900">👤 Nhân viên thực hiện:</span>
+                                  <span className="font-semibold text-blue-700">{(order as any).staffName}</span>
+                                </div>
+                              </div>
+                            )}
+
+                            <div className="mt-2 text-sm text-gray-500">
+                              Đặt lúc: {new Date(order.orderDate).toLocaleString('vi-VN')}
+                            </div>
+                            {order.deliveryDate && (
+                              <div className="text-sm text-gray-500">
+                                Giao hàng: {new Date(order.deliveryDate).toLocaleString('vi-VN')}
+                              </div>
+                            )}
                           </div>
                         </div>
-                      </div>
-                    </CardBody>
-                  </Card>
-                ))}
-              </div>
+                      </CardBody>
+                    </Card>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -792,44 +989,7 @@ export default function UserPage() {
             </div>
           )}
 
-          {activeTab === 'calendar' && (
-            <div className="space-y-4">
-              <div className="flex justify-between items-center">
-                <h2 className="text-lg font-semibold text-gray-900">Lịch đặt phòng</h2>
-              </div>
-              <Card>
-                <CardBody>
-                  <div className="grid grid-cols-7 gap-2 text-sm">
-                    {Array.from({ length: 14 }).map((_, idx) => {
-                      const date = new Date();
-                      date.setDate(date.getDate() + idx);
-                      const dateStr = date.toISOString().slice(0, 10);
-                      const dayBookings = bookings.filter(b => b.checkIn?.slice(0,10) === dateStr);
-                      return (
-                        <div key={idx} className="p-2 border rounded">
-                          <div className="text-gray-600 text-xs mb-1">{dateStr}</div>
-                          {dayBookings.length === 0 ? (
-                            <div className="text-gray-400">Trống</div>
-                          ) : (
-                            <div className="space-y-1">
-                              {dayBookings.slice(0,3).map(b => (
-                                <div key={b.id} className="text-xs bg-blue-50 text-blue-700 rounded px-1 py-0.5">
-                                  {b.roomType} - {b.status}
-                                </div>
-                              ))}
-                              {dayBookings.length > 3 && (
-                                <div className="text-xs text-gray-500">+{dayBookings.length - 3} nữa</div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                </CardBody>
-              </Card>
-            </div>
-          )}
+
 
           {activeTab === 'history' && (
             <div className="space-y-6">
@@ -895,24 +1055,26 @@ export default function UserPage() {
               </Card>
               <Card>
                 <CardHeader>
-                  <h3 className="text-md font-semibold text-gray-900">Dịch vụ</h3>
+                  <h3 className="text-md font-semibold text-gray-900">Dịch vụ đã đặt</h3>
                 </CardHeader>
                 <CardBody>
                   <div className="grid gap-3">
                     {(() => {
                       const f = (window as any).__historyFilter
-                      const list = !f ? services : (services as any[]).filter((s: any) => {
-                        const d = (s.orderDate || '').slice(0,10)
+                      const list = !f ? serviceOrders : (serviceOrders as any[]).filter((so: any) => {
+                        const d = (so.orderDate || '').slice(0,10)
                         return (!f?.start || d >= f.start) && (!f?.end || d <= f.end)
                       })
                       if (list.length === 0) return <div className="text-sm text-gray-500">Chưa có dịch vụ nào</div>
-                      return list.map((s: any) => (
-                        <div key={s.id} className="flex items-center justify-between text-sm">
+                      return list.map((so: any) => (
+                        <div key={so.id} className="flex items-center justify-between text-sm">
                           <div>
-                            <span className="font-medium">{s.name}</span>
-                            <div className="text-gray-500 text-xs">Giá: {s.price?.toLocaleString?.() || 0} VND</div>
+                            <span className="font-medium">{so.serviceName}</span>
+                            <div className="text-gray-500 text-xs">
+                              {so.quantity} x {so.unitPrice?.toLocaleString?.() || 0} VND = {so.totalPrice?.toLocaleString?.() || 0} VND
+                            </div>
                           </div>
-                          {getStatusBadge(s.status)}
+                          {getStatusBadge(so.status)}
                         </div>
                       ))
                     })()}
@@ -943,7 +1105,7 @@ export default function UserPage() {
             >
               Hủy
             </Button>
-            <Button onClick={handleCreateBooking}>
+            <Button onClick={handleCreateBooking} className="bg-gray-700 hover:bg-gray-800 text-white">
               Gửi yêu cầu đặt phòng
             </Button>
           </div>
@@ -951,8 +1113,8 @@ export default function UserPage() {
       >
         <div className="space-y-4">
           {selectedRoom && (
-            <div className="bg-blue-50 p-4 rounded-md border border-blue-200">
-              <h3 className="font-medium text-blue-900 mb-2">Thông tin phòng đã chọn</h3>
+            <div className="bg-gray-50 p-4 rounded-md border border-gray-200">
+              <h3 className="font-medium text-gray-900 mb-2">Thông tin phòng đã chọn</h3>
               <div className="grid grid-cols-2 gap-2 text-sm">
                 <div><span className="font-medium">Phòng:</span> {selectedRoom.building} - {selectedRoom.roomNumber}</div>
                 <div><span className="font-medium">Loại:</span> {selectedRoom.roomType}</div>
@@ -961,73 +1123,126 @@ export default function UserPage() {
               </div>
             </div>
           )}
-          
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Tên khách hàng *</label>
-            <Input
-              type="text"
-              placeholder="Nhập tên khách hàng"
-              value={newBooking.guestName}
-              onChange={(e) => setNewBooking(prev => ({ ...prev, guestName: e.target.value }))}
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Email *</label>
-            <Input
-              type="email"
-              placeholder="Nhập email"
-              value={newBooking.guestEmail}
-              onChange={(e) => setNewBooking(prev => ({ ...prev, guestEmail: e.target.value }))}
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Số điện thoại *</label>
-            <Input
-              type="tel"
-              placeholder="Nhập số điện thoại"
-              value={newBooking.phoneNumber}
-              onChange={(e) => setNewBooking(prev => ({ ...prev, phoneNumber: e.target.value }))}
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Check-in *</label>
-              <Input
-                type="date"
-                value={newBooking.checkIn}
-                onChange={(e) => setNewBooking(prev => ({ ...prev, checkIn: e.target.value }))}
-              />
+
+          {/* Thông tin khách hàng */}
+          <div className="border-t pt-4">
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-sm font-semibold text-gray-700">Thông tin khách hàng</h4>
+              {newBooking.guestEmail && (
+                <span className="text-xs text-green-600 flex items-center gap-1">
+                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                  </svg>
+                  Đã tự động điền
+                </span>
+              )}
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Check-out *</label>
-              <Input
-                type="date"
-                value={newBooking.checkOut}
-                onChange={(e) => setNewBooking(prev => ({ ...prev, checkOut: e.target.value }))}
-              />
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Tên khách hàng <span className="text-red-500">*</span>
+                </label>
+                <Input
+                  type="text"
+                  placeholder="Nhập tên khách hàng"
+                  value={newBooking.guestName}
+                  onChange={(e) => setNewBooking(prev => ({ ...prev, guestName: e.target.value }))}
+                  className={newBooking.guestName ? 'bg-green-50' : ''}
+                />
+                {newBooking.guestName && (
+                  <p className="text-xs text-gray-500 mt-1">Bạn có thể chỉnh sửa nếu thông tin không chính xác</p>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Email <span className="text-red-500">*</span>
+                </label>
+                <Input
+                  type="email"
+                  placeholder="Nhập email"
+                  value={newBooking.guestEmail}
+                  onChange={(e) => setNewBooking(prev => ({ ...prev, guestEmail: e.target.value }))}
+                  className={newBooking.guestEmail ? 'bg-green-50' : ''}
+                />
+                {newBooking.guestEmail && (
+                  <p className="text-xs text-gray-500 mt-1">Bạn có thể chỉnh sửa nếu thông tin không chính xác</p>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Số điện thoại <span className="text-red-500">*</span>
+                </label>
+                <Input
+                  type="tel"
+                  placeholder="Nhập số điện thoại"
+                  value={newBooking.phoneNumber}
+                  onChange={(e) => setNewBooking(prev => ({ ...prev, phoneNumber: e.target.value }))}
+                  className={newBooking.phoneNumber ? 'bg-green-50' : ''}
+                />
+                {newBooking.phoneNumber && (
+                  <p className="text-xs text-gray-500 mt-1">Bạn có thể chỉnh sửa nếu thông tin không chính xác</p>
+                )}
+              </div>
             </div>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Số khách *</label>
-            <Input
-              type="number"
-              min="1"
-              max={selectedRoom?.capacity || 10}
-              value={newBooking.guests}
-              onChange={(e) => setNewBooking(prev => ({ ...prev, guests: parseInt(e.target.value) || 1 }))}
-            />
-            {selectedRoom && (
-              <p className="text-xs text-gray-500 mt-1">Tối đa {selectedRoom.capacity} người</p>
-            )}
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Mục đích sử dụng</label>
-            <Input
-              type="text"
-              value={newBooking.purpose}
-              onChange={(e) => setNewBooking(prev => ({ ...prev, purpose: e.target.value }))}
-              readOnly
-            />
+
+          {/* Thông tin đặt phòng */}
+          <div className="border-t pt-4">
+            <h4 className="text-sm font-semibold text-gray-700 mb-3">Thông tin đặt phòng</h4>
+
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Check-in <span className="text-red-500">*</span>
+                  </label>
+                  <Input
+                    type="date"
+                    value={newBooking.checkIn}
+                    onChange={(e) => setNewBooking(prev => ({ ...prev, checkIn: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Check-out <span className="text-red-500">*</span>
+                  </label>
+                  <Input
+                    type="date"
+                    value={newBooking.checkOut}
+                    onChange={(e) => setNewBooking(prev => ({ ...prev, checkOut: e.target.value }))}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Số khách <span className="text-red-500">*</span>
+                </label>
+                <Input
+                  type="number"
+                  min="1"
+                  max={selectedRoom?.capacity || 10}
+                  value={newBooking.guests}
+                  onChange={(e) => setNewBooking(prev => ({ ...prev, guests: parseInt(e.target.value) || 1 }))}
+                />
+                {selectedRoom && (
+                  <p className="text-xs text-gray-500 mt-1">Tối đa {selectedRoom.capacity} người</p>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Mục đích sử dụng</label>
+                <Input
+                  type="text"
+                  value={newBooking.purpose}
+                  onChange={(e) => setNewBooking(prev => ({ ...prev, purpose: e.target.value }))}
+                  readOnly
+                />
+              </div>
+            </div>
           </div>
         </div>
       </Modal>
@@ -1045,40 +1260,182 @@ export default function UserPage() {
             >
               Hủy
             </Button>
-            <Button onClick={handleCreateServiceOrder}>
+            <Button onClick={handleCreateServiceOrder} className="bg-gray-700 hover:bg-gray-800 text-white">
               Đặt dịch vụ
             </Button>
           </div>
         }
       >
         <div className="space-y-4">
+          {/* Chọn dịch vụ */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Tên dịch vụ *</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Chọn dịch vụ *</label>
+            <select
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+              value={newServiceOrder.serviceId}
+              onChange={(e) => {
+                const serviceId = parseInt(e.target.value);
+                const service = ((servicesData as any[]) || []).find((s: any) => s.id === serviceId);
+                if (service) {
+                  setNewServiceOrder(prev => ({
+                    ...prev,
+                    serviceId: service.id,
+                    serviceName: service.name,
+                    serviceCode: service.code,
+                    unitPrice: service.unitPrice || 0,
+                    unitName: service.unitName || 'lần'
+                  }));
+                }
+              }}
+            >
+              <option value="0">-- Chọn dịch vụ --</option>
+              {((servicesData as any[]) || []).map((service: any) => (
+                <option key={service.id} value={service.id}>
+                  {service.name} - {service.unitPrice?.toLocaleString() || 0} VND/{service.unitName || 'lần'}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Thông tin dịch vụ đã chọn */}
+          {newServiceOrder.serviceId > 0 && (
+            <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
+              <h4 className="text-sm font-semibold text-gray-900 mb-2">Thông tin dịch vụ</h4>
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div className="text-gray-600">Tên:</div>
+                <div className="font-medium">{newServiceOrder.serviceName}</div>
+                <div className="text-gray-600">Mã:</div>
+                <div className="font-medium">{newServiceOrder.serviceCode}</div>
+                <div className="text-gray-600">Đơn giá:</div>
+                <div className="font-medium text-green-600">{newServiceOrder.unitPrice.toLocaleString()} VND/{newServiceOrder.unitName}</div>
+              </div>
+            </div>
+          )}
+
+          {/* Số lượng */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Số lượng *</label>
             <Input
-              type="text"
-              placeholder="Nhập tên dịch vụ"
-              value={newServiceOrder.serviceName}
-              onChange={(e) => setNewServiceOrder(prev => ({ ...prev, serviceName: e.target.value }))}
+              type="number"
+              min="1"
+              value={newServiceOrder.quantity}
+              onChange={(e) => setNewServiceOrder(prev => ({ ...prev, quantity: parseInt(e.target.value) || 1 }))}
             />
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Số lượng *</label>
-              <Input
-                type="number"
-                min="1"
-                value={newServiceOrder.quantity}
-                onChange={(e) => setNewServiceOrder(prev => ({ ...prev, quantity: parseInt(e.target.value) || 1 }))}
-              />
+
+          {/* Tổng tiền */}
+          {newServiceOrder.serviceId > 0 && (
+            <div className="bg-green-50 border border-green-200 rounded-lg p-3">
+              <div className="flex justify-between items-center">
+                <span className="text-sm font-medium text-gray-700">Tổng tiền:</span>
+                <span className="text-lg font-bold text-green-600">
+                  {(newServiceOrder.quantity * newServiceOrder.unitPrice).toLocaleString()} VND
+                </span>
+              </div>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Đơn giá (VND) *</label>
-              <Input
-                type="number"
-                min="0"
-                value={newServiceOrder.unitPrice}
-                onChange={(e) => setNewServiceOrder(prev => ({ ...prev, unitPrice: parseInt(e.target.value) || 0 }))}
-              />
+          )}
+
+          {/* Chọn nhân viên thực hiện */}
+          {newServiceOrder.serviceId > 0 && (
+            <div className="border-t pt-4">
+              <h4 className="text-sm font-semibold text-gray-700 mb-3">Chọn nhân viên thực hiện</h4>
+              <select
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                value={newServiceOrder.staffId}
+                onChange={(e) => {
+                  const staffId = parseInt(e.target.value);
+                  const staff = ((staffUsersData as any[]) || []).find((s: any) => s.id === staffId);
+                  if (staff) {
+                    setNewServiceOrder(prev => ({
+                      ...prev,
+                      staffId: staff.id,
+                      staffName: staff.name || staff.email
+                    }));
+                  } else {
+                    setNewServiceOrder(prev => ({
+                      ...prev,
+                      staffId: 0,
+                      staffName: ''
+                    }));
+                  }
+                }}
+              >
+                <option value="0">-- Chọn nhân viên (tùy chọn) --</option>
+                {((staffUsersData as any[]) || []).map((staff: any) => (
+                  <option key={staff.id} value={staff.id}>
+                    {staff.name || staff.email} {staff.phone ? `- ${staff.phone}` : ''}
+                  </option>
+                ))}
+              </select>
+              {newServiceOrder.staffId > 0 && (
+                <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded text-sm">
+                  <span className="text-blue-900">✓ Đã chọn: <strong>{newServiceOrder.staffName}</strong></span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Thông tin người đặt */}
+          <div className="border-t pt-4">
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-sm font-semibold text-gray-700">Thông tin người đặt</h4>
+              {newServiceOrder.userEmail && (
+                <span className="text-xs text-green-600 flex items-center gap-1">
+                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                  </svg>
+                  Đã tự động điền
+                </span>
+              )}
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Họ tên <span className="text-red-500">*</span>
+                </label>
+                <Input
+                  type="text"
+                  value={newServiceOrder.userName}
+                  onChange={(e) => setNewServiceOrder(prev => ({ ...prev, userName: e.target.value }))}
+                  placeholder="Nhập họ tên"
+                  className={newServiceOrder.userName ? 'bg-green-50' : ''}
+                />
+                <p className="text-xs text-gray-500 mt-1">Bạn có thể chỉnh sửa nếu thông tin không chính xác</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Email <span className="text-red-500">*</span>
+                  </label>
+                  <Input
+                    type="email"
+                    value={newServiceOrder.userEmail}
+                    onChange={(e) => setNewServiceOrder(prev => ({ ...prev, userEmail: e.target.value }))}
+                    placeholder="email@example.com"
+                    className={newServiceOrder.userEmail ? 'bg-green-50' : ''}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Số điện thoại</label>
+                  <Input
+                    type="tel"
+                    value={newServiceOrder.userPhone}
+                    onChange={(e) => setNewServiceOrder(prev => ({ ...prev, userPhone: e.target.value }))}
+                    placeholder="0123456789"
+                    className={newServiceOrder.userPhone ? 'bg-green-50' : ''}
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Ghi chú</label>
+                <textarea
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  rows={3}
+                  value={newServiceOrder.note}
+                  onChange={(e) => setNewServiceOrder(prev => ({ ...prev, note: e.target.value }))}
+                  placeholder="Ghi chú thêm (nếu có)"
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -1097,7 +1454,7 @@ export default function UserPage() {
             >
               Hủy
             </Button>
-            <Button onClick={handlePayment}>
+            <Button onClick={handlePayment} className="bg-gray-700 hover:bg-gray-800 text-white">
               Thanh toán
             </Button>
           </div>

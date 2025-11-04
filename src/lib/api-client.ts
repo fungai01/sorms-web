@@ -388,9 +388,29 @@ class ApiClient {
     return this.put(`/services/${id}/deactivate`)
   }
 
-  // Placeholder methods for future implementation
+  // Service Orders (Orders API)
   async getServiceOrders() {
-    return { success: false, error: 'API not implemented yet' }
+    return this.get('/orders')
+  }
+
+  async getMyServiceOrders() {
+    return this.get('/orders/my-orders')
+  }
+
+  async getServiceOrder(id: number) {
+    return this.get(`/orders/${id}`)
+  }
+
+  async createServiceOrder(orderData: any) {
+    return this.post('/orders', orderData)
+  }
+
+  async addOrderItem(orderId: number, itemData: any) {
+    return this.post(`/orders/${orderId}/items`, itemData)
+  }
+
+  async confirmOrder(orderId: number) {
+    return this.post(`/orders/${orderId}/confirm`)
   }
 
   async getPaymentTransactions() {
@@ -401,44 +421,78 @@ class ApiClient {
     return { success: false, error: 'API not implemented yet' }
   }
 
-  async getUsers() {
-    return { success: false, error: 'API not implemented yet' }
+  // Users API
+  async getUsers(params?: { role?: string; page?: number; size?: number; keyword?: string }) {
+    const queryParams = new URLSearchParams();
+    if (params?.page !== undefined) queryParams.set('page', params.page.toString());
+    if (params?.size !== undefined) queryParams.set('size', params.size.toString());
+    if (params?.keyword) queryParams.set('q', params.keyword);
+    if (params?.role) queryParams.set('role', params.role);
+
+    const endpoint = `/users/search${queryParams.toString() ? '?' + queryParams.toString() : ''}`;
+    return this.get(endpoint);
+  }
+
+  async getStaffUsers() {
+    return this.getUsers({ role: 'staff', size: 100 });
+  }
+
+  async getUser(id: number) {
+    return this.get(`/users/${id}`);
   }
 
   // Dashboard endpoints - calculate from real data
   async getDashboardStats() {
     try {
-      const [roomsResponse, bookingsResponse] = await Promise.all([
+      const [roomsResponse, bookingsResponse, roomTypesResponse] = await Promise.all([
         this.getRooms(),
-        this.getBookings()
+        this.getBookings(),
+        this.getRoomTypes()
       ])
-      
+
       const rooms = (roomsResponse.data || []) as any[]
       const bookings = (bookingsResponse.data || []) as any[]
-      
+      const roomTypes = (roomTypesResponse.data || []) as any[]
+
       const totalRooms = rooms.length
       const occupiedRooms = rooms.filter((r: any) => r.status === 'OCCUPIED').length
       const pendingBookings = bookings.filter((b: any) => b.status === 'PENDING').length
-      
-      // Calculate total revenue from bookings (simplified calculation)
-      const totalRevenue = bookings.reduce((sum: number, b: any) => {
-        // This is a simplified calculation - in real app you'd calculate actual room costs
-        return sum + (b.numGuests * 500000) // Assume 500k per guest per booking
+
+      // Calculate total revenue from bookings using REAL room prices from API
+      const totalRevenue = bookings.reduce((sum: number, booking: any) => {
+        // Find room for this booking
+        const room = rooms.find((r: any) => r.id === booking.roomId)
+        if (!room) return sum
+
+        // Find room type to get base price
+        const roomType = roomTypes.find((rt: any) => rt.id === room.roomTypeId)
+        if (!roomType) return sum
+
+        const basePrice = roomType.basePrice || 0
+
+        // Calculate number of days
+        const checkinDate = new Date(booking.checkinDate)
+        const checkoutDate = new Date(booking.checkoutDate)
+        const days = Math.max(1, Math.ceil((checkoutDate.getTime() - checkinDate.getTime()) / (1000 * 60 * 60 * 24)))
+
+        // Calculate revenue: basePrice * days * numGuests
+        const bookingRevenue = basePrice * days * (booking.numGuests || 1)
+        return sum + bookingRevenue
       }, 0)
-      
-      return { 
-        success: true, 
-        data: { 
-          totalRooms, 
-          occupiedRooms, 
-          pendingBookings, 
-          totalRevenue 
-        } 
+
+      return {
+        success: true,
+        data: {
+          totalRooms,
+          occupiedRooms,
+          pendingBookings,
+          totalRevenue
+        }
       }
     } catch (error) {
-      return { 
-        success: false, 
-        error: 'Failed to calculate dashboard stats' 
+      return {
+        success: false,
+        error: 'Failed to calculate dashboard stats'
       }
     }
   }

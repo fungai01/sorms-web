@@ -348,13 +348,14 @@ export default function RoomTypesPage() {
                   <div className="hidden lg:block overflow-x-auto">
                     <table className="w-full text-sm">
                       <colgroup>
-                        <col className="w-[5%]" />
                         <col className="w-[10%]" />
                         <col className="w-[10%]" />
-                        <col className="w-[5%]" />
+                        <col className="w-[10%]" />
+                        <col className="w-[10%]" />
+                        <col className="w-[15%]" />
                         <col className="w-[15%]" />
                       </colgroup>
-                      <thead>
+                      <thead> 
                         <tr className="bg-gray-50 text-gray-700">
                           <th className="px-4 py-3 text-center font-semibold">Code</th>
                           <th className="px-4 py-3 text-center font-semibold">Tên loại phòng</th>

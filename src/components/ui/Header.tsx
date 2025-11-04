@@ -76,23 +76,16 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
       if (storedName && storedRole) {
         const roleMap = {
           'admin': 'Administrator',
-          'office': 'Office Staff', 
+          'office': 'Office Staff',
           'lecturer': 'Lecturer',
           'staff': 'Staff',
           'guest': 'Guest'
         };
-        setDetectedUser({ 
-          name: storedName, 
+        setDetectedUser({
+          name: storedName,
           email: storedEmail || '',
-          role: roleMap[storedRole as keyof typeof roleMap] || storedRole 
+          role: roleMap[storedRole as keyof typeof roleMap] || storedRole
         });
-      } else {
-        // Fallback to path-based detection
-        if (isAdmin) setDetectedUser({ name: "Admin User", email: "admin@sorms.com", role: "Administrator" });
-        else if (isOffice) setDetectedUser({ name: "Office Staff", email: "office@sorms.com", role: "Office Staff" });
-        else if (isLecturer) setDetectedUser({ name: "Lecturer", email: "lecturer@sorms.com", role: "Lecturer" });
-        else if (isStaff) setDetectedUser({ name: "Staff Member", email: "staff@sorms.com", role: "Staff" });
-        else if (isGuest) setDetectedUser({ name: "Guest User", email: "guest@sorms.com", role: "Guest" });
       }
     }
   }, [isAdmin, isOffice, isLecturer, isStaff, isGuest, role]);

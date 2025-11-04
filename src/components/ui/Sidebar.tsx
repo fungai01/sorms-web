@@ -44,14 +44,8 @@ export default function Sidebar({ user, isVisible = false, collapsed = true, onT
 
   const userRole = getUserRole();
 
-  // Auto-detect user role based on path
-  const detectedUser = user || (() => {
-    if (isAdmin) return { name: "Admin User", email: "admin@sorms.com", role: "Administrator" };
-    if (isOffice) return { name: "Office Staff", email: "office@sorms.com", role: "Office Staff" };
-    if (isStaff) return { name: "Staff Member", email: "staff@sorms.com", role: "Staff" };
-    if (isUser) return { name: "User", email: "user@sorms.com", role: "User" };
-    return null;
-  })();
+  // Use user prop only (no mock data)
+  const detectedUser = user || null;
 
   // Icon components for minimalist line art
   const Icons = {

@@ -203,7 +203,7 @@ export default function ServicesPage() {
     await fetch(`/api/system/services?id=${confirmOpen.id}`, { method: 'DELETE' })
     await refetchServices()
     setConfirmOpen({ open: false })
-    setFlash({ type: 'success', text: 'Đã vô hiệu hóa dịch vụ.' })
+    setFlash({ type: 'success', text: 'Đã xóa hóa dịch vụ.' })
   }
 
   async function activateService(id: number) {
@@ -404,12 +404,12 @@ export default function ServicesPage() {
                   <div className="hidden lg:block overflow-x-auto">
                     <table className="w-full text-sm">
                       <colgroup>
+                        <col className="w-[10%]" />
                         <col className="w-[15%]" />
-                        <col className="w-[25%]" />
+                        <col className="w-[10%]" />
+                        <col className="w-[10%]" />
                         <col className="w-[15%]" />
-                        <col className="w-[12%]" />
-                        <col className="w-[15%]" />
-                        <col className="w-[18%]" />
+                        <col className="w-[20%]" />
                       </colgroup>
                       <thead>
                         <tr className="bg-gray-50 text-gray-700">
@@ -453,7 +453,7 @@ export default function ServicesPage() {
                                     className="h-8 px-3 text-xs"
                                     onClick={() => confirmDelete(row.id)}
                                   >
-                                    Vô hiệu
+                                    Xóa
                                   </Button>
                                 ) : (
                                   <Button
@@ -901,16 +901,16 @@ export default function ServicesPage() {
       {/* Delete Confirmation Modal */}
       <Modal open={confirmOpen.open} onClose={() => setConfirmOpen({ open: false })} title="Xác nhận vô hiệu hóa">
         <div className="p-6">
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Xác nhận vô hiệu hóa</h2>
+          <h2 className="text-xl font-semibold text-gray-900 mb-4">Xác nhận xóa</h2>
           <p className="text-gray-600 mb-6">
-            Bạn có chắc muốn vô hiệu hóa dịch vụ này? Dịch vụ sẽ không bị xóa hoàn toàn và có thể được kích hoạt lại sau.
+            Bạn có chắc muốn xóa dịch vụ này? Hành động này không thể hoàn tác.
           </p>
           <div className="flex justify-end gap-3">
             <Button variant="secondary" onClick={() => setConfirmOpen({ open: false })}>
               Hủy
             </Button>
             <Button variant="danger" onClick={doDelete}>
-              Vô hiệu hóa
+              Xóa
             </Button>
           </div>
         </div>

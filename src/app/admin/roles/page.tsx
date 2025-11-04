@@ -326,19 +326,26 @@ function RolesInner() {
         <CardBody className="p-0">
           <div className="hidden lg:block overflow-x-auto">
             <table className="min-w-[800px] w-full text-xs sm:text-sm">
+              <colgroup>
+                <col className="w-[10%]" />
+                <col className="w-[10%]" />
+                <col className="w-[15%]" />
+                <col className="w-[15%]" />
+                <col className="w-[20%]" />
+              </colgroup>
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-200">
-                  <th className="px-2 sm:px-3 py-1.5 sm:py-2 text-left font-semibold text-gray-700">Code</th>
-                  <th className="px-2 sm:px-3 py-1.5 sm:py-2 text-left font-semibold text-gray-700">Tên</th>
-                  <th className="px-2 sm:px-3 py-1.5 sm:py-2 text-left font-semibold text-gray-700">Mô tả</th>
-                  <th className="px-2 sm:px-3 py-1.5 sm:py-2 text-left font-semibold text-gray-700">Trạng thái</th>
-                  <th className="px-2 sm:px-3 py-1.5 sm:py-2 text-left font-semibold text-gray-700">Thao tác</th>
+                  <th className="px-4 sm:px-6 py-1.5 sm:py-2 text-left font-semibold text-gray-700">Code</th>
+                  <th className="px-4 sm:px-6 py-1.5 sm:py-2 text-left font-semibold text-gray-700">Tên</th>
+                  <th className="px-4 sm:px-6 py-1.5 sm:py-2 text-left font-semibold text-gray-700">Mô tả</th>
+                  <th className="px-4 sm:px-6 py-1.5 sm:py-2 text-left font-semibold text-gray-700">Trạng thái</th>
+                  <th className="px-4 sm:px-6 py-1.5 sm:py-2 text-left font-semibold text-gray-700">Thao tác</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.slice((page - 1) * size, (page - 1) * size + size).map((r, idx) => (
                   <tr key={r.code || `role-${idx}`} className="border-b border-gray-100 hover:bg-gray-50">
-                    <td className="px-2 sm:px-3 py-1.5 sm:py-2">
+                    <td className="px-4 sm:px-6 py-1.5 sm:py-2">
                       <span 
                         role="button" 
                         tabIndex={0} 
@@ -348,9 +355,9 @@ function RolesInner() {
                         {r.code}
                       </span>
                     </td>
-                    <td className="px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm text-gray-700">{r.name}</td>
-                    <td className="px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm text-gray-500 truncate" title={r.description}>{r.description}</td>
-                    <td className="px-2 sm:px-3 py-1.5 sm:py-2">
+                    <td className="px-4 sm:px-6 py-1.5 sm:py-2 text-xs sm:text-sm text-gray-700">{r.name}</td>
+                    <td className="px-4 sm:px-6 py-1.5 sm:py-2 text-xs sm:text-sm text-gray-500 truncate" title={r.description}>{r.description}</td>
+                    <td className="px-4 sm:px-6 py-1.5 sm:py-2">
                       {r.isActive !== false ? (
                         <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
                           Hoạt động
@@ -361,7 +368,7 @@ function RolesInner() {
                         </span>
                       )}
                     </td>
-                    <td className="px-2 sm:px-3 py-1.5 sm:py-2">
+                    <td className="px-4 sm:px-6 py-1.5 sm:py-2">
                       <div className="flex flex-col sm:flex-row gap-1 sm:gap-2">
                         <Button variant="secondary" className="h-8 px-3 text-xs" onClick={() => { setSelected(r); setDetailOpen(true); }}>Xem</Button>
                         <Button className="h-8 px-3 text-xs" onClick={() => openEdit(r)}>Sửa</Button>
@@ -494,13 +501,11 @@ function RolesInner() {
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Code {editing && <span className="text-xs text-gray-500">(không thể sửa)</span>}
+              Code
             </label>
             <Input
               value={form.code}
               onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))}
-              disabled={!!editing}
-              className={editing ? 'bg-gray-100 cursor-not-allowed' : ''}
             />
             {!form.code.trim() && <div className="mt-1 text-xs text-red-600">Code bắt buộc.</div>}
           </div>

@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useSession } from "next-auth/react";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
@@ -41,6 +42,7 @@ type User = {
 function UsersInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { data: session, status: sessionStatus } = useSession();
   const [rows, setRows] = useState<User[]>([]);
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<"id" | "name" | "email">("id");
@@ -60,38 +62,148 @@ function UsersInner() {
   );
   const [confirmOpen, setConfirmOpen] = useState<{ open: boolean; type: 'delete' | 'deactivate' | 'activate'; user?: User }>({ open: false, type: 'delete' });
   const [message, setMessage] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   const phoneRegex = /^[0-9]{10,11}$/;
 
   async function refetchUsers() {
     try {
-      const res = await fetch('/api/system/users', { headers: { 'Content-Type': 'application/json' }, credentials: 'include' })
-      if (!res.ok) {
-        console.error('Failed to fetch users. Status:', res.status)
-        setRows([])
+      setIsLoading(true)
+      
+      // Check session first
+      if (sessionStatus === 'loading') {
+        console.log('⏳ Waiting for session...')
         return
       }
-      const data = await res.json()
-      console.log('Users data received:', data)
-      if (Array.isArray(data?.items)) {
-        setRows(data.items)
-        if (data.items.length === 0) {
-          console.warn('No users returned from backend')
+      
+      if (sessionStatus === 'unauthenticated' || !session?.user?.email) {
+        console.error('❌ No session found. Redirecting to login...')
+        router.push('/login')
+        setIsLoading(false)
+        return
+      }
+      
+      console.log('🔍 Fetching users with session:', {
+        email: session.user.email,
+        hasSession: !!session,
+        sessionStatus
+      })
+      
+      // Fetch với page và size lớn hơn để đảm bảo lấy được tất cả users
+      // Nếu có query, thêm vào URL để search từ backend
+      const url = query.trim() 
+        ? `/api/system/users?page=0&size=100&q=${encodeURIComponent(query.trim())}`
+        : '/api/system/users?page=0&size=100'
+      
+      console.log('🔍 Fetching from:', url)
+      const res = await fetch(url, { 
+        headers: { 'Content-Type': 'application/json' }, 
+        credentials: 'include' 
+      })
+      
+      console.log('📥 Response status:', res.status, res.statusText)
+      
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ error: 'Unknown error' }))
+        console.error('❌ Failed to fetch users. Status:', res.status)
+        console.error('❌ Error details:', errorData)
+        console.error('❌ Current session:', {
+          email: session?.user?.email,
+          isAdmin: (session?.user as any)?.isAdmin,
+          sessionStatus
+        })
+        
+        if (res.status === 403) {
+          const adminEmail = process.env.NEXT_PUBLIC_ADMIN_EMAIL || 'quyentnqe170062@fpt.edu.vn'
+          console.error(`🚫 Access denied: You must be logged in as admin (${adminEmail}) to view users`)
+          console.error(`📧 Current user email: ${session?.user?.email}`)
+          setMessage(`Bạn không có quyền truy cập. Chỉ admin (${adminEmail}) mới có thể xem danh sách users.`)
+        } else {
+          setMessage(`Lỗi khi tải danh sách users: ${errorData.error || errorData.message || 'Unknown error'}`)
         }
-      } else if (Array.isArray(data)) {
-        setRows(data)
-      } else {
+        
         setRows([])
+        setIsLoading(false)
+        return
+      }
+      
+      const data = await res.json()
+      console.log('✅ Users data received:', data)
+      console.log('✅ Data structure:', {
+        hasItems: !!data?.items,
+        itemsCount: data?.items?.length || 0,
+        isArray: Array.isArray(data),
+        hasError: !!data?.error,
+        keys: Object.keys(data || {})
+      })
+      
+      // Check for backend errors
+      if (data?.error || data?.responseCode) {
+        const errorMsg = data.error || data.message || 'Backend error'
+        const responseCode = data.responseCode || ''
+        console.warn('⚠️ Backend error in response:', errorMsg, responseCode)
+        setRows([])
+        
+        if (responseCode === 'S0001' || errorMsg.includes('SYSTEM_ERROR')) {
+          setMessage(`Lỗi hệ thống từ backend: ${errorMsg}. Vui lòng kiểm tra backend API hoặc thử lại sau.`)
+        } else {
+          setMessage(`Lỗi từ backend: ${errorMsg}`)
+        }
+        setIsLoading(false)
+        return
+      }
+      
+      let users = []
+      if (Array.isArray(data?.items)) {
+        users = data.items
+        console.log('✅ Using data.items format, count:', users.length)
+      } else if (Array.isArray(data)) {
+        users = data
+        console.log('✅ Using root array format, count:', users.length)
+      } else if (data?.items && Array.isArray(data.items)) {
+        users = data.items
+        console.log('✅ Using nested items format, count:', users.length)
+      } else {
+        console.warn('⚠️ Unexpected data format:', data)
+        console.warn('⚠️ Available keys:', Object.keys(data || {}))
+      }
+      
+      if (users.length > 0) {
+        setRows(users)
+        console.log('✅ Successfully loaded', users.length, 'users')
+        console.log('✅ Sample user emails:', users.slice(0, 5).map((u: User) => u.email))
+        setMessage(`Đã tải thành công ${users.length} người dùng.`)
+        setTimeout(() => setMessage(null), 3000)
+      } else {
+        console.warn('⚠️ No users found in response')
+        console.warn('⚠️ Full response data:', JSON.stringify(data, null, 2))
+        console.warn('⚠️ Response keys:', Object.keys(data || {}))
+        setRows([])
+        setMessage('Không có users nào trong hệ thống. Kiểm tra console để xem chi tiết response từ backend.')
       }
     } catch (e) {
-      console.error('Failed to fetch users:', e)
+      console.error('❌ Failed to fetch users:', e)
+      setMessage(`Lỗi khi tải danh sách users: ${e instanceof Error ? e.message : 'Unknown error'}`)
       setRows([])
+    } finally {
+      setIsLoading(false)
     }
   }
 
   useEffect(() => {
-    refetchUsers()
-  }, [])
+    // Chờ session sẵn sàng trước khi fetch
+    if (sessionStatus === 'loading') {
+      return
+    }
+    
+    if (sessionStatus === 'authenticated' && session?.user?.email) {
+      refetchUsers()
+    } else if (sessionStatus === 'unauthenticated') {
+      console.warn('⚠️ Session not authenticated, redirecting to login')
+      router.push('/login')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionStatus, session?.user?.email])
 
   useEffect(() => {
     const q = searchParams.get("q") || "";
@@ -235,8 +347,23 @@ function UsersInner() {
       <div className="w-full px-4 py-3">
         <div className="space-y-3">
         {message && (
-          <div className="rounded-md border p-2 sm:p-3 text-xs sm:text-sm shadow-sm bg-green-50 border-green-200 text-green-800">
+          <div className={`rounded-lg border p-3 text-sm ${
+            message.includes('Lỗi') || message.includes('không có quyền') 
+              ? 'bg-red-50 border-red-200 text-red-700' 
+              : message.includes('thành công')
+              ? 'bg-green-50 border-green-200 text-green-700'
+              : 'bg-blue-50 border-blue-200 text-blue-700'
+          }`}>
             {message}
+          </div>
+        )}
+        
+        {isLoading && (
+          <div className="rounded-lg border p-4 text-center bg-gray-50 border-gray-200">
+            <div className="flex items-center justify-center gap-2">
+              <div className="animate-spin rounded-full h-4 w-4 border-2 border-gray-400 border-t-transparent"></div>
+              <span className="text-sm text-gray-600">Đang tải...</span>
+            </div>
           </div>
         )}
 
@@ -253,6 +380,13 @@ function UsersInner() {
                   placeholder="Tìm theo email, họ tên, vai trò..."
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    // Nếu nhấn Enter và có query, thử search từ backend
+                    if (e.key === 'Enter' && query.trim()) {
+                      console.log('🔍 Searching for:', query.trim())
+                      refetchUsers()
+                    }
+                  }}
                 />
                 <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
                   <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -286,7 +420,8 @@ function UsersInner() {
           </div>
         </div>
 
-      <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-xl rounded-2xl overflow-hidden">
+        {!isLoading && (
+        <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-xl rounded-2xl overflow-hidden">
         <CardHeader className="bg-gray-50 border-b border-gray-200 px-6 py-3">
           <div className="flex items-center justify-between">
             <h2 className="text-lg text-left font-bold text-gray-900">Danh sách người dùng</h2>
@@ -420,7 +555,8 @@ function UsersInner() {
             </div>
           </div>
         </CardBody>
-      </Card>
+        </Card>
+        )}
 
       <Modal open={detailOpen} onClose={() => setDetailOpen(false)} title="Chi tiết người dùng">
         {selected ? (

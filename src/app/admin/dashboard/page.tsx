@@ -413,6 +413,10 @@ export default function AdminHome() {
   const [tasksSummary, setTasksSummary] = useState<TasksResp>({ todo: 0, in_progress: 0, done: 0, cancelled: 0 });
   const [apiLoaded, setApiLoaded] = useState(false);
 
+  const daysRange = useMemo(() => {
+    return Math.ceil((new Date(dateRange.toDate).getTime() - new Date(dateRange.fromDate).getTime()) / (1000 * 60 * 60 * 24)) + 1;
+  }, [dateRange]);
+
   useEffect(() => {
     setLoading(true);
     setError(null);
@@ -538,13 +542,9 @@ export default function AdminHome() {
       clearTimeout(timeoutId);
       ac.abort();
     };
-  }, [dateRange, refreshTrigger]);
+  }, [dateRange, refreshTrigger, daysRange]);
 
   const occupancyPercent = useMemo(() => Math.round((kpis.occupiedRooms / Math.max(1, kpis.totalRooms)) * 100), [kpis]);
-  
-  const daysRange = useMemo(() => {
-    return Math.ceil((new Date(dateRange.toDate).getTime() - new Date(dateRange.fromDate).getTime()) / (1000 * 60 * 60 * 24)) + 1;
-  }, [dateRange]);
 
   const revenueTrend = useMemo(() => {
     if (paymentsSeries.length < 2) return undefined;
