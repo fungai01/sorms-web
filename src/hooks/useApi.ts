@@ -134,33 +134,62 @@ export function useApi<T>(
   }
 }
 
-// Supported hooks tied to real APIs only
+// Helper function to call Next.js API routes (proxy to backend)
+async function fetchFromProxy<T>(endpoint: string): Promise<{ success: boolean; data?: T; error?: string }> {
+  try {
+    const res = await fetch(endpoint, {
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' }
+    })
+
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({ error: 'Request failed' }))
+      return {
+        success: false,
+        error: errorData.error || `HTTP ${res.status}`
+      }
+    }
+
+    const data = await res.json()
+    return {
+      success: true,
+      data
+    }
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    }
+  }
+}
+
+// Supported hooks tied to real APIs only - using Next.js API routes as proxy
 export function useRooms() {
-  return useApi(() => apiClient.getRooms())
+  return useApi(() => fetchFromProxy('/api/system/rooms'))
 }
 
 export function useRoomTypes() {
-  return useApi(() => apiClient.getRoomTypes())
+  return useApi(() => fetchFromProxy('/api/system/room-types'))
 }
 
 export function useBookings() {
-  return useApi(() => apiClient.getBookings())
+  return useApi(() => fetchFromProxy('/api/system/bookings'))
 }
 
 export function useServices() {
-  return useApi(() => apiClient.getServices())
+  return useApi(() => fetchFromProxy('/api/system/services'))
 }
 
 export function useServiceOrders() {
-  return useApi(() => apiClient.getMyServiceOrders())
+  return useApi(() => fetchFromProxy('/api/system/orders'))
 }
 
 export function useStaffUsers() {
-  return useApi(() => apiClient.getStaffUsers())
+  return useApi(() => fetchFromProxy('/api/system/users'))
 }
 
 export function useCheckins() {
-  return useApi(() => apiClient.getCheckins())
+  return useApi(() => fetchFromProxy('/api/system/checkins'))
 }
 
 // Dashboard stats derived from real endpoints
