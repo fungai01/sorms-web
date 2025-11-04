@@ -24,7 +24,9 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const showInactive = searchParams.get('showInactive') === 'true'
   const filteredTasks = showInactive ? tasks : tasks.filter(t => t.isActive)
-  return NextResponse.json(filteredTasks)
+  
+  // Return in consistent format with items array
+  return NextResponse.json({ items: filteredTasks, total: filteredTasks.length })
 }
 
 export async function POST(req: NextRequest) {

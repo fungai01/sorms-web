@@ -9,12 +9,33 @@ import Input from "@/components/ui/Input";
 import Modal from "@/components/ui/Modal";
 
 type User = {
-  id: number;
+  id?: number;
   email: string;
-  full_name: string;
-  phone_number?: string;
-  status: "ACTIVE" | "INACTIVE";
-  roles: string[];
+  fullName: string;
+  phoneNumber?: string;
+  firstName?: string;
+  lastName?: string;
+  status?: "ACTIVE" | "INACTIVE";
+  role?: string;
+  dateOfBirth?: string;
+  gender?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  postalCode?: string;
+  country?: string;
+  avatarUrl?: string;
+  bio?: string;
+  preferredLanguage?: string;
+  timezone?: string;
+  emergencyContactName?: string;
+  emergencyContactPhone?: string;
+  emergencyContactRelationship?: string;
+  idCardNumber?: string;
+  idCardIssueDate?: string;
+  idCardIssuePlace?: string;
+  createdDate?: string;
+  lastModifiedDate?: string;
 };
 
 function UsersInner() {
@@ -29,7 +50,7 @@ function UsersInner() {
   const [detailOpen, setDetailOpen] = useState(false);
   const [selected, setSelected] = useState<User | null>(null);
   const [editOpen, setEditOpen] = useState(false);
-  const roleOptions = ["admin", "office", "lecture", "staff", "guest"] as const;
+  const roleOptions = ["admin", "office", "lecturer", "staff", "guest"] as const;
   const [editForm, setEditForm] = useState<{ id?: number; full_name: string; email: string; phone_number?: string; role: string }>(
     { full_name: "", email: "", phone_number: "", role: "" }
   );
@@ -40,20 +61,30 @@ function UsersInner() {
   const [confirmOpen, setConfirmOpen] = useState<{ open: boolean; type: 'delete' | 'deactivate' | 'activate'; user?: User }>({ open: false, type: 'delete' });
   const [message, setMessage] = useState<string | null>(null);
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const phoneRegex = /^[0-9]{10,11}$/;
 
   async function refetchUsers() {
     try {
       const res = await fetch('/api/system/users', { headers: { 'Content-Type': 'application/json' }, credentials: 'include' })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      if (!res.ok) {
+        console.error('Failed to fetch users. Status:', res.status)
+        setRows([])
+        return
+      }
       const data = await res.json()
+      console.log('Users data received:', data)
       if (Array.isArray(data?.items)) {
         setRows(data.items)
+        if (data.items.length === 0) {
+          console.warn('No users returned from backend')
+        }
       } else if (Array.isArray(data)) {
         setRows(data)
       } else {
         setRows([])
       }
-    } catch {
+    } catch (e) {
+      console.error('Failed to fetch users:', e)
       setRows([])
     }
   }
@@ -92,20 +123,25 @@ function UsersInner() {
       ? rows.filter(
           (u) =>
             u.email.toLowerCase().includes(q) ||
-            u.full_name.toLowerCase().includes(q) ||
-            u.roles.join(",").includes(q)
+            (u.fullName || '').toLowerCase().includes(q) ||
+            (u.role || '').toLowerCase().includes(q) ||
+            (u.phoneNumber || '').toLowerCase().includes(q)
         )
       : rows;
     const ordered = [...list].sort((a, b) => {
       const dir = sortOrder === "asc" ? 1 : -1;
-      if (sortKey === "id") return (a.id - b.id) * dir;
-      if (sortKey === "name") return a.full_name.localeCompare(b.full_name) * dir;
+      if (sortKey === "id") return ((a.id || 0) - (b.id || 0)) * dir;
+      if (sortKey === "name") return (a.fullName || '').localeCompare(b.fullName || '') * dir;
       return a.email.localeCompare(b.email) * dir;
     });
     return ordered;
   }, [rows, query, sortKey, sortOrder]);
 
-  async function deactivate(id: number) {
+  async function deactivate(id?: number) {
+    if (!id) {
+      setMessage('ID người dùng không hợp lệ.');
+      return;
+    }
     try {
       const res = await fetch(`/api/system/users?action=deactivate&userId=${id}`, {
         method: 'POST',
@@ -113,17 +149,22 @@ function UsersInner() {
       });
 
       if (res.ok) {
-        setRows((r) => r.map((u) => (u.id === id ? { ...u, status: "INACTIVE" } : u)));
         setMessage('Đã vô hiệu hóa người dùng.');
+        await refetchUsers();
       } else {
-        setMessage('Lỗi khi vô hiệu hóa người dùng.');
+        const errorData = await res.json().catch(() => ({}));
+        setMessage(errorData.error || 'Lỗi khi vô hiệu hóa người dùng.');
       }
     } catch (error) {
       setMessage('Lỗi khi vô hiệu hóa người dùng.');
     }
   }
 
-  async function activate(id: number) {
+  async function activate(id?: number) {
+    if (!id) {
+      setMessage('ID người dùng không hợp lệ.');
+      return;
+    }
     try {
       const res = await fetch(`/api/system/users?action=activate&userId=${id}`, {
         method: 'POST',
@@ -131,10 +172,11 @@ function UsersInner() {
       });
 
       if (res.ok) {
-        setRows((r) => r.map((u) => (u.id === id ? { ...u, status: "ACTIVE" } : u)));
         setMessage('Đã kích hoạt người dùng.');
+        await refetchUsers();
       } else {
-        setMessage('Lỗi khi kích hoạt người dùng.');
+        const errorData = await res.json().catch(() => ({}));
+        setMessage(errorData.error || 'Lỗi khi kích hoạt người dùng.');
       }
     } catch (error) {
       setMessage('Lỗi khi kích hoạt người dùng.');
@@ -173,7 +215,7 @@ function UsersInner() {
               title="Xuất Excel"
               className="h-9 px-3 rounded-md border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-50 whitespace-nowrap"
               onClick={() => {
-                const csv = [['ID', 'Email', 'Họ tên', 'Vai trò', 'Trạng thái'], ...filtered.map(u => [u.id, u.email, u.full_name, u.roles.join(','), u.status])]
+                const csv = [['ID', 'Email', 'Họ tên', 'Số điện thoại', 'Vai trò', 'Trạng thái'], ...filtered.map(u => [u.id || '-', u.email, u.fullName, u.phoneNumber || '-', u.role || '-', u.status || 'ACTIVE'])]
                 const blob = new Blob([csv.map(r => r.join(',')).join('\n')], { type: 'text/csv' })
                 const url = URL.createObjectURL(blob)
                 const a = document.createElement('a')
@@ -277,29 +319,29 @@ function UsersInner() {
             <tbody>
               {filtered
                 .slice((page - 1) * size, (page - 1) * size + size)
-                .map((u) => (
-                  <tr key={u.id} className="hover:bg-gray-50">
-                    <td className="px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm">{u.id}</td>
-                    <td className="px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm">{u.full_name}</td>
+                .map((u, idx) => (
+                  <tr key={u.email || `user-${idx}`} className="hover:bg-gray-50">
+                    <td className="px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm">{u.id || '-'}</td>
+                    <td className="px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm">{u.fullName}</td>
                     <td className="px-2 sm:px-3 py-1.5 sm:py-2 font-mono text-xs sm:text-sm truncate max-w-[180px] sm:max-w-[240px] lg:max-w-[300px]" title={u.email}>
                       {u.email}
                     </td>
-                    <td className="px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm">{u.phone_number || "—"}</td>
+                    <td className="px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm">{u.phoneNumber || "—"}</td>
                     <td className="px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm">
-                      <div className="flex flex-wrap gap-1">
-                        {u.roles.map((r) => (
-                          <Badge key={r}>{r}</Badge>
-                        ))}
-                      </div>
+                      {u.role ? (
+                        <Badge>{u.role}</Badge>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
                     </td>
                     <td className="px-2 sm:px-3 py-1.5 sm:py-2">
-                      {u.status === "ACTIVE" ? <Badge tone="success">ACTIVE</Badge> : <Badge tone="muted">INACTIVE</Badge>}
+                      {u.status === "ACTIVE" || !u.status ? <Badge tone="success">ACTIVE</Badge> : <Badge tone="muted">INACTIVE</Badge>}
                     </td>
                     <td className="px-2 sm:px-3 py-1.5 sm:py-2">
                       <div className="flex flex-col sm:flex-row gap-1 sm:gap-2">
                         <Button variant="secondary" className="h-8 px-3 text-xs" onClick={() => { setSelected(u); setDetailOpen(true); }}>Xem</Button>
                         <Button className="h-8 px-3 text-xs" onClick={() => {
-                          setEditForm({ id: u.id, full_name: u.full_name, email: u.email, phone_number: u.phone_number, role: u.roles[0] || "" });
+                          setEditForm({ id: u.id, full_name: u.fullName, email: u.email, phone_number: u.phoneNumber, role: u.role || "" });
                           setEditOpen(true);
                         }}>Sửa</Button>
                         <Button variant="danger" className="h-8 px-3 text-xs" onClick={() => setConfirmOpen({ open: true, type: 'delete', user: u })}>Xóa</Button>
@@ -313,8 +355,8 @@ function UsersInner() {
 
           {/* Mobile list */}
           <div className="lg:hidden p-3 space-y-3">
-            {filtered.slice((page - 1) * size, (page - 1) * size + size).map((u) => (
-              <div key={u.id} className="bg-white rounded-2xl border border-gray-200 shadow-sm hover:shadow-lg transition-all duration-300 overflow-hidden">
+            {filtered.slice((page - 1) * size, (page - 1) * size + size).map((u, idx) => (
+              <div key={u.email || `user-mobile-${idx}`} className="bg-white rounded-2xl border border-gray-200 shadow-sm hover:shadow-lg transition-all duration-300 overflow-hidden">
                 {/* Header gradient giống bookings/tasks */}
                 <div className="bg-gradient-to-r from-blue-50 to-indigo-50 px-4 py-3 border-b border-gray-100">
                   <div className="flex items-center justify-between">
@@ -325,23 +367,23 @@ function UsersInner() {
                         </svg>
                       </div>
                       <div>
-                        <div className="text-sm font-semibold text-gray-900 truncate">{u.full_name}</div>
+                        <div className="text-sm font-semibold text-gray-900 truncate">{u.fullName}</div>
                         <div className="text-xs text-gray-600 truncate">{u.email}</div>
                       </div>
                     </div>
-                    <div>{u.status === 'ACTIVE' ? <Badge tone="success">ACTIVE</Badge> : <Badge tone="muted">INACTIVE</Badge>}</div>
+                    <div>{u.status === 'ACTIVE' || !u.status ? <Badge tone="success">ACTIVE</Badge> : <Badge tone="muted">INACTIVE</Badge>}</div>
                   </div>
                 </div>
 
                 <div className="p-3 space-y-2 text-sm">
                   <div className="flex items-center justify-between">
                     <span className="text-gray-600">Điện thoại</span>
-                    <span className="font-medium">{u.phone_number || '—'}</span>
+                    <span className="font-medium">{u.phoneNumber || '—'}</span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-gray-600">Vai trò</span>
                     <div className="flex flex-wrap gap-1 justify-end">
-                      {u.roles.map((r) => (<Badge key={r}>{r}</Badge>))}
+                      {u.role ? <Badge>{u.role}</Badge> : <span className="text-gray-400">—</span>}
                     </div>
                   </div>
                 </div>
@@ -349,7 +391,7 @@ function UsersInner() {
                 <div className="px-3 py-3 bg-gray-50 border-t border-gray-100">
                   <div className="grid grid-cols-3 gap-2">
                     <Button variant="secondary" className="h-10 text-xs font-medium px-2" onClick={() => { setSelected(u); setDetailOpen(true); }}>Xem</Button>
-                    <Button className="h-10 text-xs font-medium px-2" onClick={() => { setEditForm({ id: u.id, full_name: u.full_name, email: u.email, phone_number: u.phone_number, role: u.roles[0] || "" }); setEditOpen(true); }}>Sửa</Button>
+                    <Button className="h-10 text-xs font-medium px-2" onClick={() => { setEditForm({ id: u.id, full_name: u.fullName, email: u.email, phone_number: u.phoneNumber, role: u.role || "" }); setEditOpen(true); }}>Sửa</Button>
                     <Button variant="danger" className="h-10 text-xs font-medium px-2" onClick={() => setConfirmOpen({ open: true, type: 'delete', user: u })}>Xóa</Button>
                   </div>
                 </div>
@@ -393,8 +435,8 @@ function UsersInner() {
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="text-base sm:text-lg font-semibold text-gray-900 truncate">{selected.full_name}</h3>
-                    {selected.status === 'ACTIVE' ? (
+                    <h3 className="text-base sm:text-lg font-semibold text-gray-900 truncate">{selected.fullName}</h3>
+                    {selected.status === 'ACTIVE' || !selected.status ? (
                       <Badge tone="success">ACTIVE</Badge>
                     ) : (
                       <Badge tone="muted">INACTIVE</Badge>
@@ -409,16 +451,26 @@ function UsersInner() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
               <div className="rounded-lg border border-gray-200 p-3 bg-white">
                 <div className="text-gray-500">ID</div>
-                <div className="font-medium text-gray-900">{selected.id}</div>
+                <div className="font-medium text-gray-900">{selected.id || '—'}</div>
               </div>
               <div className="rounded-lg border border-gray-200 p-3 bg-white">
                 <div className="text-gray-500">Điện thoại</div>
-                <div className="font-medium text-gray-900">{selected.phone_number || '—'}</div>
+                <div className="font-medium text-gray-900">{selected.phoneNumber || '—'}</div>
               </div>
-              <div className="rounded-lg border border-gray-200 p-3 bg-white sm:col-span-2">
+              <div className="rounded-lg border border-gray-200 p-3 bg-white">
                 <div className="text-gray-500">Vai trò</div>
                 <div className="mt-1 flex flex-wrap gap-1">
-                  {selected.roles.map((r) => (<Badge key={r}>{r}</Badge>))}
+                  {selected.role ? <Badge>{selected.role}</Badge> : <span className="text-gray-400">—</span>}
+                </div>
+              </div>
+              <div className="rounded-lg border border-gray-200 p-3 bg-white">
+                <div className="text-gray-500">Trạng thái</div>
+                <div className="mt-1">
+                  {selected.status === 'ACTIVE' || !selected.status ? (
+                    <Badge tone="success">ACTIVE</Badge>
+                  ) : (
+                    <Badge tone="muted">INACTIVE</Badge>
+                  )}
                 </div>
               </div>
             </div>
@@ -433,19 +485,33 @@ function UsersInner() {
         footer={
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setEditOpen(false)}>Hủy</Button>
-            <Button disabled={!editForm.id || !editForm.full_name.trim() || !emailRegex.test(editForm.email) || !editForm.role}
+            <Button disabled={
+              !editForm.id ||
+              !editForm.full_name.trim() ||
+              editForm.full_name.trim().length < 3 ||
+              !emailRegex.test(editForm.email) ||
+              (!!editForm.phone_number && !phoneRegex.test(editForm.phone_number))
+            }
               onClick={async () => {
               try {
-                // Tạm thời cập nhật local do API chưa có endpoint update cụ thể
-                setRows((rs) => rs.map((u) => u.id === editForm.id
-                  ? { ...u, full_name: editForm.full_name, email: editForm.email, phone_number: editForm.phone_number, roles: editForm.role ? [editForm.role] : [] }
-                  : u
-                ));
+                const res = await fetch('/api/system/users', {
+                  method: 'PUT',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    id: editForm.id,
+                    fullName: editForm.full_name,
+                    phoneNumber: editForm.phone_number
+                  })
+                });
+                if (!res.ok) {
+                  const errorData = await res.json().catch(() => ({}));
+                  throw new Error(errorData.error || 'Cập nhật người dùng thất bại');
+                }
                 setEditOpen(false);
                 setMessage('Đã cập nhật người dùng.');
                 await refetchUsers()
-              } catch {
-                setMessage('Lỗi khi cập nhật người dùng.')
+              } catch (e) {
+                setMessage(e instanceof Error ? e.message : 'Lỗi khi cập nhật người dùng.')
               }
             }}>Lưu</Button>
           </div>
@@ -491,11 +557,14 @@ function UsersInner() {
                 <option key={r} value={r}>{r}</option>
               ))}
             </select>
-            <div className="mt-1 text-xs text-red-600">
-              {!editForm.full_name.trim() ? 'Họ tên bắt buộc. ' : ''}
-              {!emailRegex.test(editForm.email) ? 'Email không hợp lệ. ' : ''}
-              {!editForm.role ? 'Vui lòng chọn vai trò.' : ''}
-            </div>
+            {(!editForm.full_name.trim() || editForm.full_name.trim().length < 3 || !emailRegex.test(editForm.email) || (!!editForm.phone_number && !phoneRegex.test(editForm.phone_number))) && (
+              <div className="mt-1 text-xs text-red-600">
+                {!editForm.full_name.trim() ? 'Họ tên bắt buộc. ' : ''}
+                {editForm.full_name.trim() && editForm.full_name.trim().length < 3 ? 'Họ tên phải có ít nhất 3 ký tự. ' : ''}
+                {!emailRegex.test(editForm.email) ? 'Email không hợp lệ. ' : ''}
+                {!!editForm.phone_number && !phoneRegex.test(editForm.phone_number) ? 'Số điện thoại phải có 10-11 chữ số. ' : ''}
+              </div>
+            )}
           </div>
         </div>
       </Modal>
@@ -508,25 +577,34 @@ function UsersInner() {
         footer={
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setCreateOpen(false)}>Hủy</Button>
-            <Button disabled={!createForm.full_name.trim() || !emailRegex.test(createForm.email) || !createForm.role}
+            <Button disabled={
+              !createForm.full_name.trim() ||
+              createForm.full_name.trim().length < 3 ||
+              !emailRegex.test(createForm.email) ||
+              (!!createForm.phone_number && !phoneRegex.test(createForm.phone_number))
+            }
               onClick={async () => {
               try {
                 const resp = await fetch('/api/system/users?action=create', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({
-                    full_name: createForm.full_name,
+                    fullName: createForm.full_name,
                     email: createForm.email,
-                    phone_number: createForm.phone_number,
+                    phoneNumber: createForm.phone_number,
                     role: createForm.role
                   })
                 })
-                if (!resp.ok) throw new Error('Tạo người dùng thất bại')
+                if (!resp.ok) {
+                  const errorData = await resp.json().catch(() => ({}));
+                  throw new Error(errorData.error || 'Tạo người dùng thất bại');
+                }
                 setCreateOpen(false);
+                setCreateForm({ full_name: "", email: "", phone_number: "", role: "" });
                 setMessage('Đã tạo người dùng mới.');
                 await refetchUsers()
               } catch (e) {
-                setMessage('Lỗi khi tạo người dùng mới.')
+                setMessage(e instanceof Error ? e.message : 'Lỗi khi tạo người dùng mới.')
               }
             }}>Tạo</Button>
           </div>
@@ -557,11 +635,14 @@ function UsersInner() {
                 <option key={r} value={r}>{r}</option>
               ))}
             </select>
-            <div className="mt-1 text-xs text-red-600">
-              {!createForm.full_name.trim() ? 'Họ tên bắt buộc. ' : ''}
-              {!emailRegex.test(createForm.email) ? 'Email không hợp lệ. ' : ''}
-              {!createForm.role ? 'Vui lòng chọn vai trò.' : ''}
-            </div>
+            {(!createForm.full_name.trim() || createForm.full_name.trim().length < 3 || !emailRegex.test(createForm.email) || (!!createForm.phone_number && !phoneRegex.test(createForm.phone_number))) && (
+              <div className="mt-1 text-xs text-red-600">
+                {!createForm.full_name.trim() ? 'Họ tên bắt buộc. ' : ''}
+                {createForm.full_name.trim() && createForm.full_name.trim().length < 3 ? 'Họ tên phải có ít nhất 3 ký tự. ' : ''}
+                {!emailRegex.test(createForm.email) ? 'Email không hợp lệ. ' : ''}
+                {!!createForm.phone_number && !phoneRegex.test(createForm.phone_number) ? 'Số điện thoại phải có 10-11 chữ số. ' : ''}
+              </div>
+            )}
           </div>
         </div>
       </Modal>

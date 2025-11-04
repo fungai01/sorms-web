@@ -29,7 +29,14 @@ export async function GET(req: NextRequest) {
     const res = await fetch(`${BASE}/orders`, { headers: { 'Content-Type': 'application/json', accept: '*/*' } })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
-    return NextResponse.json(data.data ?? data)
+    
+    // Ensure we return data in a consistent format with items array
+    const responseData = data.data ?? data
+    const items = Array.isArray(responseData?.content) 
+      ? responseData.content 
+      : (Array.isArray(responseData) ? responseData : [])
+    
+    return NextResponse.json({ items, total: items.length })
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || 'Internal server error' }, { status: 500 })
   }

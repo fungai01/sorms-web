@@ -8,28 +8,49 @@ import { Table, THead, TBody } from "@/components/ui/Table";
 import Modal from "@/components/ui/Modal";
 import Input from "@/components/ui/Input";
 
-type Role = { id: number; code: string; name: string; description?: string; isVisible: boolean };
+type Role = {
+  id?: number;
+  code: string;
+  name: string;
+  description?: string;
+  isActive?: boolean;
+};
 
 function RolesInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [rows, setRows] = useState<Role[]>([]);
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(false);
 
   async function refetchRoles() {
     setLoading(true)
     try {
-      const res = await fetch('/api/system/roles', { headers: { 'Content-Type': 'application/json' }, credentials: 'include' })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const data = await res.json()
-      if (Array.isArray(data?.items)) {
-        setRows(data.items)
-      } else if (Array.isArray(data)) {
-        setRows(data)
-      } else {
-        setRows([])
+      const res = await fetch('/api/system/roles', { 
+        headers: { 'Content-Type': 'application/json' }, 
+        credentials: 'include',
+        cache: 'no-store'
+      })
+      
+      if (!res.ok) {
+        const errorBody = await res.json().catch(() => null);
+        const errorText = errorBody?.details || errorBody?.error || `Request failed with status ${res.status}`;
+        throw new Error(`Không thể tải dữ liệu: ${errorText}`)
       }
+      
+      const data = await res.json()
+      console.log('📊 Roles data received:', data)
+
+      let rolesArray: Role[] = []
+      if (Array.isArray(data?.items)) {
+        rolesArray = data.items
+      } else if (Array.isArray(data)) {
+        rolesArray = data
+      }
+
+      console.log('📊 Total roles:', rolesArray.length, 'Sample:', rolesArray[0])
+      setRows(rolesArray)
     } catch (e) {
+      setFlash({ type: 'error', text: e instanceof Error ? e.message : 'Có lỗi xảy ra khi tải dữ liệu' })
       setRows([])
     } finally {
       setLoading(false)
@@ -44,25 +65,18 @@ function RolesInner() {
   const [openDeleteModal, setOpenDeleteModal] = useState(false);
   const [editing, setEditing] = useState<Role | null>(null);
   const [productToDelete, setProductToDelete] = useState<Role | null>(null);
-  const [form, setForm] = useState<Pick<Role, "code" | "name" | "description" | "isVisible">>({
+  const [form, setForm] = useState<Pick<Role, "code" | "name" | "description">>({
     code: "",
     name: "",
     description: "",
-    isVisible: true,
   });
   const [flash, setFlash] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [selected, setSelected] = useState<Role | null>(null);
-  const [sortKey, setSortKey] = useState<"id" | "code" | "name">("code");
+  const [sortKey, setSortKey] = useState<"code" | "name">("code");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(10);
-
-  // Remove role from list
-  function remove(id: number) {
-    setRows((r) => r.filter((x) => x.id !== id));
-    setFlash({ type: 'success', text: 'Đã xóa vai trò thành công.' });
-  }
 
   // Filter and sort roles based on query and sort
   const filtered = rows
@@ -77,7 +91,6 @@ function RolesInner() {
     })
     .sort((a, b) => {
       const dir = sortOrder === "asc" ? 1 : -1;
-      if (sortKey === "id") return (a.id - b.id) * dir;
       if (sortKey === "code") return a.code.localeCompare(b.code) * dir;
       return a.name.localeCompare(b.name) * dir;
     });
@@ -85,14 +98,14 @@ function RolesInner() {
   // Open modal to create a new role
   function openCreate() {
     setEditing(null);
-    setForm({ code: "", name: "", description: "", isVisible: true });
+    setForm({ code: "", name: "", description: "" });
     setOpen(true);
   }
 
   // Open modal to edit an existing role
   function openEdit(role: Role) {
     setEditing(role);
-    setForm({ code: role.code, name: role.name, description: role.description || "", isVisible: role.isVisible });
+    setForm({ code: role.code, name: role.name, description: role.description || "" });
     setOpen(true);
   }
 
@@ -107,9 +120,12 @@ function RolesInner() {
         const resp = await fetch('/api/system/roles', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: editing.id, ...form })
+          body: JSON.stringify(form)
         })
-        if (!resp.ok) throw new Error('Cập nhật vai trò thất bại')
+        if (!resp.ok) {
+          const errorData = await resp.json().catch(() => ({}))
+          throw new Error(errorData.error || 'Cập nhật vai trò thất bại')
+        }
         setFlash({ type: 'success', text: 'Đã cập nhật vai trò thành công.' });
       } else {
         const resp = await fetch('/api/system/roles', {
@@ -137,8 +153,11 @@ function RolesInner() {
   async function confirmDelete() {
     if (!productToDelete) return
     try {
-      const resp = await fetch(`/api/system/roles?id=${productToDelete.id}`, { method: 'DELETE' })
-      if (!resp.ok) throw new Error('Vô hiệu hóa vai trò thất bại')
+      const resp = await fetch(`/api/system/roles?code=${encodeURIComponent(productToDelete.code)}`, { method: 'DELETE' })
+      if (!resp.ok) {
+        const errorData = await resp.json().catch(() => ({}))
+        throw new Error(errorData.error || 'Vô hiệu hóa vai trò thất bại')
+      }
       setFlash({ type: 'success', text: 'Đã vô hiệu hóa vai trò thành công.' });
       await refetchRoles()
     } catch (e) {
@@ -151,8 +170,11 @@ function RolesInner() {
   // Activate role
   async function activateRole(role: Role) {
     try {
-      const resp = await fetch(`/api/system/roles?action=activate&id=${role.id}`, { method: 'POST' })
-      if (!resp.ok) throw new Error('Kích hoạt vai trò thất bại')
+      const resp = await fetch(`/api/system/roles?action=activate&id=${encodeURIComponent(role.code)}`, { method: 'POST' })
+      if (!resp.ok) {
+        const errorData = await resp.json().catch(() => ({}))
+        throw new Error(errorData.error || 'Kích hoạt vai trò thất bại')
+      }
       setFlash({ type: 'success', text: 'Đã kích hoạt vai trò thành công.' });
       await refetchRoles()
     } catch (e) {
@@ -219,7 +241,7 @@ function RolesInner() {
               title="Xuất Excel (CSV)"
               className="px-3 py-2 rounded-lg border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-50 whitespace-nowrap"
               onClick={() => {
-                const csv = [['ID', 'Code', 'Tên', 'Mô tả', 'Hiển thị'], ...filtered.map(r => [r.id, r.code, r.name, r.description || '', r.isVisible ? 'Có' : 'Không'])]
+                const csv = [['Code', 'Tên', 'Mô tả', 'Trạng thái'], ...filtered.map(r => [r.code, r.name, r.description || '', r.isActive !== false ? 'Hoạt động' : 'Vô hiệu'])]
                 const blob = new Blob([csv.map(r => r.join(',')).join('\n')], { type: 'text/csv' })
                 const url = URL.createObjectURL(blob)
                 const a = document.createElement('a')
@@ -273,14 +295,13 @@ function RolesInner() {
           <div>
             <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1">Sắp xếp</label>
             <div className="flex gap-2">
-              <select 
-                className="h-9 rounded-md border border-gray-300 bg-white px-3 text-sm flex-1" 
-                value={sortKey} 
+              <select
+                className="h-9 rounded-md border border-gray-300 bg-white px-3 text-sm flex-1"
+                value={sortKey}
                 onChange={(e) => setSortKey(e.target.value as any)}
               >
                 <option value="code">Code</option>
                 <option value="name">Tên</option>
-                <option value="id">ID</option>
               </select>
               <select 
                 className="h-9 rounded-md border border-gray-300 bg-white px-3 text-sm flex-1" 
@@ -307,7 +328,6 @@ function RolesInner() {
             <table className="min-w-[800px] w-full text-xs sm:text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-200">
-                  <th className="px-2 sm:px-3 py-1.5 sm:py-2 text-left font-semibold text-gray-700">ID</th>
                   <th className="px-2 sm:px-3 py-1.5 sm:py-2 text-left font-semibold text-gray-700">Code</th>
                   <th className="px-2 sm:px-3 py-1.5 sm:py-2 text-left font-semibold text-gray-700">Tên</th>
                   <th className="px-2 sm:px-3 py-1.5 sm:py-2 text-left font-semibold text-gray-700">Mô tả</th>
@@ -316,9 +336,8 @@ function RolesInner() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.slice((page - 1) * size, (page - 1) * size + size).map((r) => (
-                  <tr key={r.id} className="border-b border-gray-100 hover:bg-gray-50">
-                    <td className="px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm">{r.id}</td>
+                {filtered.slice((page - 1) * size, (page - 1) * size + size).map((r, idx) => (
+                  <tr key={r.code || `role-${idx}`} className="border-b border-gray-100 hover:bg-gray-50">
                     <td className="px-2 sm:px-3 py-1.5 sm:py-2">
                       <span 
                         role="button" 
@@ -332,7 +351,7 @@ function RolesInner() {
                     <td className="px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm text-gray-700">{r.name}</td>
                     <td className="px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm text-gray-500 truncate" title={r.description}>{r.description}</td>
                     <td className="px-2 sm:px-3 py-1.5 sm:py-2">
-                      {r.isVisible ? (
+                      {r.isActive !== false ? (
                         <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
                           Hoạt động
                         </span>
@@ -346,7 +365,7 @@ function RolesInner() {
                       <div className="flex flex-col sm:flex-row gap-1 sm:gap-2">
                         <Button variant="secondary" className="h-8 px-3 text-xs" onClick={() => { setSelected(r); setDetailOpen(true); }}>Xem</Button>
                         <Button className="h-8 px-3 text-xs" onClick={() => openEdit(r)}>Sửa</Button>
-                        {r.isVisible ? (
+                        {r.isActive !== false ? (
                           <Button variant="danger" className="h-8 px-3 text-xs" onClick={() => handleOpenDelete(r)}>Vô hiệu</Button>
                         ) : (
                           <Button className="h-8 px-3 text-xs bg-green-600 hover:bg-green-700" onClick={() => activateRole(r)}>Kích hoạt</Button>
@@ -361,8 +380,8 @@ function RolesInner() {
 
           {/* Mobile list */}
           <div className="lg:hidden p-3 space-y-3">
-            {filtered.slice((page - 1) * size, (page - 1) * size + size).map((r) => (
-              <div key={r.id} className="bg-white rounded-2xl border border-gray-200 shadow-sm hover:shadow-lg transition-all duration-300 overflow-hidden">
+            {filtered.slice((page - 1) * size, (page - 1) * size + size).map((r, idx) => (
+              <div key={r.code || `role-mobile-${idx}`} className="bg-white rounded-2xl border border-gray-200 shadow-sm hover:shadow-lg transition-all duration-300 overflow-hidden">
                 <div className="bg-gradient-to-r from-blue-50 to-indigo-50 px-4 py-3 border-b border-gray-100">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
@@ -386,7 +405,7 @@ function RolesInner() {
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-gray-600">Trạng thái</span>
-                    {r.isVisible ? (
+                    {r.isActive !== false ? (
                       <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
                         Hoạt động
                       </span>
@@ -402,7 +421,7 @@ function RolesInner() {
                   <div className="grid grid-cols-3 gap-2">
                     <Button variant="secondary" className="h-10 text-xs font-medium px-2" onClick={() => { setSelected(r); setDetailOpen(true); }}>Xem</Button>
                     <Button className="h-10 text-xs font-medium px-2" onClick={() => openEdit(r)}>Sửa</Button>
-                    {r.isVisible ? (
+                    {r.isActive !== false ? (
                       <Button variant="danger" className="h-10 text-xs font-medium px-2" onClick={() => handleOpenDelete(r)}>Vô hiệu</Button>
                     ) : (
                       <Button className="h-10 text-xs font-medium px-2 bg-green-600 hover:bg-green-700" onClick={() => activateRole(r)}>Kích hoạt</Button>
@@ -474,10 +493,14 @@ function RolesInner() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Code</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Code {editing && <span className="text-xs text-gray-500">(không thể sửa)</span>}
+            </label>
             <Input
               value={form.code}
               onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))}
+              disabled={!!editing}
+              className={editing ? 'bg-gray-100 cursor-not-allowed' : ''}
             />
             {!form.code.trim() && <div className="mt-1 text-xs text-red-600">Code bắt buộc.</div>}
           </div>
@@ -544,12 +567,16 @@ function RolesInner() {
             {/* Thông tin chi tiết */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
               <div className="rounded-lg border border-gray-200 p-3 bg-white">
-                <div className="text-gray-500">ID</div>
-                <div className="font-medium text-gray-900">{selected.id}</div>
+                <div className="text-gray-500">Code</div>
+                <div className="font-medium text-gray-900">{selected.code}</div>
               </div>
               <div className="rounded-lg border border-gray-200 p-3 bg-white">
-                <div className="text-gray-500">Hiển thị</div>
-                <div className="font-medium text-gray-900">{selected.isVisible ? 'Có' : 'Không'}</div>
+                <div className="text-gray-500">Trạng thái</div>
+                <div className="font-medium text-gray-900">{selected.isActive !== false ? 'Hoạt động' : 'Vô hiệu'}</div>
+              </div>
+              <div className="rounded-lg border border-gray-200 p-3 bg-white sm:col-span-2">
+                <div className="text-gray-500">Tên</div>
+                <div className="mt-1 font-medium text-gray-900">{selected.name}</div>
               </div>
               <div className="rounded-lg border border-gray-200 p-3 bg-white sm:col-span-2">
                 <div className="text-gray-500">Mô tả</div>

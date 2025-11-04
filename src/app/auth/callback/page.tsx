@@ -24,8 +24,9 @@ function AuthCallbackInner() {
     if (status === "authenticated" && session?.user?.email) {
       const userEmail = session?.user?.email || ""
       const userName = session?.user?.name || ""
-      // Tạo user trong database nếu chưa tồn tại
-      const createUser = async () => {
+
+      // Xử lý user trong database
+      const processUser = async () => {
         if (!role) {
           router.push("/login");
           return;
@@ -34,8 +35,11 @@ function AuthCallbackInner() {
         setIsProcessing(true);
 
         try {
-          // Tạo user trong database
-          const response = await fetch('/api/system/users?action=create', {
+          let userStatus = 'ACTIVE'; // Default status
+
+          // Thử tạo user mới
+          console.log('👤 Attempting to create/verify user...');
+          const createResponse = await fetch('/api/system/users?action=create', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -45,17 +49,50 @@ function AuthCallbackInner() {
             })
           });
 
-          if (!response.ok) {
-            throw new Error('Failed to create user');
+          if (createResponse.ok) {
+            // User được tạo thành công
+            console.log('✅ User created successfully');
+            const createData = await createResponse.json();
+            userStatus = createData.status || createData.user?.status || 'ACTIVE';
+          } else {
+            // Kiểm tra nếu lỗi là "User already exists"
+            const errorText = await createResponse.text();
+
+            try {
+              const errorData = JSON.parse(errorText);
+              const backendError = errorData.error ? JSON.parse(errorData.error.replace('Backend error: 400 - ', '')) : null;
+
+              if (backendError?.responseCode === 'U0002') {
+                // User đã tồn tại - đây là OK, lấy thông tin user
+                console.log('ℹ️ User already exists, fetching user info...');
+
+                // Gọi API để lấy thông tin user
+                const checkResponse = await fetch(`/api/system/users/check?email=${encodeURIComponent(userEmail)}`);
+                if (checkResponse.ok) {
+                  const checkData = await checkResponse.json();
+                  if (checkData.exists) {
+                    userStatus = checkData.status || 'ACTIVE';
+                    console.log('✅ User found with status:', userStatus);
+                  }
+                } else {
+                  // Nếu không lấy được thông tin, assume ACTIVE (vì user đã tồn tại)
+                  console.log('⚠️ Could not fetch user info, assuming ACTIVE');
+                  userStatus = 'ACTIVE';
+                }
+              } else {
+                // Lỗi khác
+                console.error('❌ Failed to create user:', errorText);
+                throw new Error('Failed to create user');
+              }
+            } catch (parseError) {
+              console.error('❌ Error parsing error response:', parseError);
+              throw new Error('Failed to create user');
+            }
           }
 
-          const data = await response.json();
-
-          // Check user status
-          const userStatus = data.user?.status;
-
-          // Nếu user INACTIVE, redirect về login với error
+          // Kiểm tra status
           if (userStatus === 'INACTIVE') {
+            console.log('❌ User INACTIVE, redirect về login');
             router.push("/login?error=inactive");
             return;
           }
@@ -84,14 +121,15 @@ function AuthCallbackInner() {
             }
           })();
 
+          console.log('✅ Login thành công, redirect tới:', redirectUrl);
           router.push(redirectUrl);
         } catch (error) {
-          console.error('Error creating user:', error);
+          console.error('❌ Error processing user:', error);
           router.push("/login?error=create_user_failed");
         }
       };
 
-      createUser();
+      processUser();
     }
   }, [status, session, role, router]);
 

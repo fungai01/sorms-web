@@ -2,12 +2,28 @@ import { NextResponse } from 'next/server'
 
 export async function GET() {
   try {
-    const res = await fetch(`${process.env.NEXT_PUBLIC_BASE_PATH || ''}/api/system/tasks`, {
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_PATH || ''
+    const url = `${baseUrl}/api/system/tasks`
+    
+    console.log('[Dashboard Tasks] Fetching from:', url)
+    
+    const res = await fetch(url, {
       headers: { 'Content-Type': 'application/json' },
       cache: 'no-store',
     })
-    const data = await res.json().catch(() => ([]))
+    
+    console.log('[Dashboard Tasks] Response status:', res.status)
+    
+    if (!res.ok) {
+      console.error('[Dashboard Tasks] Failed to fetch:', res.status, res.statusText)
+      // Return empty counts instead of error to prevent dashboard from breaking
+      return NextResponse.json({ todo: 0, in_progress: 0, done: 0, cancelled: 0 })
+    }
+    
+    const data = await res.json().catch(() => ({ items: [] }))
     const list: any[] = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : [])
+
+    console.log('[Dashboard Tasks] Found items:', list.length)
 
     const toKey = (s: string) => String(s || '').toUpperCase()
     const todo = list.filter((t) => toKey(t.status) === 'TODO' || toKey(t.status) === 'PENDING').length
@@ -17,11 +33,9 @@ export async function GET() {
 
     return NextResponse.json({ todo, in_progress, done, cancelled })
   } catch (error) {
-    console.error('Tasks API error:', error)
-    return NextResponse.json(
-      { error: 'Internal server error' }, 
-      { status: 500 }
-    )
+    console.error('[Dashboard Tasks] API error:', error)
+    // Return empty counts instead of error to prevent dashboard from breaking
+    return NextResponse.json({ todo: 0, in_progress: 0, done: 0, cancelled: 0 })
   }
 }
 

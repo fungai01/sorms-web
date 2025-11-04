@@ -22,6 +22,10 @@ export default function LoginPage() {
       setError('Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại.');
     } else if (errorParam === 'create_user_failed') {
       setError('Không thể tạo tài khoản. Vui lòng thử lại.');
+    } else if (errorParam === 'EmailNotProvided') {
+      setError('Không tìm thấy email trong thông tin đăng nhập. Vui lòng thử lại.');
+    } else if (errorParam === 'InvalidEmailDomain') {
+      setError('Tên miền email của bạn không được phép đăng nhập vào hệ thống.');
     }
   }, []);
 
