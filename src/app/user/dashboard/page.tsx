@@ -115,7 +115,7 @@ export default function UserPage() {
 
   // Transform API data to match component types
   // Backend returns different field names, so we need to transform
-  const rooms: Room[] = ((roomsData as any[]) || []).map((room: any) => ({
+  const rooms: Room[] = (Array.isArray(roomsData) ? roomsData : []).map((room: any) => ({
     id: room.id,
     building: room.code?.charAt(0) || 'A',
     roomNumber: room.code?.slice(1) || room.id.toString(),
@@ -126,7 +126,7 @@ export default function UserPage() {
     description: room.description || room.name || `Phòng ${room.code}`,
   }));
 
-  const bookings: RoomBooking[] = ((bookingsData as any[]) || []).map((booking: any) => ({
+  const bookings: RoomBooking[] = (Array.isArray(bookingsData) ? bookingsData : []).map((booking: any) => ({
     id: booking.id,
     roomId: booking.roomId,
     roomType: booking.roomTypeName || 'Phòng tiêu chuẩn',
@@ -1275,7 +1275,7 @@ export default function UserPage() {
               value={newServiceOrder.serviceId}
               onChange={(e) => {
                 const serviceId = parseInt(e.target.value);
-                const service = ((servicesData as any[]) || []).find((s: any) => s.id === serviceId);
+                const service = (Array.isArray(servicesData) ? servicesData : []).find((s: any) => s.id === serviceId) as any;
                 if (service) {
                   setNewServiceOrder(prev => ({
                     ...prev,
@@ -1289,7 +1289,7 @@ export default function UserPage() {
               }}
             >
               <option value="0">-- Chọn dịch vụ --</option>
-              {((servicesData as any[]) || []).map((service: any) => (
+              {(Array.isArray(servicesData) ? servicesData : []).map((service: any) => (
                 <option key={service.id} value={service.id}>
                   {service.name} - {service.unitPrice?.toLocaleString() || 0} VND/{service.unitName || 'lần'}
                 </option>
@@ -1344,7 +1344,7 @@ export default function UserPage() {
                 value={newServiceOrder.staffId}
                 onChange={(e) => {
                   const staffId = parseInt(e.target.value);
-                  const staff = ((staffUsersData as any[]) || []).find((s: any) => s.id === staffId);
+                  const staff = (Array.isArray(staffUsersData) ? staffUsersData : []).find((s: any) => s.id === staffId) as any;
                   if (staff) {
                     setNewServiceOrder(prev => ({
                       ...prev,
@@ -1361,7 +1361,7 @@ export default function UserPage() {
                 }}
               >
                 <option value="0">-- Chọn nhân viên (tùy chọn) --</option>
-                {((staffUsersData as any[]) || []).map((staff: any) => (
+                {(Array.isArray(staffUsersData) ? staffUsersData : []).map((staff: any) => (
                   <option key={staff.id} value={staff.id}>
                     {staff.name || staff.email} {staff.phone ? `- ${staff.phone}` : ''}
                   </option>
