@@ -6,7 +6,7 @@ import { apiClient } from '@/lib/api-client'
 // Tạo payload QR đơn giản để client render (tạm thời, chưa dùng backend riêng)
 export async function GET(
   req: NextRequest,
-  { params }: { params: { bookingId: string } }
+  { params }: { params: Promise<{ bookingId: string }> }
 ) {
   try {
     const userInfo = await verifyToken(req)
@@ -15,7 +15,8 @@ export async function GET(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const bookingId = Number(params.bookingId)
+    const { bookingId: bookingIdParam } = await params
+    const bookingId = Number(bookingIdParam)
     if (!bookingId || Number.isNaN(bookingId)) {
       return NextResponse.json({ error: 'Invalid bookingId' }, { status: 400 })
     }

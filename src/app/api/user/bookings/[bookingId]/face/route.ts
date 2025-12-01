@@ -20,7 +20,7 @@ async function ensureBookingOwnership(bookingId: number, userId: number) {
 // Lấy trạng thái khuôn mặt đã đăng ký cho user của booking này
 export async function GET(
   req: NextRequest,
-  { params }: { params: { bookingId: string } }
+  { params }: { params: Promise<{ bookingId: string }> }
 ) {
   try {
     const userInfo = await verifyToken(req)
@@ -29,7 +29,8 @@ export async function GET(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const bookingId = Number(params.bookingId)
+    const { bookingId: bookingIdParam } = await params
+    const bookingId = Number(bookingIdParam)
     if (!bookingId || Number.isNaN(bookingId)) {
       return NextResponse.json({ error: 'Invalid bookingId' }, { status: 400 })
     }
@@ -82,7 +83,7 @@ export async function GET(
 // Đăng ký khuôn mặt cho user của booking này
 export async function POST(
   req: NextRequest,
-  { params }: { params: { bookingId: string } }
+  { params }: { params: Promise<{ bookingId: string }> }
 ) {
   try {
     const userInfo = await verifyToken(req)
@@ -91,7 +92,8 @@ export async function POST(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const bookingId = Number(params.bookingId)
+    const { bookingId: bookingIdParam } = await params
+    const bookingId = Number(bookingIdParam)
     if (!bookingId || Number.isNaN(bookingId)) {
       return NextResponse.json({ error: 'Invalid bookingId' }, { status: 400 })
     }

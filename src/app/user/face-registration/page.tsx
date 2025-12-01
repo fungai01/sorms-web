@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
@@ -12,7 +12,7 @@ type FaceStatus = {
   data?: any;
 };
 
-export default function FaceRegistrationPage() {
+function FaceRegistrationContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const bookingIdParam = searchParams.get("bookingId");
@@ -375,4 +375,21 @@ export default function FaceRegistrationPage() {
   );
 }
 
+export default function FaceRegistrationPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center bg-gray-50">
+          <Card>
+            <CardBody>
+              <p className="text-sm text-gray-600">Đang tải...</p>
+            </CardBody>
+          </Card>
+        </div>
+      }
+    >
+      <FaceRegistrationContent />
+    </Suspense>
+  );
+}
 
