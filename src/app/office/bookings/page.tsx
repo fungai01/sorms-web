@@ -9,6 +9,7 @@ import { Table, THead, TBody } from "@/components/ui/Table";
 import { createBookingNotification } from "@/lib/notifications";
 import { useBookings } from "@/hooks/useApi";
 import { apiClient } from "@/lib/api-client";
+import { authService } from "@/lib/auth-service";
 import { useRouter } from "next/navigation";
 
 type BookingRequest = {
@@ -29,18 +30,17 @@ type BookingRequest = {
 
 export default function OfficeBookingsPage() {
   const router = useRouter();
-  
-  // Use API hooks for data fetching
-  const { data: bookingsData, loading: bookingsLoading, error: bookingsError, refetch: refetchBookings } = useBookings();
-
-  // Transform API data
-  const bookings: BookingRequest[] = (bookingsData as any) || [];
 
   const [selectedBooking, setSelectedBooking] = useState<BookingRequest | null>(null);
   const [detailModalOpen, setDetailModalOpen] = useState(false);
   const [approvalModalOpen, setApprovalModalOpen] = useState(false);
   const [rejectionReason, setRejectionReason] = useState('');
   const [filterStatus, setFilterStatus] = useState<'ALL' | 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED' | 'CHECKED_IN' | 'CHECKED_OUT'>('ALL');
+
+  // Use API hooks for data fetching (gửi status lên API nếu khác ALL)
+  const { data: bookingsData, loading: bookingsLoading, error: bookingsError, refetch: refetchBookings } = useBookings(filterStatus);
+  // Transform API data
+  const bookings: BookingRequest[] = (bookingsData as any) || [];
   const [searchQuery, setSearchQuery] = useState('');
   const [compact, setCompact] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -98,8 +98,15 @@ export default function OfficeBookingsPage() {
 
   const handleApprove = async (booking: BookingRequest) => {
     try {
+      const token = authService.getAccessToken();
+      const headers: HeadersInit = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
       const res = await fetch(`/api/system/bookings?action=approve&id=${booking.id}`, {
-        method: 'POST'
+        method: 'POST',
+        headers
       })
       if (res.ok) {
         setFlash({ type: 'success', text: 'Đã duyệt đặt phòng thành công!' });

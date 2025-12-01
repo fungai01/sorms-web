@@ -7,6 +7,7 @@ import { useCurrentRole } from "@/hooks/useCurrentRole";
 import Button from "./Button";
 import Input from "./Input";
 import { getNotificationsByRole, markAsRead, markAllAsRead, type Notification } from "@/lib/notifications";
+import { authService } from "@/lib/auth-service";
 import Image from "next/image";
 import Logo from "@/img/Logo.png";
 
@@ -116,15 +117,15 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
   // Show loading state while detecting user
   if (!detectedUser) {
     return (
-      <header className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center space-x-4">
-              <div className="w-8 h-8 bg-gray-200 rounded-md animate-pulse"></div>
-              <div className="w-32 h-4 bg-gray-200 rounded animate-pulse"></div>
+      <header className="bg-white border-b border-gray-200" suppressHydrationWarning>
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8" suppressHydrationWarning>
+          <div className="flex justify-between items-center h-16" suppressHydrationWarning>
+            <div className="flex items-center space-x-4" suppressHydrationWarning>
+              <div className="w-8 h-8 bg-gray-200 rounded-md animate-pulse" suppressHydrationWarning></div>
+              <div className="w-32 h-4 bg-gray-200 rounded animate-pulse" suppressHydrationWarning></div>
             </div>
-            <div className="flex items-center space-x-4">
-              <div className="w-8 h-8 bg-gray-200 rounded-full animate-pulse"></div>
+            <div className="flex items-center space-x-4" suppressHydrationWarning>
+              <div className="w-8 h-8 bg-gray-200 rounded-full animate-pulse" suppressHydrationWarning></div>
             </div>
           </div>
         </div>
@@ -143,25 +144,21 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
   };
 
   // Handle logout
-  const handleLogout = () => {
-    // Clear role/session related storages to avoid sticky role
+  const handleLogout = async () => {
     try {
-      // Local storage keys
-      localStorage.removeItem('userRole');
-      localStorage.removeItem('isLoggedIn');
-      localStorage.removeItem('userName');
-      localStorage.removeItem('userEmail');
-      localStorage.removeItem('userPicture');
+      // Gọi backend API để logout
+      await authService.logout();
+    } catch (error) {
+      console.error('Logout error:', error);
+      // Vẫn tiếp tục xóa local storage dù API call fail
+      authService.clearAuth();
+    }
+    
+    // Clear sidebar state
+    try {
       localStorage.removeItem('sidebarVisible');
       localStorage.removeItem('sidebarCollapsed');
-      // Session storage keys
-      sessionStorage.removeItem('userRole');
-      sessionStorage.removeItem('previousPage');
     } catch {}
-    
-    // Clear cookies
-    document.cookie = 'role=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
-    document.cookie = 'approved=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
     
     // Hard redirect to reset any in-memory state
     window.location.href = '/login';
@@ -187,11 +184,11 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
   const unreadCount = notifications.filter(n => n.unread).length;
 
   return (
-    <header className="bg-white border-b border-gray-200 sticky top-0 z-40">
-      <div className="w-full px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between items-center h-14 sm:h-16">
+    <header className="bg-white border-b border-gray-200 sticky top-0 z-40" suppressHydrationWarning>
+      <div className="w-full px-4 sm:px-6 lg:px-8" suppressHydrationWarning>
+        <div className="flex justify-between items-center h-14 sm:h-16" suppressHydrationWarning>
           {/* Logo and Sidebar Toggle */}
-          <div className="flex items-center">
+          <div className="flex items-center" suppressHydrationWarning>
             {/* Sidebar Toggle Button */}
             <button
               onClick={onToggleSidebar}
@@ -218,7 +215,7 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
           </div>
 
           {/* Right Side Menu */}
-          <div className="flex items-center space-x-1 sm:space-x-2">
+          <div className="flex items-center space-x-1 sm:space-x-2" suppressHydrationWarning>
             {/* Notifications */}
             <div className="relative" data-menu>
               <Button 

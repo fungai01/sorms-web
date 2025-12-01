@@ -65,10 +65,11 @@ function RolesInner() {
   const [openDeleteModal, setOpenDeleteModal] = useState(false);
   const [editing, setEditing] = useState<Role | null>(null);
   const [productToDelete, setProductToDelete] = useState<Role | null>(null);
-  const [form, setForm] = useState<Pick<Role, "code" | "name" | "description">>({
+  const [form, setForm] = useState<{ code: string; name: string; description: string; isActive: boolean }>({
     code: "",
     name: "",
     description: "",
+    isActive: true,
   });
   const [flash, setFlash] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -77,6 +78,7 @@ function RolesInner() {
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(10);
+  const [formError, setFormError] = useState<string | null>(null);
 
   // Filter and sort roles based on query and sort
   const filtered = rows
@@ -98,34 +100,57 @@ function RolesInner() {
   // Open modal to create a new role
   function openCreate() {
     setEditing(null);
-    setForm({ code: "", name: "", description: "" });
+    setForm({ code: "", name: "", description: "", isActive: true });
+    setFormError(null);
     setOpen(true);
   }
 
   // Open modal to edit an existing role
   function openEdit(role: Role) {
     setEditing(role);
-    setForm({ code: role.code, name: role.name, description: role.description || "" });
+    setForm({
+      code: role.code,
+      name: role.name,
+      description: role.description || "",
+      isActive: role.isActive !== false,
+    });
+    setFormError(null);
     setOpen(true);
   }
 
   // Save new or updated role
   async function save() {
     if (!form.code.trim() || !form.name.trim()) {
-      setFlash({ type: 'error', text: 'Vui lòng nhập Code và Tên.' });
+      setFormError('Vui lòng nhập đầy đủ Code và Tên.');
       return;
     }
     try {
       if (editing) {
+        const prevActive = editing.isActive !== false;
+        const nextActive = form.isActive !== false;
         const resp = await fetch('/api/system/roles', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(form)
+          // Luôn dùng code gốc để tránh thay đổi nhầm định danh
+          body: JSON.stringify({ ...form, code: editing.code, id: editing.id })
         })
         if (!resp.ok) {
           const errorData = await resp.json().catch(() => ({}))
           throw new Error(errorData.error || 'Cập nhật vai trò thất bại')
         }
+
+        // Nếu trạng thái active thay đổi, gọi thêm endpoint activate/deactivate
+        if (prevActive !== nextActive && editing.id != null) {
+          const action = nextActive ? 'activate' : 'deactivate';
+          const toggleResp = await fetch(`/api/system/roles?action=${action}&id=${encodeURIComponent(String(editing.id))}`, {
+            method: 'POST',
+          });
+          if (!toggleResp.ok) {
+            const toggleError = await toggleResp.json().catch(() => ({}));
+            throw new Error(toggleError.error || 'Cập nhật trạng thái kích hoạt thất bại');
+          }
+        }
+
         setFlash({ type: 'success', text: 'Đã cập nhật vai trò thành công.' });
       } else {
         const resp = await fetch('/api/system/roles', {
@@ -133,13 +158,23 @@ function RolesInner() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(form)
         })
-        if (!resp.ok) throw new Error('Tạo vai trò mới thất bại')
+        if (!resp.ok) {
+          const errorData = await resp.json().catch(() => ({}))
+          throw new Error(
+            errorData.error ||
+            errorData.message ||
+            `Tạo vai trò mới thất bại (HTTP ${resp.status})`
+          )
+        }
         setFlash({ type: 'success', text: 'Đã tạo vai trò mới thành công.' });
       }
+      setFormError(null);
       setOpen(false);
       await refetchRoles()
     } catch (e) {
-      setFlash({ type: 'error', text: e instanceof Error ? e.message : 'Có lỗi xảy ra' })
+      const message = e instanceof Error ? e.message : 'Có lỗi xảy ra';
+      setFormError(message);
+      setFlash({ type: 'error', text: message })
     }
   }
 
@@ -153,7 +188,13 @@ function RolesInner() {
   async function confirmDelete() {
     if (!productToDelete) return
     try {
-      const resp = await fetch(`/api/system/roles?code=${encodeURIComponent(productToDelete.code)}`, { method: 'DELETE' })
+      const params = new URLSearchParams()
+      if (productToDelete.id != null) {
+        params.set('id', String(productToDelete.id))
+      } else {
+        params.set('code', productToDelete.code)
+      }
+      const resp = await fetch(`/api/system/roles?${params.toString()}`, { method: 'DELETE' })
       if (!resp.ok) {
         const errorData = await resp.json().catch(() => ({}))
         throw new Error(errorData.error || 'Vô hiệu hóa vai trò thất bại')
@@ -170,7 +211,14 @@ function RolesInner() {
   // Activate role
   async function activateRole(role: Role) {
     try {
-      const resp = await fetch(`/api/system/roles?action=activate&id=${encodeURIComponent(role.code)}`, { method: 'POST' })
+      const params = new URLSearchParams()
+      if (role.id != null) {
+        params.set('id', String(role.id))
+      } else {
+        params.set('code', role.code)
+      }
+      params.set('action', 'activate')
+      const resp = await fetch(`/api/system/roles?${params.toString()}`, { method: 'POST' })
       if (!resp.ok) {
         const errorData = await resp.json().catch(() => ({}))
         throw new Error(errorData.error || 'Kích hoạt vai trò thất bại')
@@ -506,8 +554,14 @@ function RolesInner() {
             <Input
               value={form.code}
               onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))}
+              disabled={!!editing}
             />
             {!form.code.trim() && <div className="mt-1 text-xs text-red-600">Code bắt buộc.</div>}
+            {editing && (
+              <div className="mt-1 text-xs text-gray-500">
+                Code là định danh của vai trò và không thể thay đổi sau khi tạo.
+              </div>
+            )}
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Tên</label>
@@ -523,6 +577,23 @@ function RolesInner() {
               value={form.description}
               onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
             />
+          </div>
+          {formError && (
+            <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-md px-3 py-2">
+              {formError}
+            </div>
+          )}
+          <div className="flex items-center gap-2 pt-1">
+            <input
+              id="role-active"
+              type="checkbox"
+              className="h-4 w-4 rounded border-gray-300 text-green-600 focus:ring-green-500"
+              checked={form.isActive}
+              onChange={(e) => setForm(f => ({ ...f, isActive: e.target.checked }))}
+            />
+            <label htmlFor="role-active" className="inline-flex items-center rounded-full bg-green-50 px-3 py-1 text-xs font-semibold text-green-700 border border-green-200">
+              Vai trò đang hoạt động
+            </label>
           </div>
         </div>
       </Modal>

@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import Modal from "@/components/ui/Modal";
-import { useSession } from "next-auth/react";
+import { useAuth } from "@/hooks/useAuth";
 
 type UserProfile = {
   id: number;
@@ -20,7 +20,7 @@ type UserProfile = {
 export default function ProfilePage() {
   const pathname = usePathname();
   const router = useRouter();
-  const { data: session } = useSession();
+  const { user, isAuthenticated, isLoading } = useAuth();
   
   // Get back URL - try to get from sessionStorage first, then fallback to role detection
   const getBackUrl = () => {
@@ -51,48 +51,68 @@ export default function ProfilePage() {
   const [loading, setLoading] = useState(false);
   const [flash, setFlash] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Load profile from real API using current session email
+  // Load profile from real API using current user email
   useEffect(() => {
     const load = async () => {
-      const email = session?.user?.email || (typeof window !== 'undefined' ? localStorage.getItem('userEmail') || '' : '');
+      // Wait for auth to load
+      if (isLoading) return;
+      
+      // Redirect to login if not authenticated
+      if (!isAuthenticated || !user) {
+        router.push('/login');
+        return;
+      }
+      
+      const email = user.email || '';
       if (!email) return;
+      
       setLoading(true);
       try {
-        const res = await fetch('/api/system/users', { headers: { 'Content-Type': 'application/json' }, credentials: 'include' });
+        const res = await fetch('/api/system/users', { 
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('auth_access_token') || ''}`
+          }, 
+          credentials: 'include' 
+        });
         const data = await res.json();
         const list = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []);
         const found = list.find((u: any) => (u.email || '').toLowerCase() === email.toLowerCase());
         if (found) {
           setProfile({
             id: found.id,
-            name: found.full_name || session?.user?.name || email,
+            name: found.full_name || user.name || email,
             email: found.email || email,
             phoneNumber: found.phone_number || '',
             position: found.position || '',
             department: found.department || '',
-            avatar: ''
+            avatar: found.avatar_url || user.avatarUrl || ''
           });
         } else {
           setProfile({
             id: 0,
-            name: session?.user?.name || email,
+            name: user.name || email,
             email,
-            phoneNumber: '',
+            phoneNumber: user.phoneNumber || '',
             position: '',
             department: '',
-            avatar: ''
+            avatar: user.avatarUrl || ''
           });
         }
       } catch {
-        // Keep minimal fallback from session
-        const email = session?.user?.email || ''
-        setProfile(p => ({ ...p, name: session?.user?.name || email, email: email }))
+        // Keep minimal fallback from user
+        setProfile(p => ({ 
+          ...p, 
+          name: user.name || email, 
+          email: email,
+          avatar: user.avatarUrl || ''
+        }))
       } finally {
         setLoading(false);
       }
     };
     load();
-  }, [session]);
+  }, [user, isAuthenticated, isLoading, router]);
 
   // Auto-hide success/error messages after a few seconds
   useEffect(() => {

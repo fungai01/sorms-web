@@ -1,14 +1,8 @@
 "use client";
 
-import { SessionProvider } from "next-auth/react";
-
+// Providers component - no longer uses NextAuth SessionProvider
+// Custom auth is handled via useAuth hook and authService
 export function Providers({ children }: { children: React.ReactNode }) {
-  try {
-    return <SessionProvider>{children}</SessionProvider>;
-  } catch (error) {
-    console.error("SessionProvider error:", error);
-    // Fallback if SessionProvider fails
     return <>{children}</>;
-  }
 }
 

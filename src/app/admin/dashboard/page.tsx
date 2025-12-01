@@ -122,7 +122,17 @@ function DateRangeSelector({ dateRange, setDateRange }: { dateRange: DateRange; 
             <input
               type="date"
               value={dateRange.fromDate}
-              onChange={(e) => setDateRange({ ...dateRange, fromDate: e.target.value })}
+              onChange={(e) => {
+                const newFrom = e.target.value
+                if (!newFrom) return
+
+                // Nếu "Từ ngày" mới lớn hơn "Đến ngày" hiện tại, tự động đẩy "Đến ngày" lên cùng ngày
+                if (new Date(newFrom) > new Date(dateRange.toDate)) {
+                  setDateRange({ fromDate: newFrom, toDate: newFrom })
+                } else {
+                  setDateRange({ ...dateRange, fromDate: newFrom })
+                }
+              }}
               className="w-full px-4 py-3 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all bg-white/80"
             />
             <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
@@ -138,7 +148,18 @@ function DateRangeSelector({ dateRange, setDateRange }: { dateRange: DateRange; 
             <input
               type="date"
               value={dateRange.toDate}
-              onChange={(e) => setDateRange({ ...dateRange, toDate: e.target.value })}
+              min={dateRange.fromDate}
+              onChange={(e) => {
+                const newTo = e.target.value
+                if (!newTo) return
+
+                // Không cho phép chọn "Đến ngày" nhỏ hơn "Từ ngày"
+                if (new Date(newTo) < new Date(dateRange.fromDate)) {
+                  return
+                }
+
+                setDateRange({ ...dateRange, toDate: newTo })
+              }}
               className="w-full px-4 py-3 border border-gray-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all bg-white/80"
             />
             <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
@@ -555,13 +576,13 @@ export default function AdminHome() {
   }, [paymentsSeries]);
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100">
+    <main className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100" suppressHydrationWarning>
       {/* Header */}
-      <div className="bg-white/80 backdrop-blur-sm border-b border-gray-200/50 px-4 sm:px-6 py-4 sm:py-6 shadow-sm">
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 lg:gap-6">
-          <div className="flex-1">
-            <div className="flex items-center gap-3 mb-2">
-              <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg">
+      <div className="bg-white/80 backdrop-blur-sm border-b border-gray-200/50 px-4 sm:px-6 py-4 sm:py-6 shadow-sm" suppressHydrationWarning>
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 lg:gap-6" suppressHydrationWarning>
+          <div className="flex-1" suppressHydrationWarning>
+            <div className="flex items-center gap-3 mb-2" suppressHydrationWarning>
+              <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg" suppressHydrationWarning>
                 <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                 </svg>
@@ -582,7 +603,7 @@ export default function AdminHome() {
         </div>
       </div>
 
-      <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
+      <div className="p-4 sm:p-6 space-y-4 sm:space-y-6" suppressHydrationWarning>
         {/* Error Banner */}
         {error && (
           <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 flex items-center justify-between">
@@ -795,38 +816,38 @@ export default function AdminHome() {
 
         {/* Quick Actions */}
         <Card title="Truy cập nhanh">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-6">
-            <Link href="/admin/bookings" className="group flex flex-col items-center p-6 rounded-2xl border border-gray-200 bg-gradient-to-br from-blue-50 to-indigo-100 hover:from-blue-100 hover:to-indigo-200 hover:border-blue-300 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1">
-              <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl flex items-center justify-center mb-3 group-hover:scale-110 transition-transform duration-200 shadow-lg">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-6" suppressHydrationWarning>
+            <Link href="/admin/bookings" className="group flex flex-col items-center p-6 rounded-2xl border border-gray-200 bg-gradient-to-br from-blue-50 to-indigo-100 hover:from-blue-100 hover:to-indigo-200 hover:border-blue-300 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1" suppressHydrationWarning>
+              <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl flex items-center justify-center mb-3 group-hover:scale-110 transition-transform duration-200 shadow-lg" suppressHydrationWarning>
                 <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                 </svg>
               </div>
-              <div className="text-sm font-semibold text-gray-900 group-hover:text-blue-700 transition-colors">Đặt phòng</div>
+              <div className="text-sm font-semibold text-gray-900 group-hover:text-blue-700 transition-colors" suppressHydrationWarning>Đặt phòng</div>
             </Link>
-            <Link href="/admin/checkins" className="group flex flex-col items-center p-6 rounded-2xl border border-gray-200 bg-gradient-to-br from-green-50 to-emerald-100 hover:from-green-100 hover:to-emerald-200 hover:border-green-300 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1">
-              <div className="w-12 h-12 bg-gradient-to-br from-green-500 to-emerald-600 rounded-xl flex items-center justify-center mb-3 group-hover:scale-110 transition-transform duration-200 shadow-lg">
+            <Link href="/admin/checkins" className="group flex flex-col items-center p-6 rounded-2xl border border-gray-200 bg-gradient-to-br from-green-50 to-emerald-100 hover:from-green-100 hover:to-emerald-200 hover:border-green-300 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1" suppressHydrationWarning>
+              <div className="w-12 h-12 bg-gradient-to-br from-green-500 to-emerald-600 rounded-xl flex items-center justify-center mb-3 group-hover:scale-110 transition-transform duration-200 shadow-lg" suppressHydrationWarning>
                 <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2-2z" />
                 </svg>
               </div>
-              <div className="text-sm font-semibold text-gray-900 group-hover:text-green-700 transition-colors">Check-in</div>
+              <div className="text-sm font-semibold text-gray-900 group-hover:text-green-700 transition-colors" suppressHydrationWarning>Check-in</div>
             </Link>
-            <Link href="/admin/payments" className="group flex flex-col items-center p-6 rounded-2xl border border-gray-200 bg-gradient-to-br from-yellow-50 to-amber-100 hover:from-yellow-100 hover:to-amber-200 hover:border-yellow-300 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1">
-              <div className="w-12 h-12 bg-gradient-to-br from-yellow-500 to-amber-600 rounded-xl flex items-center justify-center mb-3 group-hover:scale-110 transition-transform duration-200 shadow-lg">
+            <Link href="/admin/payments" className="group flex flex-col items-center p-6 rounded-2xl border border-gray-200 bg-gradient-to-br from-yellow-50 to-amber-100 hover:from-yellow-100 hover:to-amber-200 hover:border-yellow-300 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1" suppressHydrationWarning>
+              <div className="w-12 h-12 bg-gradient-to-br from-yellow-500 to-amber-600 rounded-xl flex items-center justify-center mb-3 group-hover:scale-110 transition-transform duration-200 shadow-lg" suppressHydrationWarning>
                 <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
                 </svg>
               </div>
-              <div className="text-sm font-semibold text-gray-900 group-hover:text-yellow-700 transition-colors">Thanh toán</div>
+              <div className="text-sm font-semibold text-gray-900 group-hover:text-yellow-700 transition-colors" suppressHydrationWarning>Thanh toán</div>
             </Link>
-            <Link href="/admin/tasks" className="group flex flex-col items-center p-6 rounded-2xl border border-gray-200 bg-gradient-to-br from-purple-50 to-violet-100 hover:from-purple-100 hover:to-violet-200 hover:border-purple-300 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1">
-              <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-violet-600 rounded-xl flex items-center justify-center mb-3 group-hover:scale-110 transition-transform duration-200 shadow-lg">
+            <Link href="/admin/tasks" className="group flex flex-col items-center p-6 rounded-2xl border border-gray-200 bg-gradient-to-br from-purple-50 to-violet-100 hover:from-purple-100 hover:to-violet-200 hover:border-purple-300 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1" suppressHydrationWarning>
+              <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-violet-600 rounded-xl flex items-center justify-center mb-3 group-hover:scale-110 transition-transform duration-200 shadow-lg" suppressHydrationWarning>
                 <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
                 </svg>
               </div>
-              <div className="text-sm font-semibold text-gray-900 group-hover:text-purple-700 transition-colors">Công việc</div>
+              <div className="text-sm font-semibold text-gray-900 group-hover:text-purple-700 transition-colors" suppressHydrationWarning>Công việc</div>
             </Link>
           </div>
         </Card>

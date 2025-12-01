@@ -95,12 +95,18 @@ export async function POST(req: NextRequest) {
     const { searchParams } = new URL(req.url)
     const action = searchParams.get('action')
     const idParam = searchParams.get('id')
+    const codeParam = searchParams.get('code')
 
-    console.log('[API] POST /api/system/roles - action:', action, 'id:', idParam)
+    console.log('[API] POST /api/system/roles - action:', action, 'id:', idParam, 'code:', codeParam)
 
-    if (action && idParam) {
-      const code = idParam // Sử dụng code thay vì id
-      const endpoint = action === 'activate' ? `${BASE}/roles/${code}/activate` : action === 'deactivate' ? `${BASE}/roles/${code}/deactivate` : ''
+    if (action && (idParam || codeParam)) {
+      const idOrCode = idParam ?? codeParam
+      // Backend spec: /roles/{id}/activate | /roles/{id}/deactivate
+      const endpoint = action === 'activate'
+        ? `${BASE}/roles/${idOrCode}/activate`
+        : action === 'deactivate'
+          ? `${BASE}/roles/${idOrCode}/deactivate`
+          : ''
       if (!endpoint) return NextResponse.json({ error: 'Unsupported action' }, { status: 400 })
       console.log('[API] Calling endpoint:', endpoint)
       const res = await fetch(endpoint, { method: 'PUT', headers: { 'Content-Type': 'application/json', accept: '*/*' } })
@@ -130,11 +136,18 @@ export async function POST(req: NextRequest) {
 export async function PUT(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}))
-    const code = body.code
-    if (!code) return NextResponse.json({ error: 'code is required' }, { status: 400 })
-    console.log('[API] Updating role:', code, 'with payload:', body)
+    // Hỗ trợ cả id và code để tương thích với backend (một số bản dùng code làm key)
+    const idOrCode = body.id ?? body.code
+    if (!idOrCode) {
+      return NextResponse.json({ error: 'id is required' }, { status: 400 })
+    }
+    console.log('[API] Updating role:', idOrCode, 'with payload:', body)
     const payload = { code: body.code, name: body.name, description: body.description }
-    const res = await fetch(`${BASE}/roles/${code}`, { method: 'PUT', headers: { 'Content-Type': 'application/json', accept: '*/*' }, body: JSON.stringify(payload) })
+    const res = await fetch(`${BASE}/roles/${idOrCode}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', accept: '*/*' },
+      body: JSON.stringify(payload)
+    })
     const data = await res.json().catch(() => ({}))
     console.log('[API] Update response:', res.status, data)
     if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
@@ -148,11 +161,18 @@ export async function PUT(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url)
+    const id = searchParams.get('id')
     const code = searchParams.get('code')
-    if (!code) return NextResponse.json({ error: 'code is required' }, { status: 400 })
-    console.log('[API] Deactivating role:', code)
+    const idOrCode = id ?? code
+    if (!idOrCode) {
+      return NextResponse.json({ error: 'id is required' }, { status: 400 })
+    }
+    console.log('[API] Deactivating role:', idOrCode)
     // Soft delete: deactivate instead of hard delete
-    const res = await fetch(`${BASE}/roles/${code}/deactivate`, { method: 'PUT', headers: { 'Content-Type': 'application/json', accept: '*/*' } })
+    const res = await fetch(`${BASE}/roles/${idOrCode}/deactivate`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', accept: '*/*' }
+    })
     const data = await res.json().catch(() => ({}))
     console.log('[API] Deactivate response:', res.status, data)
     if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })

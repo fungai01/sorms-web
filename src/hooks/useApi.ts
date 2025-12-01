@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { apiClient, ApiResponse } from '@/lib/api-client'
+import { authService } from '@/lib/auth-service'
 
 interface UseApiState<T> {
   data: T | null
@@ -137,9 +138,16 @@ export function useApi<T>(
 // Helper function to call Next.js API routes (proxy to backend)
 async function fetchFromProxy<T>(endpoint: string): Promise<{ success: boolean; data?: T; error?: string }> {
   try {
+    const headers: HeadersInit = { 'Content-Type': 'application/json' }
+    // Đính kèm Authorization header nếu có token để API route server-side có thể verifyToken
+    const token = authService.getAccessToken()
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`
+    }
+
     const res = await fetch(endpoint, {
       credentials: 'include',
-      headers: { 'Content-Type': 'application/json' }
+      headers
     })
 
     if (!res.ok) {
@@ -172,8 +180,24 @@ export function useRoomTypes() {
   return useApi(() => fetchFromProxy('/api/system/room-types'))
 }
 
-export function useBookings() {
+// Booking hooks
+// Optional status param để khi filter trạng thái trên UI có thể gửi thẳng lên API
+export function useBookings(status?: string) {
+  const endpoint =
+    status && status !== 'ALL'
+      ? `/api/system/bookings?status=${encodeURIComponent(status)}`
+      : '/api/system/bookings'
+
+  return useApi(() => fetchFromProxy(endpoint), [endpoint])
+}
+
+// Dành riêng cho dashboard user: lấy toàn bộ bookings để tính toán phòng trống
+export function useAllBookings() {
   return useApi(() => fetchFromProxy('/api/system/bookings'))
+}
+
+export function useUserBookings() {
+  return useApi(() => fetchFromProxy('/api/user/bookings'))
 }
 
 export function useServices() {
@@ -181,11 +205,11 @@ export function useServices() {
 }
 
 export function useServiceOrders() {
-  return useApi(() => fetchFromProxy('/api/system/orders'))
+  return useApi(() => fetchFromProxy('/api/user/orders'))
 }
 
 export function useStaffUsers() {
-  return useApi(() => fetchFromProxy('/api/system/users'))
+  return useApi(() => fetchFromProxy('/api/user/staff'))
 }
 
 export function useCheckins() {
@@ -207,4 +231,9 @@ export function useBookingStats() {
 
 export function usePaymentStats() {
   return useApi(() => apiClient.getPaymentStats())
+}
+
+// Staff profiles
+export function useStaffProfiles() {
+  return useApi(() => apiClient.getStaffProfiles())
 }

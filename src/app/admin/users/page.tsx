@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useSession } from "next-auth/react";
+import { useAuth } from "@/hooks/useAuth";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
@@ -42,7 +42,16 @@ type User = {
 function UsersInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { data: session, status: sessionStatus } = useSession();
+  const { user, isAuthenticated, isLoading: authLoading } = useAuth();
+  
+  // Helper to get auth headers
+  const getAuthHeaders = () => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_access_token') : null
+    return {
+      'Content-Type': 'application/json',
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+    }
+  }
   const [rows, setRows] = useState<User[]>([]);
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<"id" | "name" | "email">("id");
@@ -70,23 +79,23 @@ function UsersInner() {
     try {
       setIsLoading(true)
       
-      // Check session first
-      if (sessionStatus === 'loading') {
-        console.log('⏳ Waiting for session...')
+      // Check auth first
+      if (authLoading) {
+        console.log('⏳ Waiting for auth...')
         return
       }
       
-      if (sessionStatus === 'unauthenticated' || !session?.user?.email) {
-        console.error('❌ No session found. Redirecting to login...')
+      if (!isAuthenticated || !user?.email) {
+        console.error('❌ No user found. Redirecting to login...')
         router.push('/login')
         setIsLoading(false)
         return
       }
       
-      console.log('🔍 Fetching users with session:', {
-        email: session.user.email,
-        hasSession: !!session,
-        sessionStatus
+      console.log('🔍 Fetching users with user:', {
+        email: user.email,
+        hasUser: !!user,
+        isAuthenticated
       })
       
       // Fetch với page và size lớn hơn để đảm bảo lấy được tất cả users
@@ -97,7 +106,7 @@ function UsersInner() {
       
       console.log('🔍 Fetching from:', url)
       const res = await fetch(url, { 
-        headers: { 'Content-Type': 'application/json' }, 
+        headers: getAuthHeaders(), 
         credentials: 'include' 
       })
       
@@ -107,16 +116,16 @@ function UsersInner() {
         const errorData = await res.json().catch(() => ({ error: 'Unknown error' }))
         console.error('❌ Failed to fetch users. Status:', res.status)
         console.error('❌ Error details:', errorData)
-        console.error('❌ Current session:', {
-          email: session?.user?.email,
-          isAdmin: (session?.user as any)?.isAdmin,
-          sessionStatus
+        console.error('❌ Current user:', {
+          email: user?.email,
+          isAdmin: user?.role === 'admin',
+          isAuthenticated
         })
         
         if (res.status === 403) {
           const adminEmail = process.env.NEXT_PUBLIC_ADMIN_EMAIL || 'quyentnqe170062@fpt.edu.vn'
           console.error(`🚫 Access denied: You must be logged in as admin (${adminEmail}) to view users`)
-          console.error(`📧 Current user email: ${session?.user?.email}`)
+          console.error(`📧 Current user email: ${user?.email}`)
           setMessage(`Bạn không có quyền truy cập. Chỉ admin (${adminEmail}) mới có thể xem danh sách users.`)
         } else {
           setMessage(`Lỗi khi tải danh sách users: ${errorData.error || errorData.message || 'Unknown error'}`)
@@ -128,51 +137,171 @@ function UsersInner() {
       }
       
       const data = await res.json()
-      console.log('✅ Users data received:', data)
+      console.log('✅ Users data received (full):', JSON.stringify(data, null, 2))
       console.log('✅ Data structure:', {
         hasItems: !!data?.items,
         itemsCount: data?.items?.length || 0,
         isArray: Array.isArray(data),
         hasError: !!data?.error,
+        hasData: !!data?.data,
         keys: Object.keys(data || {})
       })
       
       // Check for backend errors
-      if (data?.error || data?.responseCode) {
+      if (data?.error || (data?.responseCode && data.responseCode !== 'S0000')) {
         const errorMsg = data.error || data.message || 'Backend error'
         const responseCode = data.responseCode || ''
-        console.warn('⚠️ Backend error in response:', errorMsg, responseCode)
+        const backendStatus = data.backendStatus || 'unknown'
+        
+        console.warn('⚠️ Backend error in response:', {
+          error: errorMsg,
+          responseCode: responseCode,
+          backendStatus: backendStatus,
+          fullData: data
+        })
+        
+        // Nếu có items dù có error, vẫn hiển thị items
+        if (data?.items && Array.isArray(data.items) && data.items.length > 0) {
+          console.warn('⚠️ Backend returned error but also has items, showing items anyway')
+          setRows(data.items)
+          setMessage(`Cảnh báo: ${errorMsg}`)
+          setTimeout(() => setMessage(null), 5000)
+          setIsLoading(false)
+          return
+        }
+        
         setRows([])
         
-        if (responseCode === 'S0001' || errorMsg.includes('SYSTEM_ERROR')) {
-          setMessage(`Lỗi hệ thống từ backend: ${errorMsg}. Vui lòng kiểm tra backend API hoặc thử lại sau.`)
+        // Hiển thị thông tin chi tiết hơn về lỗi
+        let errorMessage = ''
+        if (responseCode === 'S0001' || errorMsg.includes('SYSTEM_ERROR') || errorMsg === 'SYSTEM_ERROR') {
+          errorMessage = `Lỗi hệ thống từ backend (${responseCode || 'SYSTEM_ERROR'}). `
+          if (backendStatus !== 'unknown') {
+            errorMessage += `HTTP Status: ${backendStatus}. `
+          }
+          
+          // Thêm thông tin chi tiết từ backend nếu có
+          if (data?.backendError) {
+            const backendError = data.backendError
+            if (backendError.message && backendError.message !== errorMsg) {
+              errorMessage += `\nChi tiết: ${backendError.message}. `
+            }
+            if (backendError.error && backendError.error !== errorMsg) {
+              errorMessage += `\nLỗi: ${backendError.error}. `
+            }
         } else {
-          setMessage(`Lỗi từ backend: ${errorMsg}`)
+            errorMessage += `Chi tiết: ${errorMsg}. `
+          }
+          
+          errorMessage += `\n\nVui lòng:\n1. Kiểm tra backend API có đang hoạt động không\n2. Kiểm tra kết nối mạng\n3. Thử lại sau vài giây\n4. Liên hệ admin nếu vấn đề vẫn tiếp tục`
+          
+          // Log thêm thông tin để debug
+          console.error('❌ SYSTEM_ERROR details:', {
+            responseCode,
+            backendStatus,
+            errorMsg,
+            fullResponse: data,
+            url: `/api/system/users?page=0&size=100`,
+            backendError: data?.backendError
+          })
+        } else {
+          errorMessage = `Lỗi từ backend (${responseCode || 'Unknown'}): ${errorMsg}`
+          if (backendStatus !== 'unknown') {
+            errorMessage += ` (HTTP ${backendStatus})`
+          }
+          if (data?.backendError?.message) {
+            errorMessage += `\nChi tiết: ${data.backendError.message}`
+          }
         }
+        
+        setMessage(errorMessage)
         setIsLoading(false)
         return
       }
       
       let users = []
+      
+      // Backend format: { responseCode: "S0000", message: "SUCCESS", data: { content: [...], page: 0, size: 10, ... } }
+      // API route trả về: { items: [...] }
+      
+      // Try multiple formats - ưu tiên data.items từ API route
       if (Array.isArray(data?.items)) {
         users = data.items
-        console.log('✅ Using data.items format, count:', users.length)
+        console.log('✅ Using data.items format (from API route), count:', users.length)
+      } else if (data?.data?.content && Array.isArray(data.data.content)) {
+        // Direct backend response format
+        users = data.data.content
+        console.log('✅ Using data.data.content format (direct backend), count:', users.length)
+      } else if (Array.isArray(data?.data)) {
+        users = data.data
+        console.log('✅ Using data.data format, count:', users.length)
+      } else if (Array.isArray(data?.content)) {
+        users = data.content
+        console.log('✅ Using data.content format, count:', users.length)
       } else if (Array.isArray(data)) {
         users = data
         console.log('✅ Using root array format, count:', users.length)
-      } else if (data?.items && Array.isArray(data.items)) {
-        users = data.items
-        console.log('✅ Using nested items format, count:', users.length)
       } else {
         console.warn('⚠️ Unexpected data format:', data)
         console.warn('⚠️ Available keys:', Object.keys(data || {}))
+        console.warn('⚠️ Full response:', JSON.stringify(data, null, 2))
+        
+        // Try to find any array in the response recursively
+        const findArray = (obj: any, path = ''): any[] => {
+          if (Array.isArray(obj)) {
+            console.log(`✅ Found array at path: ${path}`)
+            return obj
+          }
+          if (typeof obj !== 'object' || obj === null) return []
+          for (const key in obj) {
+            const result = findArray(obj[key], path ? `${path}.${key}` : key)
+            if (result.length > 0) return result
+          }
+          return []
+        }
+        const foundArray = findArray(data)
+        if (foundArray.length > 0) {
+          users = foundArray
+          console.log('✅ Found nested array, count:', users.length)
+        }
       }
       
-      if (users.length > 0) {
-        setRows(users)
-        console.log('✅ Successfully loaded', users.length, 'users')
-        console.log('✅ Sample user emails:', users.slice(0, 5).map((u: User) => u.email))
-        setMessage(`Đã tải thành công ${users.length} người dùng.`)
+      // Map backend user fields to frontend User type
+      const mappedUsers = users.map((u: any) => ({
+        id: u.id,
+        email: u.email || '',
+        fullName: u.fullName || u.full_name || `${u.firstName || ''} ${u.lastName || ''}`.trim() || u.email,
+        phoneNumber: u.phoneNumber || u.phone_number || '',
+        firstName: u.firstName || u.first_name || '',
+        lastName: u.lastName || u.last_name || '',
+        status: u.status || 'ACTIVE',
+        role: u.role || u.roles?.[0] || 'user',
+        dateOfBirth: u.dateOfBirth || u.date_of_birth || u.dob,
+        gender: u.gender,
+        address: u.address,
+        city: u.city,
+        state: u.state,
+        postalCode: u.postalCode || u.postal_code,
+        country: u.country,
+        avatarUrl: u.avatarUrl || u.avatar_url,
+        bio: u.bio,
+        preferredLanguage: u.preferredLanguage || u.preferred_language,
+        timezone: u.timezone,
+        emergencyContactName: u.emergencyContactName || u.emergency_contact_name,
+        emergencyContactPhone: u.emergencyContactPhone || u.emergency_contact_phone,
+        emergencyContactRelationship: u.emergencyContactRelationship || u.emergency_contact_relationship,
+        idCardNumber: u.idCardNumber || u.id_card_number,
+        idCardIssueDate: u.idCardIssueDate || u.id_card_issue_date,
+        idCardIssuePlace: u.idCardIssuePlace || u.id_card_issue_place,
+        createdDate: u.createdDate || u.created_date,
+        lastModifiedDate: u.lastModifiedDate || u.last_modified_date,
+      }))
+      
+      if (mappedUsers.length > 0) {
+        setRows(mappedUsers)
+        console.log('✅ Successfully loaded', mappedUsers.length, 'users')
+        console.log('✅ Sample user emails:', mappedUsers.slice(0, 5).map((u: User) => u.email))
+        setMessage(`Đã tải thành công ${mappedUsers.length} người dùng.`)
         setTimeout(() => setMessage(null), 3000)
       } else {
         console.warn('⚠️ No users found in response')
@@ -191,19 +320,19 @@ function UsersInner() {
   }
 
   useEffect(() => {
-    // Chờ session sẵn sàng trước khi fetch
-    if (sessionStatus === 'loading') {
+    // Chờ auth sẵn sàng trước khi fetch
+    if (authLoading) {
       return
     }
     
-    if (sessionStatus === 'authenticated' && session?.user?.email) {
+    if (isAuthenticated && user?.email) {
       refetchUsers()
-    } else if (sessionStatus === 'unauthenticated') {
+    } else if (!isAuthenticated) {
       console.warn('⚠️ Session not authenticated, redirecting to login')
       router.push('/login')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionStatus, session?.user?.email])
+  }, [authLoading, isAuthenticated, user?.email])
 
   useEffect(() => {
     const q = searchParams.get("q") || "";
@@ -257,7 +386,7 @@ function UsersInner() {
     try {
       const res = await fetch(`/api/system/users?action=deactivate&userId=${id}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: getAuthHeaders()
       });
 
       if (res.ok) {
@@ -280,7 +409,7 @@ function UsersInner() {
     try {
       const res = await fetch(`/api/system/users?action=activate&userId=${id}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: getAuthHeaders()
       });
 
       if (res.ok) {
@@ -632,11 +761,12 @@ function UsersInner() {
               try {
                 const res = await fetch('/api/system/users', {
                   method: 'PUT',
-                  headers: { 'Content-Type': 'application/json' },
+                  headers: getAuthHeaders(),
                   body: JSON.stringify({
                     id: editForm.id,
                     fullName: editForm.full_name,
-                    phoneNumber: editForm.phone_number
+                    phoneNumber: editForm.phone_number,
+                    role: editForm.role
                   })
                 });
                 if (!res.ok) {
@@ -723,7 +853,7 @@ function UsersInner() {
               try {
                 const resp = await fetch('/api/system/users?action=create', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
+                  headers: getAuthHeaders(),
                   body: JSON.stringify({
                     fullName: createForm.full_name,
                     email: createForm.email,
@@ -794,7 +924,7 @@ function UsersInner() {
             <Button onClick={async () => {
               if (!confirmOpen.user) return;
               try {
-                const resp = await fetch(`/api/system/users?id=${confirmOpen.user.id}` , { method: 'DELETE', headers: { 'Content-Type': 'application/json' } })
+                const resp = await fetch(`/api/system/users?id=${confirmOpen.user.id}` , { method: 'DELETE', headers: getAuthHeaders() })
                 if (!resp.ok) {
                   const err = await resp.json().catch(() => ({}))
                   throw new Error(err?.error || 'Xóa người dùng thất bại')

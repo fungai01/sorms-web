@@ -205,6 +205,12 @@ export default function Sidebar({ user, isVisible = false, collapsed = true, onT
           current: pathname.startsWith('/admin/users')
         },
         { 
+          name: 'Nhân sự', 
+          href: '/admin/staff-profiles', 
+          icon: <Icons.Users />, 
+          current: pathname.startsWith('/admin/staff-profiles')
+        },
+        { 
           name: 'Phân quyền', 
           href: '/admin/roles', 
           icon: <Icons.Roles />, 
@@ -253,19 +259,20 @@ export default function Sidebar({ user, isVisible = false, collapsed = true, onT
       className={`bg-white/95 backdrop-blur-sm border-r border-gray-200/50 transition-all duration-300 ${
         sidebarCollapsed ? 'w-20' : 'w-64'
       } ${!isVisible ? 'hidden' : ''}`}
+      suppressHydrationWarning
     >
       {/* Header */}
-      <div className="p-4 border-b border-gray-100/50 bg-gradient-to-r from-gray-50 to-white">
+      <div className="p-4 border-b border-gray-100/50 bg-gradient-to-r from-gray-50 to-white" suppressHydrationWarning>
         {sidebarCollapsed ? (
-          <div className="flex justify-center">
-            <div className="w-8 h-8 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg">
+          <div className="flex justify-center" suppressHydrationWarning>
+            <div className="w-8 h-8 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg" suppressHydrationWarning>
               <span className="text-white font-bold text-sm">S</span>
             </div>
           </div>
         ) : (
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              <div className="w-8 h-8 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg">
+          <div className="flex items-center justify-between" suppressHydrationWarning>
+            <div className="flex items-center space-x-3" suppressHydrationWarning>
+              <div className="w-8 h-8 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg" suppressHydrationWarning>
                 <span className="text-white font-bold text-sm">S</span>
               </div>
               <div className="flex flex-col">
@@ -321,9 +328,9 @@ export default function Sidebar({ user, isVisible = false, collapsed = true, onT
               </div>
             )}
             {sidebarCollapsed && (
-              <div className="absolute left-20 ml-3 px-4 py-3 bg-gray-900 text-white text-sm rounded-xl opacity-0 group-hover:opacity-100 transition-all duration-300 pointer-events-none whitespace-nowrap z-50 shadow-2xl">
-                <div className="font-semibold">{item.name}</div>
-                <div className="absolute left-0 top-1/2 transform -translate-y-1/2 w-0 h-0 border-t-4 border-b-4 border-r-4 border-transparent border-r-gray-900"></div>
+              <div className="absolute left-20 ml-3 px-4 py-3 bg-gray-900 text-white text-sm rounded-xl opacity-0 group-hover:opacity-100 transition-all duration-300 pointer-events-none whitespace-nowrap z-50 shadow-2xl" suppressHydrationWarning>
+                <div className="font-semibold" suppressHydrationWarning>{item.name}</div>
+                <div className="absolute left-0 top-1/2 transform -translate-y-1/2 w-0 h-0 border-t-4 border-b-4 border-r-4 border-transparent border-r-gray-900" suppressHydrationWarning></div>
               </div>
             )}
           </Link>

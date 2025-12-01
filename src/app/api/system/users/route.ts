@@ -1,42 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getToken } from 'next-auth/jwt'
 import { API_CONFIG } from '@/lib/config'
+import { isAdmin } from '@/lib/auth-utils'
 
 const BASE = API_CONFIG.BASE_URL
-
-// Helper: Check if email is admin (supports multiple admins)
-function isAdminEmail(email: string): boolean {
-  const adminEmails = (process.env.ADMIN_EMAIL_WHITELIST || 'quyentnqe170062@fpt.edu.vn').split(',');
-  return adminEmails.some(adminEmail =>
-    email.toLowerCase() === adminEmail.trim().toLowerCase()
-  );
-}
-
-// Helper: Check if user is admin
-async function isAdmin(req: NextRequest): Promise<boolean> {
-  try {
-    const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET })
-    const email = (token as any)?.email as string | undefined
-
-    if (!email) {
-      return false;
-    }
-
-    const adminCheck = isAdminEmail(email);
-
-    console.log('[API] Admin check:', {
-      hasToken: !!token,
-      email: email,
-      adminEmails: process.env.ADMIN_EMAIL_WHITELIST,
-      isAdmin: adminCheck
-    })
-
-    return adminCheck;
-  } catch (error) {
-    console.error('[API] Error checking admin:', error)
-    return false
-  }
-}
 
 // GET - Lấy danh sách users (chỉ admin)
 export async function GET(req: NextRequest) {
@@ -55,75 +21,257 @@ export async function GET(req: NextRequest) {
     const size = searchParams.get('size') || '50'
     const keyword = searchParams.get('q') || ''
 
-    console.log('[API] GET /api/system/users - params:', { page, size, keyword })
+    // Extract specific search parameters
+    const email = searchParams.get('email') || ''
+    const fullName = searchParams.get('fullName') || ''
+    const phoneNumber = searchParams.get('phoneNumber') || ''
+    const idCardNumber = searchParams.get('idCardNumber') || ''
+    const status = searchParams.get('status') || ''
 
-    const url = new URL(`${BASE}/users/search`)
+    console.log('[API] GET /api/system/users - params:', { 
+      page, 
+      size, 
+      keyword,
+      email,
+      fullName,
+      phoneNumber,
+      idCardNumber,
+      status
+    })
+
+    // Get auth token from request
+    const authHeader = req.headers.get('authorization')
+    const headers: HeadersInit = { 
+      'Content-Type': 'application/json', 
+      accept: '*/*' 
+    }
+    
+    if (authHeader) {
+      headers['Authorization'] = authHeader
+      console.log('[API] Using Authorization header from request')
+    } else {
+      console.warn('[API] No Authorization header found in request')
+    }
+    
+    // Try /users/search endpoint first
+    // Backend format: /users/search?email=xxx&fullName=xxx&phoneNumber=xxx&idCardNumber=xxx&status=xxx&page=0&size=10
+    let url = new URL(`${BASE}/users/search`)
     url.searchParams.set('page', page)
     url.searchParams.set('size', size)
-    // Backend có thể dùng 'keyword' hoặc 'q' cho search
-    if (keyword) {
-      url.searchParams.set('keyword', keyword)
-      // Thử cả 'q' nếu backend hỗ trợ
-      url.searchParams.set('q', keyword)
+    
+    // Add specific search parameters if provided
+    if (email) {
+      url.searchParams.set('email', email)
+    }
+    if (fullName) {
+      url.searchParams.set('fullName', fullName)
+    }
+    if (phoneNumber) {
+      url.searchParams.set('phoneNumber', phoneNumber)
+    }
+    if (idCardNumber) {
+      url.searchParams.set('idCardNumber', idCardNumber)
+    }
+    if (status) {
+      url.searchParams.set('status', status)
+    }
+    
+    // If keyword is provided but no specific parameters, try to infer the search type
+    if (keyword && !email && !fullName && !phoneNumber && !idCardNumber && !status) {
+      // Nếu keyword trông giống email, dùng parameter 'email'
+      if (keyword.includes('@')) {
+        url.searchParams.set('email', keyword)
+      } else if (/^\d+$/.test(keyword)) {
+        // Nếu chỉ có số, có thể là phoneNumber hoặc idCardNumber
+        // Thử phoneNumber trước (thường ngắn hơn)
+        if (keyword.length <= 11) {
+          url.searchParams.set('phoneNumber', keyword)
+        } else {
+          url.searchParams.set('idCardNumber', keyword)
+        }
+      } else {
+        // Nếu không phải email hay số, có thể là fullName
+        url.searchParams.set('fullName', keyword)
+      }
     }
 
     console.log('[API] Fetching users from:', url.toString())
-    const res = await fetch(url.toString(), { headers: { 'Content-Type': 'application/json', accept: '*/*' }, cache: 'no-store' })
+    console.log('[API] Request headers:', Object.keys(headers))
+    
+    let res = await fetch(url.toString(), { 
+      headers,
+      cache: 'no-store' 
+    })
 
     console.log('[API] Backend response status:', res.status)
+
+    // If /users/search fails with 500, try fallback to /users endpoint
+    if (!res.ok && res.status === 500) {
+      console.warn('[API] /users/search returned 500, trying fallback to /users endpoint')
+      
+      // Try fallback endpoint: /users with pagination
+      url = new URL(`${BASE}/users`)
+      url.searchParams.set('page', page)
+      url.searchParams.set('size', size)
+      
+      // Add search parameters to fallback endpoint
+      if (email) {
+        url.searchParams.set('email', email)
+      }
+      if (fullName) {
+        url.searchParams.set('fullName', fullName)
+      }
+      if (phoneNumber) {
+        url.searchParams.set('phoneNumber', phoneNumber)
+      }
+      if (idCardNumber) {
+        url.searchParams.set('idCardNumber', idCardNumber)
+      }
+      if (status) {
+        url.searchParams.set('status', status)
+      }
+      
+      // Fallback: use keyword if no specific parameters
+      if (keyword && !email && !fullName && !phoneNumber && !idCardNumber && !status) {
+        url.searchParams.set('keyword', keyword)
+        url.searchParams.set('q', keyword)
+      }
+      
+      console.log('[API] Trying fallback endpoint:', url.toString())
+      res = await fetch(url.toString(), { 
+        headers,
+        cache: 'no-store' 
+      })
+      
+      console.log('[API] Fallback endpoint response status:', res.status)
+    }
 
     if (!res.ok) {
       const errorText = await res.text();
       console.error('[API] Backend returned error. Status:', res.status);
       console.error('[API] Backend error response:', errorText);
+      console.error('[API] Request URL:', url.toString());
+      console.error('[API] Request headers:', JSON.stringify(headers, null, 2));
       
       // Try to parse error response
       let errorData: any = {}
       try {
         errorData = JSON.parse(errorText)
       } catch (e) {
-        errorData = { message: errorText }
+        errorData = { message: errorText || 'Unknown error' }
       }
+      
+      // Log detailed error information
+      console.error('[API] Detailed error info:', {
+        status: res.status,
+        statusText: res.statusText,
+        responseCode: errorData.responseCode,
+        message: errorData.message,
+        error: errorData.error,
+        fullError: errorData
+      })
       
       // Return error information instead of empty array
       return NextResponse.json({ 
         items: [],
-        error: errorData.message || errorData.responseCode || `Backend error: ${res.status}`,
-        responseCode: errorData.responseCode,
-        backendStatus: res.status
+        error: errorData.message || errorData.error || errorData.responseCode || `Backend error: ${res.status}`,
+        responseCode: errorData.responseCode || (res.status === 500 ? 'S0001' : null),
+        backendStatus: res.status,
+        backendStatusText: res.statusText,
+        backendError: errorData
       }, { status: 200 }) // Return 200 but with error info
     }
 
     const data = await res.json().catch(() => ({}))
-    console.log('[API] Backend response data:', JSON.stringify(data, null, 2))
-
-    // Handle multiple response formats
-    let items = []
-    if (Array.isArray(data?.data?.content)) {
-      items = data.data.content
-      console.log('[API] Format: data.data.content (Pageable)')
-    } else if (Array.isArray(data?.data)) {
-      items = data.data
-      console.log('[API] Format: data.data (Array)')
-    } else if (Array.isArray(data?.content)) {
-      items = data.content
-      console.log('[API] Format: data.content (Pageable direct)')
-    } else if (Array.isArray(data)) {
-      items = data
-      console.log('[API] Format: root array')
-    } else if (data?.data && typeof data.data === 'object' && !Array.isArray(data.data)) {
-      // Single object wrapped in data
-      items = [data.data]
-      console.log('[API] Format: single object in data')
+    console.log('[API] Backend response data (full):', JSON.stringify(data, null, 2))
+    console.log('[API] Backend response type:', typeof data)
+    console.log('[API] Backend response isArray:', Array.isArray(data))
+    console.log('[API] Backend response keys:', Object.keys(data || {}))
+    
+    // Check for error response codes first
+    if (data?.responseCode && data.responseCode !== 'S0000') {
+      console.error('[API] Backend returned error responseCode:', data.responseCode)
+      console.error('[API] Backend error message:', data.message || data.error)
+      return NextResponse.json({ 
+        items: [],
+        error: data.message || data.error || 'SYSTEM_ERROR',
+        responseCode: data.responseCode,
+        backendStatus: res.status,
+        backendData: data
+      }, { status: 200 })
     }
     
-    console.log('[API] Extracted items count:', items.length)
-    if (items.length > 0) {
-      console.log('[API] Sample item:', JSON.stringify(items[0], null, 2))
-      console.log('[API] Sample item email:', items[0]?.email)
+    // Check for error in message field
+    if (data?.message && (data.message.includes('ERROR') || data.message.includes('error') || data.message.includes('Error'))) {
+      console.error('[API] Backend returned error in message:', data.message)
+      return NextResponse.json({ 
+        items: [],
+        error: data.message,
+        responseCode: data.responseCode || 'SYSTEM_ERROR',
+        backendStatus: res.status,
+        backendData: data
+      }, { status: 200 })
+    }
+
+    // Handle multiple response formats
+    // Backend format: { responseCode: "S0000", message: "SUCCESS", data: { content: [...], page: 0, size: 10, ... } }
+    let items = []
+    
+    // Check for nested structures first - Priority order based on backend response format
+    if (data?.data?.content && Array.isArray(data.data.content)) {
+      // Format: { data: { content: [...], page: 0, size: 10 } }
+      items = data.data.content
+      console.log('[API] Format: data.data.content (Pageable) - Found', items.length, 'items')
+    } else if (data?.data && Array.isArray(data.data)) {
+      // Format: { data: [...] }
+      items = data.data
+      console.log('[API] Format: data.data (Array) - Found', items.length, 'items')
+    } else if (data?.content && Array.isArray(data.content)) {
+      // Format: { content: [...] }
+      items = data.content
+      console.log('[API] Format: data.content (Pageable direct) - Found', items.length, 'items')
+    } else if (Array.isArray(data)) {
+      // Format: [...] (root array)
+      items = data
+      console.log('[API] Format: root array - Found', items.length, 'items')
+    } else if (data?.data && typeof data.data === 'object' && !Array.isArray(data.data)) {
+      // Single object wrapped in data: { data: { ... } }
+      items = [data.data]
+      console.log('[API] Format: single object in data - Found 1 item')
+    } else if (data?.items && Array.isArray(data.items)) {
+      // Format: { items: [...] }
+      items = data.items
+      console.log('[API] Format: data.items - Found', items.length, 'items')
     } else {
-      console.warn('[API] No items found in response')
-      console.log('[API] Full response structure:', Object.keys(data))
+      // Try to find any array in the response
+      const findArray = (obj: any, path = ''): any[] => {
+        if (Array.isArray(obj)) return obj
+        if (typeof obj !== 'object' || obj === null) return []
+        for (const key in obj) {
+          const result = findArray(obj[key], `${path}.${key}`)
+          if (result.length > 0) return result
+        }
+        return []
+      }
+      const foundArray = findArray(data)
+      if (foundArray.length > 0) {
+        items = foundArray
+        console.log('[API] Format: Found nested array - Found', items.length, 'items')
+      } else {
+        console.warn('[API] No array found in response structure')
+        console.warn('[API] Response structure:', JSON.stringify(data, null, 2))
+      }
+    }
+    
+    console.log('[API] Final extracted items count:', items.length)
+    if (items.length > 0) {
+      console.log('[API] Sample item (first):', JSON.stringify(items[0], null, 2))
+      console.log('[API] Sample item email:', items[0]?.email)
+      console.log('[API] Sample item keys:', Object.keys(items[0] || {}))
+    } else {
+      console.warn('[API] ⚠️ No items extracted from response')
+      console.warn('[API] Full response structure:', JSON.stringify(data, null, 2))
+      console.warn('[API] Response keys:', Object.keys(data || {}))
     }
     
     return NextResponse.json({ items })
@@ -146,15 +294,24 @@ export async function POST(req: NextRequest) {
       // Generate a random, secure password because the backend requires it
       const securePassword = `sorms_${Date.now()}_${Math.random().toString(36).substring(2)}`;
 
-      const payload = {
+      const payload: any = {
         email: body.email,
         password: securePassword,
         fullName: body.full_name || body.fullName,
         phoneNumber: body.phone_number || body.phoneNumber,
         firstName: body.firstName || '',
         lastName: body.lastName || '',
-        // role: body.role, // Backend assigns a default role, so we do not send it.
       }
+      
+      // Nếu có role được gửi từ client, thêm vào payload
+      // Backend sẽ validate và gán role phù hợp
+      if (body.role) {
+        payload.role = body.role;
+        console.log('🔑 Including role in payload:', body.role);
+      } else {
+        console.log('ℹ️ No role provided, backend will assign default role');
+      }
+      
       console.log('🔑 Creating user with payload:', JSON.stringify(payload, null, 2));
 
       const res = await fetch(`${BASE}/users`, {
@@ -254,6 +411,8 @@ export async function PUT(req: NextRequest) {
       idCardNumber: body.idCardNumber,
       idCardIssueDate: body.idCardIssueDates ?? body.idCardIssueDate,
       idCardIssuePlace: body.idCardIssuePlaces ?? body.idCardIssuePlace,
+      // Cho phép cập nhật vai trò nếu backend hỗ trợ trường này
+      role: body.role,
     }
     const res = await fetch(`${BASE}/users/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json', accept: '*/*' }, body: JSON.stringify(payload) })
     const data = await res.json().catch(() => ({}))

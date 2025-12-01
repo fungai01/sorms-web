@@ -1,5 +1,6 @@
 // API Client for connecting to backend
 import { API_CONFIG } from './config'
+import { authService } from './auth-service'
 
 const API_BASE_URL = API_CONFIG.BASE_URL
 
@@ -64,20 +65,40 @@ class ApiClient {
     try {
       const url = `${this.baseURL}${endpoint}`
 
+      // Thêm Authorization header nếu có token
+      const token = authService.getAccessToken()
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(options.headers as Record<string, string> || {}),
+      }
+      
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`
+      }
+
       // Log request details for debugging
+      let bodyContent = null
+      if (options.body && typeof options.body === 'string') {
+        try {
+          bodyContent = JSON.parse(options.body)
+        } catch {
+          bodyContent = options.body.substring(0, 200)
+        }
+      }
+      
       console.log(`[API Client] 🚀 Request:`, {
         url,
         method: options.method || 'GET',
         baseURL: this.baseURL,
         endpoint,
+        hasBody: !!options.body,
+        body: bodyContent,
+        headers: Object.keys(headers),
         timestamp: new Date().toISOString()
       })
 
       const response = await fetch(url, {
-        headers: {
-          'Content-Type': 'application/json',
-          ...options.headers,
-        },
+        headers: headers as HeadersInit,
         ...options,
       })
 
@@ -266,6 +287,36 @@ class ApiClient {
   }
 
 
+  // Staff Profiles API
+  async getStaffProfiles() {
+    return this.get('/staff-profiles')
+  }
+
+  async getStaffProfile(id: number) {
+    return this.get(`/staff-profiles/${id}`)
+  }
+
+  async getStaffProfilesByStatus(status: string) {
+    return this.get(`/staff-profiles/by-status?status=${encodeURIComponent(status)}`)
+  }
+
+  async getStaffProfilesByDepartment(department: string) {
+    return this.get(`/staff-profiles/by-department/${encodeURIComponent(department)}`)
+  }
+
+  async createStaffProfile(profileData: any) {
+    return this.post('/staff-profiles', profileData)
+  }
+
+  async updateStaffProfile(id: number, profileData: any) {
+    return this.put(`/staff-profiles/${id}`, profileData)
+  }
+
+  async deleteStaffProfile(id: number) {
+    return this.delete(`/staff-profiles/${id}`)
+  }
+
+
   async getRoomTypes() {
     return this.get('/room-types')
   }
@@ -318,9 +369,11 @@ class ApiClient {
     }
 
     // Ensure data matches API format - handle both camelCase and snake_case, and common variations
+    const rawUserId = bookingData.userId || bookingData.user_id || null
     const formattedData = {
       code: bookingData.code || generateBookingCode(),
-      userId: bookingData.userId || bookingData.user_id || null,
+      // Backend yêu cầu userId dạng string
+      userId: rawUserId != null ? String(rawUserId) : null,
       roomId: bookingData.roomId || bookingData.room_id,
       checkinDate: bookingData.checkinDate || bookingData.checkin_date || bookingData.checkIn,
       checkoutDate: bookingData.checkoutDate || bookingData.checkout_date || bookingData.checkOut,
@@ -346,8 +399,8 @@ class ApiClient {
   }
 
   async deleteBooking(id: number) {
-    // Soft delete: deactivate instead of hard delete
-    return this.put(`/bookings/${id}/deactivate`)
+    // Xóa booking theo spec mới: DELETE /bookings/{id}
+    return this.delete(`/bookings/${id}`)
   }
 
   // Additional booking methods for filtering and actions
@@ -363,8 +416,16 @@ class ApiClient {
     return this.post(`/bookings/${id}/checkin`)
   }
 
-  async approveBooking(id: number) {
-    return this.post(`/bookings/${id}/approve`)
+  async approveBooking(id: number, approverId?: string, reason?: string) {
+    // Backend hiện yêu cầu body dạng:
+    // { bookingId, approverId, decision, reason }
+    const payload = {
+      bookingId: id,
+      approverId: approverId ?? 'SYSTEM',
+      decision: 'APPROVED',
+      reason: reason ?? ''
+    }
+    return this.post(`/bookings/${id}/approve`, payload)
   }
 
   async getServices() {
@@ -640,6 +701,62 @@ class ApiClient {
 
   async getCheckin(id: number) {
     return this.get(`/checkins/${id}`)
+  }
+
+  // Authentication methods
+  async sendVerificationCode(email: string) {
+    return this.post('/auth/verify-account/send-code', { email })
+  }
+
+  async checkVerificationCode(email: string, code: string) {
+    return this.post('/auth/verify-account/check-code', { email, code })
+  }
+
+  async refreshToken(token: string) {
+    // Backend yêu cầu gửi token hiện tại trong body
+    return this.post('/auth/refresh', { token })
+  }
+
+  async outboundAuth(data: any) {
+    return this.post('/auth/outbound/authentication', data)
+  }
+
+  async mobileOutboundAuth(data: any) {
+    return this.post('/auth/mobile/outbound/authentication', data)
+  }
+
+  async logout(token?: string) {
+    // Backend yêu cầu gửi token trong body
+    if (token) {
+      return this.post('/auth/logout', { token })
+    }
+    return this.post('/auth/logout', {})
+  }
+
+  async login(credentials: { username: string; password: string } | { email: string; password: string }) {
+    // Backend yêu cầu username, nhưng hỗ trợ cả email để tương thích
+    const body = 'username' in credentials 
+      ? credentials 
+      : { username: credentials.email, password: credentials.password }
+    return this.post('/auth/login', body)
+  }
+
+  async introspect(token: string) {
+    return this.post('/auth/introspect', { token })
+  }
+
+  async getGoogleOAuthRedirectUrl(redirectUri?: string, scope?: string) {
+    const params = new URLSearchParams()
+    if (redirectUri) {
+      params.set('redirectUri', redirectUri)
+    }
+    if (scope) {
+      params.set('scope', scope)
+    }
+    
+    const queryString = params.toString()
+    const endpoint = `/auth/oauth2/google/redirect-url${queryString ? '?' + queryString : ''}`
+    return this.get(endpoint)
   }
 }
 

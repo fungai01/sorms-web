@@ -71,9 +71,9 @@ function ConditionalLayoutContent({ children }: ConditionalLayoutProps) {
   }, []);
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50" suppressHydrationWarning>
       {/* Desktop Sidebar - Fixed on left */}
-      <div className="hidden lg:block lg:fixed lg:inset-y-0 lg:left-0 lg:z-20">
+      <div className="hidden lg:block lg:fixed lg:inset-y-0 lg:left-0 lg:z-20" suppressHydrationWarning>
         <Sidebar 
           user={user || undefined} 
           isVisible={true}
@@ -83,9 +83,9 @@ function ConditionalLayoutContent({ children }: ConditionalLayoutProps) {
       </div>
       
       {/* Main Content Area - Pushed to right */}
-      <div className={`lg:transition-all lg:duration-300 ${sidebarCollapsed ? 'lg:ml-16 xl:ml-20' : 'lg:ml-64 xl:ml-72'}`}>
+      <div className={`lg:transition-all lg:duration-300 ${sidebarCollapsed ? 'lg:ml-16 xl:ml-20' : 'lg:ml-64 xl:ml-72'}`} suppressHydrationWarning>
         {/* Header */}
-        <div className="sticky top-0 z-30">
+        <div className="sticky top-0 z-30" suppressHydrationWarning>
           <Header onToggleSidebar={() => {
             // On mobile, open the mobile sidebar
             // On desktop, toggle the sidebar collapsed state

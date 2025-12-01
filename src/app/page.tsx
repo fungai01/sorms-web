@@ -14,13 +14,14 @@ const HomePage = memo(function HomePage() {
         <meta name="description" content="Hệ thống quản lý nhà công vụ thông minh SORMS giúp bạn quản lý phòng, dịch vụ và thanh toán hiệu quả." />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
       </Head>
-      <div className="min-h-screen relative overflow-hidden font-[Inter]">
+      <div className="min-h-screen relative overflow-hidden font-[Inter]" suppressHydrationWarning>
       {/* Background Image */}
       <div
         className="absolute inset-0 bg-cover bg-center bg-no-repeat"
         style={{
           backgroundImage: `url(${Bg.src})`,
         }}
+        suppressHydrationWarning
       />
       
       {/* Gradient Overlay */}
@@ -77,6 +78,7 @@ const HomePage = memo(function HomePage() {
           <Link
             href="/login"
             className="inline-flex items-center gap-3 px-10 py-4 bg-white/90 text-gray-900 font-semibold text-lg rounded-2xl shadow hover:shadow-md transform hover:-translate-y-1 transition-all duration-300 border border-white/30"
+            suppressHydrationWarning
           >
             {/* Icon */}
             <svg className="w-6 h-6 transition-transform duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">

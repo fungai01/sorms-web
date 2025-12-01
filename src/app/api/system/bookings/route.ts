@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getToken } from 'next-auth/jwt'
 import { apiClient } from '@/lib/api-client'
+import { verifyToken } from '@/lib/auth-utils'
 
 // GET - Fetch all bookings, specific booking by ID, or filtered bookings
 export async function GET(req: NextRequest) {
@@ -95,7 +95,19 @@ export async function POST(req: NextRequest) {
       if (isNaN(bookingId)) {
         return NextResponse.json({ error: 'Invalid booking ID' }, { status: 400 });
       }
-      const response = await apiClient.approveBooking(bookingId);
+
+      // Lấy approverId từ token nếu có
+      let approverId: string | undefined
+      try {
+        const userInfo = await verifyToken(req)
+        if (userInfo?.id) {
+          approverId = String(userInfo.id)
+        }
+      } catch (e) {
+        console.error('Error getting approver info from token:', e)
+      }
+
+      const response = await apiClient.approveBooking(bookingId, approverId)
       if (response.success) {
         return NextResponse.json(response.data);
       }
@@ -105,15 +117,19 @@ export async function POST(req: NextRequest) {
     // Create new booking (default)
     const body = await req.json()
     
-    // Try to get userId from session if not provided
+    // Try to get userId from token if not provided
     if (!body.userId && !body.user_id) {
       try {
-        const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET })
+        const userInfo = await verifyToken(req)
+        if (userInfo?.id) {
+          // Use user ID from token if available
+          body.userId = userInfo.id
+        }
         // If we have user email, we might need to look up userId
         // For now, we'll let the backend handle it or use a default
         // TODO: Query user by email to get userId if needed
       } catch (error) {
-        console.error('Error getting token:', error)
+        console.error('Error getting user info from token:', error)
       }
     }
     

@@ -9,6 +9,7 @@ import Modal from "@/components/ui/Modal";
 
 import { type Booking, type BookingStatus } from '@/lib/types'
 import { useBookings, useRooms } from '@/hooks/useApi'
+import { authService } from '@/lib/auth-service'
 
 const statusOptions: BookingStatus[] = ['PENDING','APPROVED','REJECTED','CANCELLED','CHECKED_IN','CHECKED_OUT']
 
@@ -19,14 +20,14 @@ export default function BookingsPage() {
   const [rooms, setRooms] = useState<any[]>([])
   const [flash, setFlash] = useState<{ type: 'success' | 'error', text: string } | null>(null)
 
-  // API hooks
-  const { data: bookingsData, refetch: refetchBookings, loading: bookingsLoading, error: bookingsError } = useBookings()
-  const { data: roomsData, refetch: refetchRooms, loading: roomsLoading, error: roomsError } = useRooms()
-
   const [query, setQuery] = useState("")
   const [dateFrom, setDateFrom] = useState("")
   const [dateTo, setDateTo] = useState("")
   const [filterStatus, setFilterStatus] = useState<'ALL' | BookingStatus>('ALL')
+  
+  // API hooks
+  const { data: bookingsData, refetch: refetchBookings, loading: bookingsLoading, error: bookingsError } = useBookings(filterStatus)
+  const { data: roomsData, refetch: refetchRooms, loading: roomsLoading, error: roomsError } = useRooms()
   const [sortKey, setSortKey] = useState<'id' | 'code' | 'checkin' | 'checkout'>("checkin")
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>("asc")
   const [page, setPage] = useState(1)
@@ -36,7 +37,7 @@ export default function BookingsPage() {
   const [selected, setSelected] = useState<Booking | null>(null)
 
   const [editOpen, setEditOpen] = useState(false)
-  const [edit, setEdit] = useState<{ id?: number, code: string, roomId: number, checkinDate: string, checkoutDate: string, numGuests: number, status: BookingStatus, note: string }>({ code: '', roomId: 1, checkinDate: '', checkoutDate: '', numGuests: 1, status: 'PENDING', note: '' })
+  const [edit, setEdit] = useState<{ id?: number, code: string, userId?: number, roomId: number, checkinDate: string, checkoutDate: string, numGuests: number, status: BookingStatus, note: string }>({ code: '', userId: undefined, roomId: 1, checkinDate: '', checkoutDate: '', numGuests: 1, status: 'PENDING', note: '' })
   const [fieldErrors, setFieldErrors] = useState<{ [key: string]: string }>({})
   const [confirmOpen, setConfirmOpen] = useState<{ open: boolean, id?: number, type?: 'delete' }>({ open: false })
 
@@ -60,17 +61,20 @@ export default function BookingsPage() {
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [editOpen, edit])
 
-  // Sync dữ liệu từ API
+  // Sync dữ liệu từ API (không cố gọi /users/{id} nữa để tránh lỗi "User not found")
   useEffect(() => {
-    if (bookingsData && Array.isArray(bookingsData)) {
-      setRows(bookingsData as Booking[])
-    } else if (bookingsError) {
-      setRows([])
-    }
+    // Đồng bộ phòng
     if (roomsData && Array.isArray(roomsData)) {
       setRooms(roomsData as any[])
     } else if (roomsError) {
       setRooms([])
+    }
+
+    // Đồng bộ đặt phòng
+    if (bookingsData && Array.isArray(bookingsData)) {
+      setRows(bookingsData as Booking[])
+    } else if (bookingsError) {
+      setRows([])
     }
   }, [bookingsData, roomsData, bookingsError, roomsError])
 
@@ -103,6 +107,7 @@ export default function BookingsPage() {
     setEdit({ 
       id: r.id, 
       code: r.code, 
+      userId: r.userId,
       roomId: r.roomId, 
       checkinDate: r.checkinDate, 
       checkoutDate: r.checkoutDate, 
@@ -150,7 +155,8 @@ export default function BookingsPage() {
     // Gọi API
     const payload = {
       code: edit.code.trim(),
-      userId: 1, // Default user ID for production
+      // Giữ nguyên userId gốc nếu có, không ép về 1 để tránh lỗi "User not found"
+      userId: edit.userId,
       roomId: edit.roomId,
       checkinDate: edit.checkinDate,
       checkoutDate: edit.checkoutDate,
@@ -161,6 +167,9 @@ export default function BookingsPage() {
     
     try {
       if (edit.id) {
+        const isApprove = edit.status === 'APPROVED'
+
+        // Cập nhật thông tin đặt phòng
         const response = await fetch('/api/system/bookings', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -170,8 +179,28 @@ export default function BookingsPage() {
           const error = await response.json()
           throw new Error(error.error || 'Failed to update booking')
         }
+
+        // Nếu status được chọn là APPROVED, gọi thêm API duyệt đặt phòng
+        if (isApprove) {
+          const token = authService.getAccessToken()
+          const headers: HeadersInit = {}
+          if (token) {
+            headers['Authorization'] = `Bearer ${token}`
+          }
+
+          const approveRes = await fetch(`/api/system/bookings?action=approve&id=${edit.id}`, {
+            method: 'POST',
+            headers
+          })
+
+          if (!approveRes.ok) {
+            const approveError = await approveRes.json().catch(() => ({}))
+            throw new Error(approveError.error || 'Failed to approve booking')
+          }
+        }
+
         await refetchBookings()
-        setFlash({ type: 'success', text: 'Đã cập nhật đặt phòng.' })
+        setFlash({ type: 'success', text: isApprove ? 'Đã duyệt đặt phòng thành công.' : 'Đã cập nhật đặt phòng.' })
       } else {
         const response = await fetch('/api/system/bookings', {
           method: 'POST',

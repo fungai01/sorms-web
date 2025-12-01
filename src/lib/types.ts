@@ -132,3 +132,35 @@ export interface StaffTask {
   created_at: string;
   updated_at: string;
 }
+
+export interface StaffProfile {
+  id: number;
+  accountId: number;
+  employeeId: string;
+  department: string;
+  position: string;
+  jobTitle: string;
+  hireDate: string;
+  employmentType: string;
+  workSchedule: string;
+  salary: number;
+  hourlyRate: number;
+  managerId: number | null;
+  officeLocation: string;
+  workPhone: string;
+  workEmail: string;
+  skills: string;
+  certifications: string;
+  performanceRating: number;
+  lastReviewDate: string | null;
+  nextReviewDate: string | null;
+  vacationDaysRemaining: number;
+  sickDaysRemaining: number;
+  isActive: boolean;
+  terminationDate: string | null;
+  terminationReason: string | null;
+  notes: string;
+  createdDate?: string;
+  lastModifiedDate?: string;
+}
+

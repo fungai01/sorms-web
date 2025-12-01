@@ -1,14 +1,15 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import Logo from "@/img/Logo.png";
 import Bg from "@/img/bg.jpg";
+import { useAuth } from "@/hooks/useAuth";
 
 export default function LoginPage() {
   const router = useRouter();
+  const { loginWithGoogle } = useAuth();
   const [selectedRole, setSelectedRole] = useState("");
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -29,6 +30,16 @@ export default function LoginPage() {
       setError('Không tìm thấy email trong thông tin đăng nhập. Vui lòng thử lại.');
     } else if (errorParam === 'InvalidEmailDomain') {
       setError('Tên miền email của bạn không được phép đăng nhập vào hệ thống.');
+    } else if (errorParam === 'code_expired') {
+      setError('Mã xác thực đã hết hạn hoặc đã được sử dụng. Vui lòng thử đăng nhập lại.');
+    } else if (errorParam === 'redirect_uri_mismatch') {
+      setError('Lỗi cấu hình xác thực. Vui lòng thử lại hoặc liên hệ admin.');
+    } else if (errorParam === 'auth_failed') {
+      setError('Xác thực thất bại. Vui lòng thử đăng nhập lại.');
+    } else if (errorParam === 'user_not_found') {
+      setError('Tài khoản của bạn chưa được đăng ký trong hệ thống. Vui lòng liên hệ admin để được tạo tài khoản.');
+    } else if (errorParam === 'role_mismatch') {
+      setError('Bạn chỉ có thể đăng nhập với vai trò của mình trong hệ thống. Vui lòng chọn đúng vai trò.');
     }
   }, []);
 
@@ -63,17 +74,14 @@ export default function LoginPage() {
     setError("");
 
     try {
-      // Sử dụng Next-Auth signIn với Google provider
-      const result = await signIn("google", {
-        callbackUrl: `/auth/callback?role=${selectedRole}`,
-        redirect: true,
-      });
-
-      // Nếu có lỗi (không redirect)
-      if (result?.error) {
-        setError("Đăng nhập thất bại. Vui lòng thử lại.");
-        setIsLoading(false);
+      // Lưu role vào sessionStorage để sử dụng sau khi callback
+      if (typeof window !== 'undefined') {
+        sessionStorage.setItem('selectedRole', selectedRole);
       }
+
+      // Sử dụng backend API để lấy Google OAuth URL
+      await loginWithGoogle();
+      // loginWithGoogle sẽ redirect, nên không cần setIsLoading(false)
     } catch (error) {
       console.error("Sign in error:", error);
       setError("Có lỗi xảy ra khi đăng nhập. Vui lòng thử lại.");
@@ -81,14 +89,16 @@ export default function LoginPage() {
     }
   };
 
+
   return (
-    <div className="min-h-screen relative overflow-hidden font-[Inter]">
+    <div className="min-h-screen relative overflow-hidden font-[Inter]" suppressHydrationWarning>
       {/* Background Image */}
       <div
         className="absolute inset-0 bg-cover bg-center bg-no-repeat"
         style={{
           backgroundImage: `url(${Bg.src})`,
         }}
+        suppressHydrationWarning
       />
 
       {/* Gradient Overlay */}
