@@ -2,7 +2,7 @@
 export const API_CONFIG = {
   // Backend API base URL
   // Support both NEXT_PUBLIC_API_BASE_URL and NEXT_PUBLIC_API_URL for backward compatibility
-  BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || 'http://103.81.87.99:5656/api',
+  BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || 'https://103.81.87.99:5656/api',
 
   // API endpoints
   ENDPOINTS: {
