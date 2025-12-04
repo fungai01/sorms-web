@@ -36,6 +36,35 @@ export default function BookingsPage() {
   const [detailOpen, setDetailOpen] = useState(false)
   const [selected, setSelected] = useState<Booking | null>(null)
 
+  const selectedMeta = selected
+    ? (() => {
+        const raw = selected as Record<string, any>
+        const totalCandidate =
+          raw?.totalPrice ??
+          raw?.total_price ??
+          raw?.totalAmount ??
+          raw?.total_amount ??
+          raw?.amount ??
+          null
+        const parsedTotal =
+          typeof totalCandidate === 'number'
+            ? totalCandidate
+            : typeof totalCandidate === 'string' && totalCandidate.trim() !== ''
+              ? Number(totalCandidate)
+              : null
+        const paymentCandidate =
+          raw?.paymentStatus ??
+          raw?.payment_status ??
+          raw?.paymentState ??
+          raw?.payment_state ??
+          null
+        return {
+          totalPrice: typeof parsedTotal === 'number' && Number.isFinite(parsedTotal) ? parsedTotal : null,
+          paymentStatus: typeof paymentCandidate === 'string' ? paymentCandidate : null
+        }
+      })()
+    : { totalPrice: null, paymentStatus: null }
+
   const [editOpen, setEditOpen] = useState(false)
   const [edit, setEdit] = useState<{ id?: number, code: string, userId?: number, roomId: number, checkinDate: string, checkoutDate: string, numGuests: number, status: BookingStatus, note: string }>({ code: '', userId: undefined, roomId: 1, checkinDate: '', checkoutDate: '', numGuests: 1, status: 'PENDING', note: '' })
   const [fieldErrors, setFieldErrors] = useState<{ [key: string]: string }>({})
@@ -923,6 +952,64 @@ export default function BookingsPage() {
                       </div>
                     )}
                   </div>
+
+                  {(selectedMeta.totalPrice !== null || selectedMeta.paymentStatus || selected.created_at || selected.updated_at) && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
+                      {selectedMeta.totalPrice !== null && (
+                        <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
+                          <div className="flex items-center gap-2 mb-1">
+                            <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
+                            </svg>
+                            <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Tổng tiền</span>
+                          </div>
+                          <p className="text-sm sm:text-base font-bold text-blue-900">
+                            {selectedMeta.totalPrice.toLocaleString('vi-VN')} VND
+                          </p>
+                        </div>
+                      )}
+
+                      {selectedMeta.paymentStatus && (
+                        <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
+                          <div className="flex items-center gap-2 mb-1">
+                            <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M5 12a2 2 0 010-4h14a2 2 0 110 4M5 12a2 2 0 000 4h14a2 2 0 100-4" />
+                            </svg>
+                            <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Thanh toán</span>
+                          </div>
+                          <p className="text-sm sm:text-base font-bold text-blue-900">{selectedMeta.paymentStatus}</p>
+                        </div>
+                      )}
+
+                      {selected.created_at && (
+                        <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
+                          <div className="flex items-center gap-2 mb-1">
+                            <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                            </svg>
+                            <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Ngày tạo</span>
+                          </div>
+                          <p className="text-sm sm:text-base font-bold text-blue-900">
+                            {new Date(selected.created_at).toLocaleString('vi-VN')}
+                          </p>
+                        </div>
+                      )}
+
+                      {selected.updated_at && (
+                        <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
+                          <div className="flex items-center gap-2 mb-1">
+                            <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Cập nhật gần nhất</span>
+                          </div>
+                          <p className="text-sm sm:text-base font-bold text-blue-900">
+                            {new Date(selected.updated_at).toLocaleString('vi-VN')}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

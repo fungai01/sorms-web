@@ -30,7 +30,9 @@ export async function GET(req: NextRequest) {
       )
     }
     
-    return NextResponse.json(response.data)
+    const raw: any = response.data
+    const items = Array.isArray(raw?.content) ? raw.content : (Array.isArray(raw) ? raw : [])
+    return NextResponse.json({ items, total: items.length })
   } catch (error) {
     console.error('Services API error:', error)
     return NextResponse.json(

@@ -31,7 +31,9 @@ export async function GET(req: NextRequest) {
       }
       const response = await apiClient.getBookingsByUser(user);
       if (response.success) {
-        return NextResponse.json(response.data);
+        const raw: any = response.data
+        const items = Array.isArray(raw?.content) ? raw.content : (Array.isArray(raw) ? raw : [])
+        return NextResponse.json({ items, total: items.length });
       }
       return NextResponse.json({ error: response.error }, { status: 500 });
     }
@@ -44,7 +46,9 @@ export async function GET(req: NextRequest) {
       }
       const response = await apiClient.getBookingsByStatus(status);
       if (response.success) {
-        return NextResponse.json(response.data);
+        const raw: any = response.data
+        const items = Array.isArray(raw?.content) ? raw.content : (Array.isArray(raw) ? raw : [])
+        return NextResponse.json({ items, total: items.length });
       }
       return NextResponse.json({ error: response.error }, { status: 500 });
     }
@@ -59,7 +63,9 @@ export async function GET(req: NextRequest) {
       )
     }
     
-    return NextResponse.json(response.data)
+    const raw: any = response.data
+    const items = Array.isArray(raw?.content) ? raw.content : (Array.isArray(raw) ? raw : [])
+    return NextResponse.json({ items, total: items.length })
   } catch (error) {
     console.error('Bookings API error:', error)
     return NextResponse.json(

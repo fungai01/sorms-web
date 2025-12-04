@@ -767,6 +767,35 @@ export default function ServicesPage() {
                     )}
                 </div>
                 </div>
+
+                {/* Thông tin hệ thống */}
+                {(selected.created_at || selected.updated_at) && (
+                  <div className="grid grid-cols-2 gap-3 sm:gap-4">
+                    {selected.created_at && (
+                      <div className="bg-white/70 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-blue-200">
+                        <div className="flex items-center gap-2 mb-2">
+                          <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3" />
+                          </svg>
+                          <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Ngày tạo</span>
+                        </div>
+                        <p className="text-sm sm:text-base font-semibold text-gray-900">{new Date(selected.created_at).toLocaleString('vi-VN')}</p>
+                      </div>
+                    )}
+                    {selected.updated_at && (
+                      <div className="bg-white/70 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-blue-200">
+                        <div className="flex items-center gap-2 mb-2">
+                          <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3" />
+                          </svg>
+                          <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Cập nhật</span>
+                        </div>
+                        <p className="text-sm sm:text-base font-semibold text-gray-900">{new Date(selected.updated_at).toLocaleString('vi-VN')}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+                </div>
               </div>
             </div>
           )}

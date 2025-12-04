@@ -20,6 +20,139 @@ function AuthCallbackInner() {
   const role = typeof window !== 'undefined' ? sessionStorage.getItem('selectedRole') : null;
 
   useEffect(() => {
+    const getBearerToken = () => {
+      if (typeof window === 'undefined') return '';
+      return localStorage.getItem('auth_access_token') || '';
+    };
+
+    const handleUserProvisioning = async (
+      userInfo: any,
+      selectedRoleFromLogin: string | null
+    ): Promise<{ databaseRole: string; userStatus: string }> => {
+      console.log('🔍 Checking if user exists in database (single check)...', {
+        email: userInfo.email,
+        userId: userInfo.id,
+        rolesFromToken: userInfo.roles || userInfo.roleName,
+      });
+
+      const bearerToken = getBearerToken();
+      if (!bearerToken) {
+        console.error('❌ Missing bearer token for user provisioning');
+        throw new Error('Không tìm thấy token xác thực. Vui lòng đăng nhập lại.');
+      }
+
+      const checkResponse = await fetch(
+        `/api/system/users/check?email=${encodeURIComponent(userInfo.email)}`,
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${bearerToken}`,
+          },
+        }
+      );
+
+      console.log('📋 Check response status:', checkResponse.status);
+
+      if (!checkResponse.ok) {
+        const errorText = await checkResponse.text().catch(() => 'Unknown error');
+        console.error('❌ Check API failed:', {
+          status: checkResponse.status,
+          error: errorText,
+        });
+        throw new Error('Không thể kiểm tra trạng thái tài khoản. Vui lòng thử lại sau.');
+      }
+
+      const checkData = await checkResponse.json();
+      console.log('📋 User check response:', JSON.stringify(checkData, null, 2));
+
+      if (checkData.exists && checkData.user) {
+        const databaseRole = checkData.user.role || (userInfo.roles?.[0] as string) || userInfo.role || 'user';
+        const userStatus = checkData.user.status || 'ACTIVE';
+
+        console.log('✅ User exists in database:', {
+          email: checkData.user.email,
+          status: userStatus,
+          role: databaseRole,
+        });
+
+        if (userStatus === 'INACTIVE') {
+          console.log('❌ User INACTIVE, needs admin activation');
+          throw new Error('Tài khoản của bạn đang bị khóa, vui lòng liên hệ quản trị viên.');
+        }
+
+        return { databaseRole, userStatus };
+      }
+
+      // User chưa tồn tại trong database -> tạo mới một lần
+      console.log('ℹ️ User not found in database, creating new user...');
+
+      const rolesFromToken = userInfo.roles || userInfo.roleName || [];
+      const roleToCreate =
+        selectedRoleFromLogin || rolesFromToken[0] || userInfo.role || 'user';
+
+      console.log('🔑 Creating user with role:', {
+        roleToCreate,
+        selectedRole: selectedRoleFromLogin,
+        rolesFromToken,
+        userInfoRole: userInfo.role,
+      });
+
+      const createUserResponse = await fetch('/api/system/users?action=create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${bearerToken}`,
+        },
+        body: JSON.stringify({
+          email: userInfo.email,
+          full_name:
+            userInfo.name ||
+            (userInfo.firstName && userInfo.lastName
+              ? `${userInfo.firstName} ${userInfo.lastName}`
+              : userInfo.email),
+          firstName: userInfo.firstName || '',
+          lastName: userInfo.lastName || '',
+          phone_number: userInfo.phoneNumber || '',
+          role: roleToCreate,
+        }),
+      });
+
+      console.log('📋 Create user response status:', createUserResponse.status);
+
+      if (!createUserResponse.ok) {
+        let errorData: any = {};
+        try {
+          errorData = await createUserResponse.json();
+        } catch (parseError) {
+          const errorText = await createUserResponse.text().catch(() => 'Unknown error');
+          console.error('❌ Failed to parse error response:', errorText);
+          errorData = { error: errorText };
+        }
+
+        console.error('❌ Failed to create user:', errorData);
+
+        const errorMsg =
+          typeof errorData.error === 'string'
+            ? errorData.error
+            : typeof errorData.message === 'string'
+            ? errorData.message
+            : 'Không thể tạo tài khoản. Vui lòng liên hệ admin.';
+
+        throw new Error(errorMsg);
+      }
+
+      const createData = await createUserResponse.json();
+      console.log('✅ User created successfully:', createData);
+
+      const databaseRole =
+        createData.role || (userInfo.roles?.[0] as string) || userInfo.role || 'user';
+      const userStatus = createData.status || 'ACTIVE';
+
+      console.log('✅ New user created with role:', databaseRole);
+
+      return { databaseRole, userStatus };
+    };
+
     // Đảm bảo chỉ xử lý 1 lần (tránh React strict mode hoặc re-render)
     if (hasProcessed) {
       console.log('⚠️ Callback already processed, skipping...');
@@ -74,302 +207,17 @@ function AuthCallbackInner() {
 
         console.log('✅ User info:', userInfo);
 
-        // Kiểm tra user đã tồn tại trong database chưa
-        // Lưu ý: Nếu introspect token thành công, nghĩa là user đã tồn tại trong backend
-        // Chỉ check để lấy thêm thông tin (status, role) từ database
-        console.log('🔍 Checking if user exists in database...', {
-          email: userInfo.email,
-          userId: userInfo.id,
-          rolesFromToken: userInfo.roles || userInfo.roleName,
-        });
-        
-        let userExists = false;
-        let databaseRole: string | null = null;
-        let userStatus: string | null = null;
-        
-        try {
-          const checkResponse = await fetch(`/api/system/users/check?email=${encodeURIComponent(userInfo.email)}`, {
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${localStorage.getItem('auth_access_token') || ''}`
-            }
-          });
-
-          console.log('📋 Check response status:', checkResponse.status);
-
-          if (checkResponse.ok) {
-            const checkData = await checkResponse.json();
-            console.log('📋 User check response:', JSON.stringify(checkData, null, 2));
-            
-            if (checkData.exists) {
-              userExists = true;
-              databaseRole = checkData.user?.role || null;
-              userStatus = checkData.user?.status || null;
-              
-              console.log('✅ User exists in database:', {
-                email: checkData.user?.email,
-                status: userStatus,
-                role: databaseRole
-              });
-              
-              // Kiểm tra user status
-              if (userStatus === 'INACTIVE') {
-                console.log('❌ User INACTIVE, needs admin activation');
-                await authService.logout();
-                router.push('/login?error=inactive');
-                return;
-              }
-            } else {
-              // User CHƯA tồn tại trong database → Tự động tạo user mới
-              console.log('ℹ️ User not found in database, creating new user...');
-              
-              // Lấy role từ token hoặc selectedRole để tạo user với role đúng
-              const rolesFromToken = userInfo.roles || userInfo.roleName || [];
-              const roleToCreate = role || rolesFromToken[0] || userInfo.role || 'user';
-              
-              console.log('🔑 Creating user with role:', {
-                roleToCreate: roleToCreate,
-                selectedRole: role,
-                rolesFromToken: rolesFromToken,
-                userInfoRole: userInfo.role
-              });
-              
-              try {
-                // Tạo user mới với thông tin từ Google OAuth và role
-                const createUserResponse = await fetch('/api/system/users?action=create', {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${localStorage.getItem('auth_access_token') || ''}`
-                  },
-                  body: JSON.stringify({
-                    email: userInfo.email,
-                    full_name: userInfo.name || userInfo.firstName && userInfo.lastName 
-                      ? `${userInfo.firstName} ${userInfo.lastName}`
-                      : userInfo.email,
-                    firstName: userInfo.firstName || '',
-                    lastName: userInfo.lastName || '',
-                    phone_number: userInfo.phoneNumber || '',
-                    role: roleToCreate, // Gửi role để backend lưu vào database
-                  })
-                });
-
-                console.log('📋 Create user response status:', createUserResponse.status);
-
-                if (createUserResponse.ok) {
-                  const createData = await createUserResponse.json();
-                  console.log('✅ User created successfully:', createData);
-                  
-                  // Lấy role từ user mới tạo hoặc từ token
-                  databaseRole = createData.role || userInfo.roles?.[0] || userInfo.role || 'user';
-                  userStatus = createData.status || 'ACTIVE';
-                  userExists = true;
-                  
-                  console.log('✅ New user created with role:', databaseRole);
-                } else {
-                  let errorData: any = {};
-                  try {
-                    errorData = await createUserResponse.json();
-                  } catch (parseError) {
-                    const errorText = await createUserResponse.text().catch(() => 'Unknown error');
-                    console.error('❌ Failed to parse error response:', errorText);
-                    errorData = { error: errorText };
-                  }
-                  
-                  console.error('❌ Failed to create user:', errorData);
-                  
-                  // Nếu lỗi là email đã tồn tại, có thể user đã được tạo ở request khác
-                  const errorMessage = typeof errorData.error === 'string' ? errorData.error : '';
-                  const isDuplicateError = errorData.responseCode === 'U0002' || 
-                    (errorMessage && errorMessage.includes('đã tồn tại'));
-                  
-                  if (isDuplicateError) {
-                    console.warn('⚠️ User might already exist, trying to continue...');
-                    // Sử dụng role từ token
-                    const rolesFromToken = userInfo.roles || userInfo.roleName || [];
-                    databaseRole = rolesFromToken[0] || userInfo.role || 'user';
-                    userExists = true;
-                  } else {
-                    // Lỗi khác, không thể tạo user
-                    const errorMsg = typeof errorData.error === 'string' 
-                      ? errorData.error 
-                      : (typeof errorData.message === 'string' 
-                        ? errorData.message 
-                        : 'Không thể tạo tài khoản');
-                    throw new Error(errorMsg);
-                  }
-                }
-              } catch (createError) {
-                console.error('❌ Error creating user:', createError);
-                throw new Error('Không thể tạo tài khoản. Vui lòng liên hệ admin.');
-              }
-            }
-          } else {
-            // Nếu API check fail (500, etc), thử tạo user mới
-            const errorText = await checkResponse.text().catch(() => 'Unknown error');
-            console.error('❌ Check API failed:', {
-              status: checkResponse.status,
-              error: errorText
-            });
-            
-            console.log('ℹ️ Check API failed, trying to create user...');
-            
-            // Lấy role từ token hoặc selectedRole
-            const rolesFromToken = userInfo.roles || userInfo.roleName || [];
-            const roleToCreate = role || rolesFromToken[0] || userInfo.role || 'user';
-            
-            try {
-              // Tạo user mới với thông tin từ Google OAuth và role
-              const createUserResponse = await fetch('/api/system/users?action=create', {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Authorization': `Bearer ${localStorage.getItem('auth_access_token') || ''}`
-                },
-                body: JSON.stringify({
-                  email: userInfo.email,
-                  full_name: userInfo.name || userInfo.firstName && userInfo.lastName 
-                    ? `${userInfo.firstName} ${userInfo.lastName}`
-                    : userInfo.email,
-                  firstName: userInfo.firstName || '',
-                  lastName: userInfo.lastName || '',
-                  phone_number: userInfo.phoneNumber || '',
-                  role: roleToCreate, // Gửi role để backend lưu vào database
-                })
-              });
-
-              if (createUserResponse.ok) {
-                const createData = await createUserResponse.json();
-                console.log('✅ User created successfully:', createData);
-                
-                databaseRole = createData.role || userInfo.roles?.[0] || userInfo.role || 'user';
-                userStatus = createData.status || 'ACTIVE';
-                userExists = true;
-              } else {
-                let errorData: any = {};
-                try {
-                  errorData = await createUserResponse.json();
-                } catch (parseError) {
-                  const errorText = await createUserResponse.text().catch(() => 'Unknown error');
-                  console.error('❌ Failed to parse error response:', errorText);
-                  errorData = { error: errorText };
-                }
-                
-                // Nếu lỗi là email đã tồn tại, có thể user đã được tạo
-                const errorMessage = typeof errorData.error === 'string' ? errorData.error : '';
-                const isDuplicateError = errorData.responseCode === 'U0002' || 
-                  (errorMessage && errorMessage.includes('đã tồn tại'));
-                
-                if (isDuplicateError) {
-                  console.warn('⚠️ User might already exist, using role from token');
-                  const rolesFromToken = userInfo.roles || userInfo.roleName || [];
-                  databaseRole = rolesFromToken[0] || userInfo.role || 'user';
-                  userExists = true;
-                } else {
-                  const errorMsg = typeof errorData.error === 'string' 
-                    ? errorData.error 
-                    : (typeof errorData.message === 'string' 
-                      ? errorData.message 
-                      : 'Không thể tạo tài khoản');
-                  throw new Error(errorMsg);
-                }
-              }
-            } catch (createError) {
-              console.error('❌ Error creating user:', createError);
-              // Nếu không thể tạo user, vẫn thử tiếp tục với role từ token
-              const rolesFromToken = userInfo.roles || userInfo.roleName || [];
-              databaseRole = rolesFromToken[0] || userInfo.role || 'user';
-              userExists = true; // Vẫn cho phép login vì introspect đã thành công
-              console.warn('⚠️ Could not create user, but introspect succeeded, allowing login with role from token');
-            }
-          }
-        } catch (checkError) {
-          console.error('❌ Error checking user existence:', checkError);
-          
-          // Thử tạo user mới
-          console.log('ℹ️ Check API error, trying to create user...');
-          
-          // Lấy role từ token hoặc selectedRole
-          const rolesFromToken = userInfo.roles || userInfo.roleName || [];
-          const roleToCreate = role || rolesFromToken[0] || userInfo.role || 'user';
-          
-          try {
-            const createUserResponse = await fetch('/api/system/users?action=create', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${localStorage.getItem('auth_access_token') || ''}`
-              },
-              body: JSON.stringify({
-                email: userInfo.email,
-                full_name: userInfo.name || userInfo.firstName && userInfo.lastName 
-                  ? `${userInfo.firstName} ${userInfo.lastName}`
-                  : userInfo.email,
-                firstName: userInfo.firstName || '',
-                lastName: userInfo.lastName || '',
-                phone_number: userInfo.phoneNumber || '',
-                role: roleToCreate, // Gửi role để backend lưu vào database
-              })
-            });
-
-            if (createUserResponse.ok) {
-              const createData = await createUserResponse.json();
-              console.log('✅ User created successfully:', createData);
-              
-              databaseRole = createData.role || userInfo.roles?.[0] || userInfo.role || 'user';
-              userStatus = createData.status || 'ACTIVE';
-              userExists = true;
-            } else {
-              let errorData: any = {};
-              try {
-                errorData = await createUserResponse.json();
-              } catch (parseError) {
-                const errorText = await createUserResponse.text().catch(() => 'Unknown error');
-                console.error('❌ Failed to parse error response:', errorText);
-                errorData = { error: errorText };
-              }
-              
-              const errorMessage = typeof errorData.error === 'string' ? errorData.error : '';
-              const isDuplicateError = errorData.responseCode === 'U0002' || 
-                (errorMessage && errorMessage.includes('đã tồn tại'));
-              
-              if (isDuplicateError) {
-                console.warn('⚠️ User might already exist, using role from token');
-                const rolesFromToken = userInfo.roles || userInfo.roleName || [];
-                databaseRole = rolesFromToken[0] || userInfo.role || 'user';
-                userExists = true;
-              } else {
-                // Nếu không thể tạo, vẫn cho phép login với role từ token
-                const rolesFromToken = userInfo.roles || userInfo.roleName || [];
-                databaseRole = rolesFromToken[0] || userInfo.role || 'user';
-                userExists = true;
-                console.warn('⚠️ Could not create user, but introspect succeeded, allowing login');
-              }
-            }
-          } catch (createError) {
-            console.error('❌ Error creating user:', createError);
-            // Nếu không thể tạo, vẫn cho phép login với role từ token
-            const rolesFromToken = userInfo.roles || userInfo.roleName || [];
-            databaseRole = rolesFromToken[0] || userInfo.role || 'user';
-            userExists = true;
-            console.warn('⚠️ Could not create user, but introspect succeeded, allowing login');
-          }
-        }
-
-        // Nếu vẫn không có user (không thể tạo và không có trong database)
-        if (!userExists) {
-          console.log('❌ User not found and could not be created, blocking login');
-          await authService.logout();
-          router.push('/login?error=user_not_found');
-          return;
-        }
+        // Kiểm tra / tạo user với luồng tuyến tính, chỉ gọi check một lần
+        const selectedRoleFromLogin = role;
+        const { databaseRole, userStatus } = await handleUserProvisioning(
+          userInfo,
+          selectedRoleFromLogin
+        );
 
         // Kiểm tra role: User chỉ có thể đăng nhập với role của mình trong database
         // Chỉ admin mới có thể đăng nhập với role khác
-        const selectedRoleFromLogin = role; // Role đã chọn trong login page
-        
         console.log('🔍 Role validation:', {
-          databaseRole: databaseRole,
+          databaseRole,
           selectedRole: selectedRoleFromLogin,
           userInfoRole: userInfo.role,
           rolesFromToken: userInfo.roles || userInfo.roleName,
@@ -391,8 +239,9 @@ function AuthCallbackInner() {
         // Nếu là admin, có thể đăng nhập với bất kỳ role nào (hoặc role đã chọn)
 
         // Sử dụng role từ database hoặc token (role thực tế), không phải role đã chọn
-        const actualRole = databaseRole || userInfo.role || 'user';
-        console.log('💾 Saving user info, role from database/token:', actualRole);
+        const rawActualRole = databaseRole || userInfo.role || 'user';
+        const actualRole = (await import('@/lib/auth-service')).mapRoleToAppRole(rawActualRole as string);
+        console.log('💾 Saving user info, role from database/token (mapped):', { rawActualRole, actualRole });
         
         localStorage.setItem('userRole', actualRole);
         localStorage.setItem('isLoggedIn', 'true');
@@ -409,6 +258,7 @@ function AuthCallbackInner() {
         }
         
         document.cookie = `role=${actualRole}; path=/; max-age=86400`;
+        document.cookie = `isLoggedIn=true; path=/; max-age=86400`;
 
         // Redirect dựa trên role từ database/token
         const redirectUrl = (() => {

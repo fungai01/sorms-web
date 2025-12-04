@@ -139,15 +139,11 @@ export function useApi<T>(
 async function fetchFromProxy<T>(endpoint: string): Promise<{ success: boolean; data?: T; error?: string }> {
   try {
     const headers: HeadersInit = { 'Content-Type': 'application/json' }
-    // Đính kèm Authorization header nếu có token để API route server-side có thể verifyToken
-    const token = authService.getAccessToken()
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`
-    }
 
-    const res = await fetch(endpoint, {
-      credentials: 'include',
-      headers
+    // Use authFetch to automatically attach Authorization from cookies/localStorage
+    const res = await (await import('@/lib/http')).authFetch(endpoint, {
+      headers,
+      credentials: 'include'
     })
 
     if (!res.ok) {
@@ -171,13 +167,30 @@ async function fetchFromProxy<T>(endpoint: string): Promise<{ success: boolean; 
   }
 }
 
+// Normalize list results to always return an array
+async function fetchList<T = any>(endpoint: string): Promise<ApiResponse<T[]>> {
+  const res = await fetchFromProxy<any>(endpoint)
+  if (!res.success) return { success: false, error: res.error || 'Request failed' }
+  const d = res.data
+  const items: T[] = Array.isArray(d?.items)
+    ? d.items
+    : Array.isArray(d?.data?.content)
+      ? d.data.content
+      : Array.isArray(d?.content)
+        ? d.content
+        : Array.isArray(d)
+          ? d
+          : []
+  return { success: true, data: items }
+}
+
 // Supported hooks tied to real APIs only - using Next.js API routes as proxy
 export function useRooms() {
-  return useApi(() => fetchFromProxy('/api/system/rooms'))
+  return useApi(() => fetchList('/api/system/rooms'))
 }
 
 export function useRoomTypes() {
-  return useApi(() => fetchFromProxy('/api/system/room-types'))
+  return useApi(() => fetchList('/api/system/room-types'))
 }
 
 // Booking hooks
@@ -201,19 +214,19 @@ export function useUserBookings() {
 }
 
 export function useServices() {
-  return useApi(() => fetchFromProxy('/api/system/services'))
+  return useApi(() => fetchList('/api/system/services'))
 }
 
 export function useServiceOrders() {
-  return useApi(() => fetchFromProxy('/api/user/orders'))
+  return useApi(() => fetchList('/api/user/orders'))
 }
 
 export function useStaffUsers() {
-  return useApi(() => fetchFromProxy('/api/user/staff'))
+  return useApi(() => fetchList('/api/user/staff'))
 }
 
 export function useCheckins() {
-  return useApi(() => fetchFromProxy('/api/system/checkins'))
+  return useApi(() => fetchList('/api/system/checkins'))
 }
 
 // Dashboard stats derived from real endpoints
@@ -236,4 +249,35 @@ export function usePaymentStats() {
 // Staff profiles
 export function useStaffProfiles() {
   return useApi(() => apiClient.getStaffProfiles())
+}
+
+// Users management
+export function useUsers(role?: string, page?: number, size?: number, keyword?: string) {
+  const params = new URLSearchParams()
+  if (role) params.set('role', role)
+  if (page !== undefined) params.set('page', String(page))
+  if (size !== undefined) params.set('size', String(size))
+  if (keyword) params.set('q', keyword)
+  const endpoint = `/api/system/users${params.toString() ? `?${params.toString()}` : ''}`
+  return useApi(() => fetchFromProxy(endpoint), [endpoint])
+}
+
+// Staff tasks
+export function useStaffTasks() {
+  return useApi(() => fetchFromProxy('/api/system/tasks'))
+}
+
+// Roles management
+export function useRoles(params?: { q?: string; page?: number; size?: number }) {
+  const query = new URLSearchParams()
+  if (params?.q) query.set('q', params.q)
+  if (params?.page !== undefined) query.set('page', String(params.page))
+  if (params?.size !== undefined) query.set('size', String(params.size))
+  const endpoint = `/api/system/roles${query.toString() ? `?${query.toString()}` : ''}`
+  return useApi(() => fetchFromProxy(endpoint), [endpoint])
+}
+
+// Payments (list via FE API route)
+export function usePayments() {
+  return useApi(() => fetchFromProxy('/api/system/payments'))
 }

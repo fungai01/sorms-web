@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
+import { useUsers } from "@/hooks/useApi";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
@@ -53,7 +54,9 @@ function UsersInner() {
     }
   }
   const [rows, setRows] = useState<User[]>([]);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState("")
+  // Load users with hook (auto refetch on query change)
+  const { data: usersData, loading, error, refetch: refetchUsers } = useUsers(undefined, 0, 100, query.trim() || undefined);
   const [sortKey, setSortKey] = useState<"id" | "name" | "email">("id");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [page, setPage] = useState(1);
@@ -75,7 +78,67 @@ function UsersInner() {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   const phoneRegex = /^[0-9]{10,11}$/;
 
-  async function refetchUsers() {
+  // Hook-based loading
+  useEffect(() => {
+    // update loading state from hook
+    setIsLoading(!!loading)
+  }, [loading])
+
+  useEffect(() => {
+    // map usersData -> rows
+    const data: any = usersData
+    if (!data) return
+    let users: any[] = []
+    if (Array.isArray(data?.items)) users = data.items
+    else if (Array.isArray(data?.data?.content)) users = data.data.content
+    else if (Array.isArray(data?.data)) users = data.data
+    else if (Array.isArray(data?.content)) users = data.content
+    else if (Array.isArray(data)) users = data
+    else {
+      const findArray = (obj: any, path = ''): any[] => {
+        if (Array.isArray(obj)) return obj
+        if (typeof obj !== 'object' || obj === null) return []
+        for (const k in obj) {
+          const r = findArray(obj[k], path ? `${path}.${k}` : k)
+          if (r.length) return r
+        }
+        return []
+      }
+      users = findArray(data)
+    }
+    const mappedUsers = users.map((u: any) => ({
+      id: u.id,
+      email: u.email || '',
+      fullName: u.fullName || u.full_name || `${u.firstName || ''} ${u.lastName || ''}`.trim() || u.email,
+      phoneNumber: u.phoneNumber || u.phone_number || '',
+      firstName: u.firstName || u.first_name || '',
+      lastName: u.lastName || u.last_name || '',
+      status: u.status || 'ACTIVE',
+      role: u.role || u.roles?.[0] || 'user',
+      dateOfBirth: u.dateOfBirth || u.date_of_birth || u.dob,
+      gender: u.gender,
+      address: u.address,
+      city: u.city,
+      state: u.state,
+      postalCode: u.postalCode || u.postal_code,
+      country: u.country,
+      avatarUrl: u.avatarUrl || u.avatar_url,
+      bio: u.bio,
+      preferredLanguage: u.preferredLanguage || u.preferred_language,
+      timezone: u.timezone,
+      emergencyContactName: u.emergencyContactName || u.emergency_contact_name,
+      emergencyContactPhone: u.emergencyContactPhone || u.emergency_contact_phone,
+      emergencyContactRelationship: u.emergencyContactRelationship || u.emergency_contact_relationship,
+      idCardNumber: u.idCardNumber || u.id_card_number,
+      idCardIssueDate: u.idCardIssueDate || u.id_card_issue_date,
+      idCardIssuePlace: u.idCardIssuePlace || u.id_card_issue_place,
+      createdDate: u.createdDate || u.created_date,
+      lastModifiedDate: u.lastModifiedDate || u.last_modified_date,
+    }))
+    setRows(mappedUsers)
+  }, [usersData])
+
+  async function refetch() {
     try {
       setIsLoading(true)
       
@@ -739,6 +802,78 @@ function UsersInner() {
                 </div>
               </div>
             </div>
+
+            {/* Thông tin liên hệ & địa chỉ */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+              {selected.address && (
+                <div className="rounded-lg border border-gray-200 p-3 bg-white">
+                  <div className="text-gray-500">Địa chỉ</div>
+                  <div className="font-medium text-gray-900 break-words">{selected.address}</div>
+                </div>
+              )}
+              {(selected.city || selected.state || selected.postalCode || selected.country) && (
+                <div className="rounded-lg border border-gray-200 p-3 bg-white">
+                  <div className="text-gray-500">Khu vực</div>
+                  <div className="font-medium text-gray-900 break-words">
+                    {[selected.city, selected.state, selected.postalCode, selected.country].filter(Boolean).join(', ') || '—'}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Thông tin bổ sung */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+              {selected.dateOfBirth && (
+                <div className="rounded-lg border border-gray-200 p-3 bg-white">
+                  <div className="text-gray-500">Ngày sinh</div>
+                  <div className="font-medium text-gray-900">{selected.dateOfBirth}</div>
+                </div>
+              )}
+              {selected.gender && (
+                <div className="rounded-lg border border-gray-200 p-3 bg-white">
+                  <div className="text-gray-500">Giới tính</div>
+                  <div className="font-medium text-gray-900">{selected.gender}</div>
+                </div>
+              )}
+              {(selected.preferredLanguage || selected.timezone) && (
+                <div className="rounded-lg border border-gray-200 p-3 bg-white sm:col-span-2">
+                  <div className="text-gray-500 mb-1">Ngôn ngữ & Múi giờ</div>
+                  <div className="font-medium text-gray-900">
+                    {selected.preferredLanguage || '—'} {selected.timezone ? `• ${selected.timezone}` : ''}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Liên hệ khẩn cấp */}
+            {(selected.emergencyContactName || selected.emergencyContactPhone || selected.emergencyContactRelationship) && (
+              <div className="rounded-lg border border-gray-200 p-3 bg-white text-sm">
+                <div className="text-gray-500 mb-1">Liên hệ khẩn cấp</div>
+                <div className="text-gray-900">
+                  {(selected.emergencyContactName || '—')}
+                  {selected.emergencyContactPhone ? ` • ${selected.emergencyContactPhone}` : ''}
+                  {selected.emergencyContactRelationship ? ` • ${selected.emergencyContactRelationship}` : ''}
+                </div>
+              </div>
+            )}
+
+            {/* Dấu thời gian */}
+            {(selected.createdDate || selected.lastModifiedDate) && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                {selected.createdDate && (
+                  <div className="rounded-lg border border-gray-200 p-3 bg-white">
+                    <div className="text-gray-500">Ngày tạo</div>
+                    <div className="font-medium text-gray-900">{new Date(selected.createdDate).toLocaleString('vi-VN')}</div>
+                  </div>
+                )}
+                {selected.lastModifiedDate && (
+                  <div className="rounded-lg border border-gray-200 p-3 bg-white">
+                    <div className="text-gray-500">Cập nhật</div>
+                    <div className="font-medium text-gray-900">{new Date(selected.lastModifiedDate).toLocaleString('vi-VN')}</div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         ) : null}
       </Modal>

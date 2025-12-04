@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useStaffTasks } from "@/hooks/useApi";
 import Input from "@/components/ui/Input";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
@@ -44,6 +45,18 @@ export default function TasksPage() {
   const [confirmOpen, setConfirmOpen] = useState<{ open: boolean, id?: number }>({ open: false })
 
   const [loading, setLoading] = useState(false)
+  // Hook: load tasks via API route
+  const { data: tasksData, loading: tasksLoading, error, refetch } = useStaffTasks()
+  useEffect(() => {
+    if (tasksData) {
+      if (Array.isArray((tasksData as any).items)) setRows(((tasksData as any).items) as StaffTask[])
+      else if (Array.isArray(tasksData as any)) setRows(tasksData as any)
+      else setRows([])
+    }
+    // Sync local loading indicator
+    setLoading(!!tasksLoading)
+  }, [tasksData, tasksLoading])
+  
   async function refetchTasks() {
     setLoading(true)
     try {
@@ -59,7 +72,7 @@ export default function TasksPage() {
       setLoading(false)
     }
   }
-  useEffect(() => { refetchTasks() }, [])
+  useEffect(() => { refetch() }, [])
 
   useEffect(() => { if (!flash) return; const t = setTimeout(() => setFlash(null), 3000); return () => clearTimeout(t) }, [flash])
 
@@ -105,7 +118,7 @@ export default function TasksPage() {
     try {
       const res = await fetch(`/api/system/tasks?id=${id}`, { method: 'DELETE' })
       if (!res.ok) throw new Error('Vô hiệu hóa công việc thất bại')
-      await refetchTasks()
+      await refetch()
       setFlash({ type: 'success', text: 'Đã vô hiệu hóa công việc.' })
     } catch (e: any) {
       setFlash({ type: 'error', text: e.message || 'Có lỗi xảy ra' })

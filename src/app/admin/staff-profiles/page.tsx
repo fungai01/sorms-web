@@ -33,6 +33,12 @@ export default function StaffProfilesPage() {
   const [openReview, setOpenReview] = useState(true);
   const [openSkills, setOpenSkills] = useState(true);
 
+  const formatCurrency = (value?: number | null) =>
+    typeof value === "number" && !Number.isNaN(value) ? `${value.toLocaleString("vi-VN")} VND` : "—";
+
+  const formatNumberDisplay = (value?: number | null) =>
+    typeof value === "number" && !Number.isNaN(value) ? value : "—";
+
   useEffect(() => {
     if (data && Array.isArray(data)) {
       setRows(data as StaffProfile[]);
@@ -486,6 +492,75 @@ export default function StaffProfilesPage() {
                 <div className="font-medium text-gray-900">{selected.officeLocation || "—"}</div>
               </div>
             </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+              <div className="rounded-lg border border-gray-200 p-3 bg-white">
+                <div className="text-gray-500">Mức lương tháng</div>
+                <div className="font-medium text-gray-900">{formatCurrency(selected.salary)}</div>
+              </div>
+              <div className="rounded-lg border border-gray-200 p-3 bg-white">
+                <div className="text-gray-500">Lương theo giờ</div>
+                <div className="font-medium text-gray-900">{formatCurrency(selected.hourlyRate)}</div>
+              </div>
+              <div className="rounded-lg border border-gray-200 p-3 bg-white">
+                <div className="text-gray-500">Ngày nghỉ phép còn lại</div>
+                <div className="font-medium text-gray-900">{formatNumberDisplay(selected.vacationDaysRemaining)}</div>
+              </div>
+              <div className="rounded-lg border border-gray-200 p-3 bg-white">
+                <div className="text-gray-500">Ngày nghỉ ốm còn lại</div>
+                <div className="font-medium text-gray-900">{formatNumberDisplay(selected.sickDaysRemaining)}</div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+              <div className="rounded-lg border border-gray-200 p-3 bg-white">
+                <div className="text-gray-500">Điểm đánh giá</div>
+                <div className="font-medium text-gray-900">{formatNumberDisplay(selected.performanceRating)}</div>
+              </div>
+              <div className="rounded-lg border border-gray-200 p-3 bg-white">
+                <div className="text-gray-500">Quản lý trực tiếp</div>
+                <div className="font-medium text-gray-900">{selected.managerId ?? "—"}</div>
+              </div>
+              <div className="rounded-lg border border-gray-200 p-3 bg-white">
+                <div className="text-gray-500">Đánh giá gần nhất</div>
+                <div className="font-medium text-gray-900">{selected.lastReviewDate || "—"}</div>
+              </div>
+              <div className="rounded-lg border border-gray-200 p-3 bg-white">
+                <div className="text-gray-500">Đánh giá kế tiếp</div>
+                <div className="font-medium text-gray-900">{selected.nextReviewDate || "—"}</div>
+              </div>
+            </div>
+
+            {(selected.terminationDate || selected.terminationReason) && (
+              <div className="rounded-lg border border-red-100 p-3 bg-red-50 text-sm">
+                <div className="text-gray-500 mb-1">Thông tin nghỉ việc</div>
+                <div className="text-gray-900">
+                  {selected.terminationDate ? `Ngày nghỉ việc: ${selected.terminationDate}` : ""}
+                  {selected.terminationReason ? ` • Lý do: ${selected.terminationReason}` : ""}
+                </div>
+              </div>
+            )}
+
+            {(selected.createdDate || selected.lastModifiedDate) && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                {selected.createdDate && (
+                  <div className="rounded-lg border border-gray-200 p-3 bg-white">
+                    <div className="text-gray-500">Ngày tạo</div>
+                    <div className="font-medium text-gray-900">
+                      {new Date(selected.createdDate).toLocaleString("vi-VN")}
+                    </div>
+                  </div>
+                )}
+                {selected.lastModifiedDate && (
+                  <div className="rounded-lg border border-gray-200 p-3 bg-white">
+                    <div className="text-gray-500">Cập nhật gần nhất</div>
+                    <div className="font-medium text-gray-900">
+                      {new Date(selected.lastModifiedDate).toLocaleString("vi-VN")}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {selected.notes && (
               <div className="rounded-lg border border-gray-200 p-3 bg-white text-sm">

@@ -43,13 +43,17 @@ export async function GET(request: Request) {
 
       const resp = await apiClient.getRoomsByRoomType(typeId)
       if (!resp.success) return NextResponse.json({ error: resp.error || 'Failed to fetch rooms by room type' }, { status: 500 })
-      return NextResponse.json(resp.data)
+      const data: any = resp.data
+      const items = Array.isArray(data?.content) ? data.content : (Array.isArray(data) ? data : [])
+      return NextResponse.json({ items, total: items.length })
     }
 
     // Get all rooms (default)
     const response = await apiClient.getRooms();
     if (response.success) {
-      return NextResponse.json(response.data);
+      const data: any = response.data
+      const items = Array.isArray(data?.content) ? data.content : (Array.isArray(data) ? data : [])
+      return NextResponse.json({ items, total: items.length });
     }
     return NextResponse.json({ error: response.error }, { status: 500 });
   } catch (error: any) {

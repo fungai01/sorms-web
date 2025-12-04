@@ -10,7 +10,12 @@ export default function RoleGuard({ children }: { children: React.ReactNode }) {
   const role = useCurrentRole();
 
   useEffect(() => {
-    if (!pathname || !role) return;
+    if (!pathname) return;
+
+    // Important: do NOT redirect to home when role is null on first render.
+    // Middleware will enforce auth on the server. Here we only correct mismatches when role is known.
+    if (!role) return;
+
     // Determine required role by path
     const requires: { [key: string]: string } = {
       "/admin": "admin",
@@ -34,7 +39,7 @@ export default function RoleGuard({ children }: { children: React.ReactNode }) {
 
     // If role does not match required area, push to correct base
     if (required !== role) {
-      const target = roleToBase[role] || "/login";
+      const target = roleToBase[role] || "/";
       router.replace(target);
     }
   }, [pathname, role, router]);

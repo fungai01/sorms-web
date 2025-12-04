@@ -65,11 +65,7 @@ export default function LoginPage() {
   };
 
   const handleGoogleSignIn = async () => {
-    if (!selectedRole) {
-      setError("Vui lòng chọn vai trò trước khi đăng nhập.");
-      return;
-    }
-
+    // Vai trò là tùy chọn, không bắt buộc chọn
     setIsLoading(true);
     setError("");
 

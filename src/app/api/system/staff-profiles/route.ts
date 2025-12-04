@@ -22,18 +22,24 @@ export async function GET(request: NextRequest) {
     if (status) {
       const resp = await apiClient.getStaffProfilesByStatus(status)
       if (!resp.success) return NextResponse.json({ error: resp.error || 'Failed to fetch staff profiles by status' }, { status: 500 })
-      return NextResponse.json(resp.data)
+      const raw: any = resp.data
+      const items = Array.isArray(raw?.content) ? raw.content : (Array.isArray(raw) ? raw : [])
+      return NextResponse.json({ items, total: items.length })
     }
 
     if (department) {
       const resp = await apiClient.getStaffProfilesByDepartment(department)
       if (!resp.success) return NextResponse.json({ error: resp.error || 'Failed to fetch staff profiles by department' }, { status: 500 })
-      return NextResponse.json(resp.data)
+      const raw: any = resp.data
+      const items = Array.isArray(raw?.content) ? raw.content : (Array.isArray(raw) ? raw : [])
+      return NextResponse.json({ items, total: items.length })
     }
 
     const resp = await apiClient.getStaffProfiles()
     if (!resp.success) return NextResponse.json({ error: resp.error || 'Failed to fetch staff profiles' }, { status: 500 })
-    return NextResponse.json(resp.data)
+    const raw: any = resp.data
+    const items = Array.isArray(raw?.content) ? raw.content : (Array.isArray(raw) ? raw : [])
+    return NextResponse.json({ items, total: items.length })
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || 'Internal server error' }, { status: 500 })
   }
@@ -81,6 +87,10 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: e?.message || 'Internal server error' }, { status: 500 })
   }
 }
+
+
+
+
 
 
 

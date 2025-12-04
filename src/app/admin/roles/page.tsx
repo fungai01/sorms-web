@@ -6,6 +6,7 @@ import Button from "@/components/ui/Button";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Table, THead, TBody } from "@/components/ui/Table";
 import Modal from "@/components/ui/Modal";
+import { useRoles } from "@/hooks/useApi";
 import Input from "@/components/ui/Input";
 
 type Role = {
@@ -21,6 +22,17 @@ function RolesInner() {
   const searchParams = useSearchParams();
   const [rows, setRows] = useState<Role[]>([]);
   const [loading, setLoading] = useState(false);
+
+  // Hook-based roles loading
+  const { data: rolesData, loading: rolesLoading, error, refetch } = useRoles({ page: 0, size: 100 })
+  useEffect(() => {
+    setLoading(!!rolesLoading)
+    if (!rolesData) return
+    let rolesArray: Role[] = []
+    if (Array.isArray((rolesData as any).items)) rolesArray = (rolesData as any).items
+    else if (Array.isArray(rolesData as any)) rolesArray = rolesData as any
+    setRows(rolesArray)
+  }, [rolesData, rolesLoading])
 
   async function refetchRoles() {
     setLoading(true)
@@ -58,7 +70,7 @@ function RolesInner() {
   }
 
   useEffect(() => {
-    refetchRoles()
+    refetch()
   }, [])
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -170,7 +182,7 @@ function RolesInner() {
       }
       setFormError(null);
       setOpen(false);
-      await refetchRoles()
+      await refetch()
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Có lỗi xảy ra';
       setFormError(message);

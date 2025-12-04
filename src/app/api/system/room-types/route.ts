@@ -24,7 +24,8 @@ export async function GET(request: NextRequest) {
     }
 
     // Get all room types (default) via configured BASE
-    const res = await fetch(`${BASE}/room-types`, { headers: { 'Content-Type': 'application/json', accept: '*/*' }, cache: 'no-store' })
+    const auth = request.headers.get('authorization') || ''
+    const res = await fetch(`${BASE}/room-types`, { headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) }, cache: 'no-store' })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
     return NextResponse.json(data?.data ?? data)

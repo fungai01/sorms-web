@@ -2,6 +2,7 @@
 import { NextRequest } from 'next/server'
 import { apiClient } from './api-client'
 import type { UserInfo } from './auth-service'
+import { mapRoleToAppRole } from './auth-service'
 
 /**
  * Get access token from request headers
@@ -113,6 +114,7 @@ export async function isAdmin(req: NextRequest): Promise<boolean> {
     return false
   }
 }
+
 
 
 

@@ -19,26 +19,18 @@ export async function middleware(req: NextRequest) {
 
 	const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
 
-	// Get role from cookie (set by auth callback from backend)
+	// Get role and login flag from cookies (set by client after auth)
 	const roleFromCookie = req.cookies.get("role")?.value;
+	const isLoggedInCookie = req.cookies.get("isLoggedIn")?.value === 'true';
 	const email = (token as any)?.email as string | undefined;
 
-	console.log('🔒 Middleware check:', { pathname, role: roleFromCookie, email, hasToken: !!token });
+	console.log('🔒 Middleware check:', { pathname, role: roleFromCookie, email, hasToken: !!token, isLoggedInCookie });
 
-	// If no email (no Next-Auth session), redirect to login
-	if (!email) {
-		console.log('❌ No email found, redirecting to login');
+	// Accept either Next-Auth session (email) OR role cookie OR isLoggedIn cookie
+	if (!email && !roleFromCookie && !isLoggedInCookie) {
+		console.log('❌ No session/email and no role/isLoggedIn cookie, redirecting to home page');
 		const url = req.nextUrl.clone();
-		url.pathname = "/login";
-		url.searchParams.set("error", "no_session");
-		return NextResponse.redirect(url);
-	}
-
-	// If no role, redirect to login
-	if (!roleFromCookie) {
-		console.log('❌ No role found, redirecting to login');
-		const url = req.nextUrl.clone();
-		url.pathname = "/login";
+		url.pathname = "/";
 		return NextResponse.redirect(url);
 	}
 

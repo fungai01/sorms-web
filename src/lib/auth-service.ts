@@ -1,5 +1,6 @@
 // Authentication service for managing auth state with backend API
 import { apiClient } from './api-client'
+import { cookieManager } from './http'
 
 export interface AuthTokens {
   accessToken: string
@@ -23,6 +24,33 @@ export interface UserInfo {
   dob?: string
   address?: string
   phoneNumber?: string
+}
+
+// Map backend roles/departments to app route roles (FE)
+// BE uses: ADMIN, MANAGER, STAFF, USER (plus some historical typos)
+export const mapRoleToAppRole = (role?: string): 'admin' | 'office' | 'staff' | 'user' => {
+  if (!role) return 'user'
+  const r = role.trim().toUpperCase()
+  // Admin variants
+  if (['ADMIN','ADMIN_SYSTEM','ADMIN_SYTEM','ADMINISTRATOR'].includes(r)) return 'admin'
+  // Manager/Office variants
+  if (['MANAGER','ADMINISTRATIVE','ADMINITRATIVE','OFFICE'].includes(r)) return 'office'
+  // Staff variants (includes SECURITY typo)
+  if (['STAFF','SECURITY','SERCURITY'].includes(r)) return 'staff'
+  // Lecturer/Guest/User -> user area
+  if (['LECTURER','GUEST','USER'].includes(r)) return 'user'
+  return 'user'
+}
+
+export const getHighestAppRole = (roles: Array<string | undefined>): 'admin' | 'office' | 'staff' | 'user' => {
+  const mapped = roles
+    .filter(Boolean)
+    .map(r => mapRoleToAppRole(String(r)))
+  // Priority: admin > office > staff > user
+  if (mapped.includes('admin')) return 'admin'
+  if (mapped.includes('office')) return 'office'
+  if (mapped.includes('staff')) return 'staff'
+  return 'user'
 }
 
 class AuthService {
@@ -381,6 +409,8 @@ Vui lòng thử đăng nhập lại.`
   setTokens(tokens: AuthTokens): void {
     if (typeof window !== 'undefined') {
       localStorage.setItem(this.ACCESS_TOKEN_KEY, tokens.accessToken)
+      // Set cookie for interceptor usage
+      try { cookieManager.setAccessToken(tokens.accessToken) } catch {}
       if (tokens.refreshToken) {
         localStorage.setItem(this.REFRESH_TOKEN_KEY, tokens.refreshToken)
       } else {
@@ -460,10 +490,24 @@ Vui lòng thử đăng nhập lại.`
     throw new Error(response.error || 'Làm mới token thất bại')
   }
 
-  // Set user info
+  // Set user info and sync cookies (role + user_info)
   setUserInfo(user: UserInfo): void {
     if (typeof window !== 'undefined') {
-      localStorage.setItem(this.USER_INFO_KEY, JSON.stringify(user))
+      try {
+        localStorage.setItem(this.USER_INFO_KEY, JSON.stringify(user))
+      } catch {}
+
+      // Determine app role from backend roles
+      const roles = user.roles || user.roleName || (user.role ? [user.role] : [])
+      const firstRole = Array.isArray(roles) && roles.length > 0 ? String(roles[0]) : (user.role || 'USER')
+      const appRole = mapRoleToAppRole(firstRole)
+
+      // Persist role for RoleGuard and server-middleware
+      try { localStorage.setItem('userRole', appRole) } catch {}
+      try { cookieManager.setRole(appRole) } catch {}
+
+      // Save user info in cookie for convenience (small, not secure storage)
+      try { cookieManager.setUserInfo({ id: user.id, email: user.email, name: user.name, role: appRole }) } catch {}
     }
   }
 
@@ -514,6 +558,7 @@ Vui lòng thử đăng nhập lại.`
         // Ưu tiên roles từ root, sau đó từ accountInfo
         const allRoles = rolesFromRoot.length > 0 ? rolesFromRoot : rolesFromAccountInfo
         
+        const appRole = mapRoleToAppRole(allRoles[0] || accountInfo.roleName?.[0] || accountInfo.role)
         const userInfo: UserInfo = {
           id: accountInfo.id || (data as any).accountId,
           email: accountInfo.email || '',
@@ -525,7 +570,7 @@ Vui lòng thử đăng nhập lại.`
             : accountInfo.firstName || accountInfo.lastName || accountInfo.email,
           picture: accountInfo.avatarUrl || accountInfo.picture,
           avatarUrl: accountInfo.avatarUrl,
-          role: allRoles[0] || accountInfo.roleName?.[0],
+          role: appRole,
           roleName: allRoles.length > 0 ? allRoles : (accountInfo.roleName || []),
           roles: allRoles.length > 0 ? allRoles : (accountInfo.roles || accountInfo.roleName || []),
           dob: accountInfo.dob,
@@ -644,8 +689,9 @@ Vui lòng thử đăng nhập lại.`
       sessionStorage.removeItem('userRole')
       sessionStorage.removeItem('previousPage')
       
-      // Xóa cookies
-      document.cookie = 'role=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+      // Xóa cookies (role/access_token/user_info)
+      try { cookieManager.clearAll() } catch {}
+      // Legacy cookies
       document.cookie = 'approved=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT'
     }
   }

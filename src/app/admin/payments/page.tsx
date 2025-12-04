@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { usePayments } from "@/hooks/useApi";
 import Input from "@/components/ui/Input";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
@@ -45,8 +46,18 @@ export default function PaymentsPage() {
 
   useEffect(() => { if (!flash) return; const t = setTimeout(() => setFlash(null), 3000); return () => clearTimeout(t) }, [flash])
 
+  // Hook for payments list
+  const { data: paymentsData, loading, error, refetch } = usePayments()
   useEffect(() => {
-    refetchPayments()
+    const data: any = paymentsData
+    if (!data) return
+    if (Array.isArray((data as any).items)) setRows((data as any).items as Payment[])
+    else if (Array.isArray(data as any)) setRows(data as any)
+    else setRows([])
+  }, [paymentsData])
+
+  useEffect(() => {
+    refetch()
   }, [])
 
   async function refetchPayments() {
@@ -115,7 +126,7 @@ export default function PaymentsPage() {
         if (!resp.ok) throw new Error('Tạo giao dịch mới thất bại')
         setFlash({ type: 'success', text: 'Đã tạo giao dịch mới.' })
       }
-      await refetchPayments()
+      await refetch()
     } catch (e: any) {
       setFlash({ type: 'error', text: e.message || 'Có lỗi xảy ra' })
       return

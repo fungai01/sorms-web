@@ -12,14 +12,16 @@ export async function GET(req: NextRequest) {
     if (orderId) {
       const idNum = Number(orderId)
       if (Number.isNaN(idNum)) return NextResponse.json({ error: 'Invalid orderId' }, { status: 400 })
-      const res = await fetch(`${BASE}/orders/${idNum}`, { headers: { 'Content-Type': 'application/json', accept: '*/*' } })
+      const auth = req.headers.get('authorization') || ''
+      const res = await fetch(`${BASE}/orders/${idNum}`, { headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) } })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
       return NextResponse.json(data.data ?? data)
     }
 
     if (myOrders) {
-      const res = await fetch(`${BASE}/orders/my-orders`, { headers: { 'Content-Type': 'application/json', accept: '*/*' } })
+      const auth = req.headers.get('authorization') || ''
+      const res = await fetch(`${BASE}/orders/my-orders`, { headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) } })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
       return NextResponse.json(data.data ?? data)

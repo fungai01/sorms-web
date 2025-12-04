@@ -1,6 +1,7 @@
 // API Client for connecting to backend
 import { API_CONFIG } from './config'
 import { authService } from './auth-service'
+import { authFetch } from './http'
 
 const API_BASE_URL = API_CONFIG.BASE_URL
 
@@ -63,10 +64,28 @@ class ApiClient {
     options: RequestInit = {}
   ): Promise<ApiResponse<T>> {
     try {
-      const url = `${this.baseURL}${endpoint}`
+      // Normalize URL to avoid double slashes
+      const baseURLWithoutTrailingSlash = this.baseURL.endsWith('/') ? this.baseURL.slice(0, -1) : this.baseURL
+      const endpointWithLeadingSlash = endpoint.startsWith('/') ? endpoint : `/${endpoint}`
+      const url = `${baseURLWithoutTrailingSlash}${endpointWithLeadingSlash}`
 
       // Thêm Authorization header nếu có token
-      const token = authService.getAccessToken()
+      let token = authService.getAccessToken()
+      // Try get token from server cookies when running in Next.js API route
+      if (!token) {
+        try {
+          const mod: any = await import('next/headers')
+          if (typeof mod.cookies === 'function') {
+            const maybePromise = mod.cookies()
+            const cookieStore =
+              typeof maybePromise?.then === 'function' ? await maybePromise : maybePromise
+            const cookieToken = cookieStore?.get?.('access_token')?.value
+            if (cookieToken) token = cookieToken
+          }
+        } catch {
+          // ignore (client-side or not in Next.js environment)
+        }
+      }
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
         ...(options.headers as Record<string, string> || {}),
@@ -97,7 +116,7 @@ class ApiClient {
         timestamp: new Date().toISOString()
       })
 
-      const response = await fetch(url, {
+      const response = await authFetch(url, {
         headers: headers as HeadersInit,
         ...options,
       })
@@ -491,6 +510,15 @@ class ApiClient {
     return this.post(`/orders/${orderId}/confirm`)
   }
 
+  // Payments
+  async createPayment(payload: { serviceOrderId: number; method: 'CASH' | 'PAYOS'; returnUrl: string; cancelUrl: string }) {
+    return this.post('/payments/create', payload)
+  }
+
+  async getPayment(transactionId: number | string) {
+    return this.get(`/payments/${transactionId}`)
+  }
+
   async getPaymentTransactions() {
     return { success: false, error: 'API not implemented yet' }
   }
@@ -505,7 +533,27 @@ class ApiClient {
     if (params?.page !== undefined) queryParams.set('page', params.page.toString());
     if (params?.size !== undefined) queryParams.set('size', params.size.toString());
     if (params?.keyword) queryParams.set('q', params.keyword);
-    if (params?.role) queryParams.set('role', params.role);
+
+    // Map FE role -> BE role code for search filters
+    const mapAppRoleToBackend = (r?: string): string | undefined => {
+      if (!r) return undefined
+      const v = String(r).trim().toUpperCase()
+      // Primary roles used by BE security annotations
+      if (v === 'ADMIN') return 'ADMIN'
+      if (v === 'STAFF') return 'STAFF'
+      if (v === 'MANAGER') return 'MANAGER'
+      if (v === 'USER') return 'USER'
+      // FE route aliases
+      if (v === 'OFFICE') return 'MANAGER' // office area maps to manager-level access
+      // Legacy synonyms from older data
+      if (v === 'ADMIN_SYSTEM' || v === 'ADMIN_SYTEM' || v === 'ADMINISTRATOR') return 'ADMIN'
+      if (v === 'ADMINITRATIVE' || v === 'ADMINISTRATIVE') return 'MANAGER'
+      if (v === 'SERCURITY' || v === 'SECURITY') return 'STAFF'
+      return undefined
+    }
+
+    const mappedRole = mapAppRoleToBackend(params?.role)
+    if (mappedRole) queryParams.set('role', mappedRole)
 
     const endpoint = `/users/search${queryParams.toString() ? '?' + queryParams.toString() : ''}`;
     return this.get(endpoint);

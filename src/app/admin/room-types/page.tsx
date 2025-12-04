@@ -694,20 +694,51 @@ export default function RoomTypesPage() {
                     </div>
                   </div>
 
-                  {/* Giá cơ bản */}
-                  <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-blue-200">
-                    <div className="flex items-center gap-2 mb-2">
-                      <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
-                      </svg>
-                      <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Giá cơ bản</span>
-                    </div>
-                    <p className="text-base sm:text-lg font-bold text-blue-900">
-                      {selected.basePrice === 0 ? 'Miễn phí' : `${selected.basePrice.toLocaleString('vi-VN')} VND`}
-                    </p>
-                  </div>
                 </div>
               </div>
+
+              {selected.description && (
+                <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-gray-200">
+                  <div className="text-xs sm:text-sm font-semibold text-gray-500 mb-1">Mô tả</div>
+                  <p className="text-sm text-gray-800 whitespace-pre-line">{selected.description}</p>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-gray-200">
+                  <div className="text-xs sm:text-sm font-semibold text-gray-500 mb-1">Trạng thái hoạt động</div>
+                  <p className="text-sm font-medium text-gray-900">
+                    {selected.isActive !== false ? 'Đang sử dụng' : 'Đang vô hiệu'}
+                  </p>
+                </div>
+                <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-gray-200">
+                  <div className="text-xs sm:text-sm font-semibold text-gray-500 mb-1">Giá cơ bản</div>
+                  <p className="text-sm font-medium text-gray-900">
+                    {selected.basePrice === 0 ? 'Miễn phí' : `${selected.basePrice.toLocaleString('vi-VN')} VND`}
+                  </p>
+                </div>
+              </div>
+
+              {(selected.createdDate || selected.lastModifiedDate) && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                  {selected.createdDate && (
+                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-gray-200">
+                      <div className="text-xs sm:text-sm font-semibold text-gray-500 mb-1">Ngày tạo</div>
+                      <p className="text-sm font-medium text-gray-900">
+                        {new Date(selected.createdDate).toLocaleString('vi-VN')}
+                      </p>
+                    </div>
+                  )}
+                  {selected.lastModifiedDate && (
+                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-gray-200">
+                      <div className="text-xs sm:text-sm font-semibold text-gray-500 mb-1">Cập nhật gần nhất</div>
+                      <p className="text-sm font-medium text-gray-900">
+                        {new Date(selected.lastModifiedDate).toLocaleString('vi-VN')}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -15,6 +15,15 @@ export async function GET(req: NextRequest) {
     const response = await apiClient.getStaffUsers()
 
     if (!response.success) {
+      const msg = (response.error || '').toLowerCase()
+      // Map auth-related errors
+      if (msg.includes('unauthorized') || msg.includes('unauthenticated') || msg.includes('forbidden') || msg.includes('403')) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+      }
+      // If endpoint not implemented or not found, return empty list gracefully
+      if (msg.includes('not implemented') || msg.includes('not found') || msg.includes('404')) {
+        return NextResponse.json([])
+      }
       return NextResponse.json(
         { error: response.error || 'Failed to fetch staff users' },
         { status: 500 }
@@ -35,6 +44,4 @@ export async function GET(req: NextRequest) {
     )
   }
 }
-
-
 

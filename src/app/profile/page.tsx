@@ -143,7 +143,7 @@ export default function ProfilePage() {
     setEditModalOpen(true);
   };
 
-  const handleUpdateProfile = () => {
+  const handleUpdateProfile = async () => {
     // Validation
     if (!editForm.name.trim()) {
       setFlash({ type: 'error', text: 'Vui lòng nhập họ và tên' });
@@ -174,6 +174,38 @@ export default function ProfilePage() {
       return;
     }
 
+    try {
+      setLoading(true);
+      
+      // Prepare update data
+      const updateData = {
+        id: profile.id,
+        full_name: editForm.name,
+        email: editForm.email,
+        phone_number: editForm.phoneNumber,
+        position: editForm.position,
+        department: editForm.department,
+        avatar_url: editForm.avatar
+      };
+
+      // Call API to update profile
+      const res = await fetch('/api/system/users', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth_access_token') || ''}`
+        },
+        credentials: 'include',
+        body: JSON.stringify(updateData)
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Có lỗi xảy ra' }));
+        setFlash({ type: 'error', text: err.error || 'Có lỗi xảy ra khi cập nhật hồ sơ' });
+        return;
+      }
+
+      // Update local state
     setProfile(prev => ({
       ...prev,
       name: editForm.name,
@@ -183,8 +215,15 @@ export default function ProfilePage() {
       department: editForm.department,
       avatar: editForm.avatar
     }));
+      
     setEditModalOpen(false);
     setFlash({ type: 'success', text: 'Cập nhật thông tin cá nhân thành công!' });
+    } catch (error) {
+      setFlash({ type: 'error', text: 'Có lỗi xảy ra khi cập nhật hồ sơ' });
+      console.error('Profile update error:', error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (

@@ -637,6 +637,33 @@ export default function RoomsPage() {
                 </div>
               </div>
 
+              {selected.description && (
+                <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-gray-200">
+                  <div className="text-xs sm:text-sm font-semibold text-gray-500 mb-1">Mô tả</div>
+                  <p className="text-sm text-gray-800 whitespace-pre-line">{selected.description}</p>
+                </div>
+              )}
+
+              {(selected.created_at || selected.updated_at) && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                  {selected.created_at && (
+                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-gray-200">
+                      <div className="text-xs sm:text-sm font-semibold text-gray-500 mb-1">Ngày tạo</div>
+                      <p className="text-sm font-medium text-gray-900">
+                        {new Date(selected.created_at).toLocaleString('vi-VN')}
+                      </p>
+                    </div>
+                  )}
+                  {selected.updated_at && (
+                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-gray-200">
+                      <div className="text-xs sm:text-sm font-semibold text-gray-500 mb-1">Cập nhật gần nhất</div>
+                      <p className="text-sm font-medium text-gray-900">
+                        {new Date(selected.updated_at).toLocaleString('vi-VN')}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
