@@ -147,9 +147,6 @@ export default function LoginPage() {
           <div className="mb-6">
             <label className="block text-sm font-semibold text-gray-700 mb-2">
               Chọn vai trò (tùy chọn)
-              <span className="text-xs font-normal text-gray-500 ml-2">
-                - Để trống để đăng nhập với vai trò mặc định
-              </span>
             </label>
             <div className="relative">
               <button
