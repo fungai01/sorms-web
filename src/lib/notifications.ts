@@ -1,3 +1,5 @@
+import { generateUniqueId } from './utils'
+
 export interface Notification {
   id: number;
   title: string;
@@ -20,10 +22,8 @@ const fixDuplicateIds = (notifications: Notification[]): Notification[] => {
   
   for (const notification of notifications) {
     if (seenIds.has(notification.id)) {
-      // Generate new unique ID for duplicate
-      const timestamp = Date.now();
-      const random = Math.floor(Math.random() * 1000);
-      const newId = parseInt(`${timestamp}${random.toString().padStart(3, '0')}`);
+      // Generate new unique ID for duplicate using shared util
+      const newId = generateUniqueId();
       fixedNotifications.push({ ...notification, id: newId });
       seenIds.add(newId);
     } else {
@@ -71,14 +71,6 @@ export const saveNotifications = (notifications: Notification[]): void => {
 
 export const addNotification = (notification: Omit<Notification, 'id' | 'time' | 'unread'>): void => {
   const notifications = getNotifications();
-  
-  // Generate unique ID by combining timestamp with random number
-  const generateUniqueId = () => {
-    const timestamp = Date.now();
-    const random = Math.floor(Math.random() * 1000);
-    return parseInt(`${timestamp}${random.toString().padStart(3, '0')}`);
-  };
-  
   const newNotification: Notification = {
     ...notification,
     id: generateUniqueId(),

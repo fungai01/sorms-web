@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { authService } from "@/lib/auth-service";
+import { authService, mapRoleToAppRole } from "@/lib/auth-service";
 
 function AuthCallbackInner() {
   const router = useRouter();
@@ -16,141 +16,26 @@ function AuthCallbackInner() {
   const state = searchParams.get("state");
   const errorParam = searchParams.get("error");
   
-  // Lấy role từ sessionStorage (đã lưu khi login)
+  // Lấy role từ sessionStorage (đã lưu khi login) - optional, chỉ dùng để validate
   const role = typeof window !== 'undefined' ? sessionStorage.getItem('selectedRole') : null;
 
   useEffect(() => {
-    const getBearerToken = () => {
-      if (typeof window === 'undefined') return '';
-      return localStorage.getItem('auth_access_token') || '';
-    };
 
-    const handleUserProvisioning = async (
-      userInfo: any,
-      selectedRoleFromLogin: string | null
-    ): Promise<{ databaseRole: string; userStatus: string }> => {
-      console.log('🔍 Checking if user exists in database (single check)...', {
-        email: userInfo.email,
-        userId: userInfo.id,
-        rolesFromToken: userInfo.roles || userInfo.roleName,
-      });
-
-      const bearerToken = getBearerToken();
-      if (!bearerToken) {
-        console.error('❌ Missing bearer token for user provisioning');
-        throw new Error('Không tìm thấy token xác thực. Vui lòng đăng nhập lại.');
+    // Backend đã tự động tạo user trong OutboundAuthenticationService.createNewAccountFromOAuth()
+    // Frontend không cần check/create user nữa
+    // Chỉ cần lấy role từ token/introspect response (đã được backend xác thực)
+    const getUserRoleFromToken = (userInfo: any): string => {
+      // Ưu tiên roles từ token/introspect response
+      const roles = userInfo.roles || userInfo.roleName || [];
+      if (Array.isArray(roles) && roles.length > 0) {
+        return String(roles[0]);
       }
-
-      const checkResponse = await fetch(
-        `/api/system/users/check?email=${encodeURIComponent(userInfo.email)}`,
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${bearerToken}`,
-          },
-        }
-      );
-
-      console.log('📋 Check response status:', checkResponse.status);
-
-      if (!checkResponse.ok) {
-        const errorText = await checkResponse.text().catch(() => 'Unknown error');
-        console.error('❌ Check API failed:', {
-          status: checkResponse.status,
-          error: errorText,
-        });
-        throw new Error('Không thể kiểm tra trạng thái tài khoản. Vui lòng thử lại sau.');
+      // Fallback to role field
+      if (userInfo.role) {
+        return String(userInfo.role);
       }
-
-      const checkData = await checkResponse.json();
-      console.log('📋 User check response:', JSON.stringify(checkData, null, 2));
-
-      if (checkData.exists && checkData.user) {
-        const databaseRole = checkData.user.role || (userInfo.roles?.[0] as string) || userInfo.role || 'user';
-        const userStatus = checkData.user.status || 'ACTIVE';
-
-        console.log('✅ User exists in database:', {
-          email: checkData.user.email,
-          status: userStatus,
-          role: databaseRole,
-        });
-
-        if (userStatus === 'INACTIVE') {
-          console.log('❌ User INACTIVE, needs admin activation');
-          throw new Error('Tài khoản của bạn đang bị khóa, vui lòng liên hệ quản trị viên.');
-        }
-
-        return { databaseRole, userStatus };
-      }
-
-      // User chưa tồn tại trong database -> tạo mới một lần
-      console.log('ℹ️ User not found in database, creating new user...');
-
-      const rolesFromToken = userInfo.roles || userInfo.roleName || [];
-      const roleToCreate =
-        selectedRoleFromLogin || rolesFromToken[0] || userInfo.role || 'user';
-
-      console.log('🔑 Creating user with role:', {
-        roleToCreate,
-        selectedRole: selectedRoleFromLogin,
-        rolesFromToken,
-        userInfoRole: userInfo.role,
-      });
-
-      const createUserResponse = await fetch('/api/system/users?action=create', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${bearerToken}`,
-        },
-        body: JSON.stringify({
-          email: userInfo.email,
-          full_name:
-            userInfo.name ||
-            (userInfo.firstName && userInfo.lastName
-              ? `${userInfo.firstName} ${userInfo.lastName}`
-              : userInfo.email),
-          firstName: userInfo.firstName || '',
-          lastName: userInfo.lastName || '',
-          phone_number: userInfo.phoneNumber || '',
-          role: roleToCreate,
-        }),
-      });
-
-      console.log('📋 Create user response status:', createUserResponse.status);
-
-      if (!createUserResponse.ok) {
-        let errorData: any = {};
-        try {
-          errorData = await createUserResponse.json();
-        } catch (parseError) {
-          const errorText = await createUserResponse.text().catch(() => 'Unknown error');
-          console.error('❌ Failed to parse error response:', errorText);
-          errorData = { error: errorText };
-        }
-
-        console.error('❌ Failed to create user:', errorData);
-
-        const errorMsg =
-          typeof errorData.error === 'string'
-            ? errorData.error
-            : typeof errorData.message === 'string'
-            ? errorData.message
-            : 'Không thể tạo tài khoản. Vui lòng liên hệ admin.';
-
-        throw new Error(errorMsg);
-      }
-
-      const createData = await createUserResponse.json();
-      console.log('✅ User created successfully:', createData);
-
-      const databaseRole =
-        createData.role || (userInfo.roles?.[0] as string) || userInfo.role || 'user';
-      const userStatus = createData.status || 'ACTIVE';
-
-      console.log('✅ New user created with role:', databaseRole);
-
-      return { databaseRole, userStatus };
+      // Default to USER
+      return 'USER';
     };
 
     // Đảm bảo chỉ xử lý 1 lần (tránh React strict mode hoặc re-render)
@@ -197,22 +82,31 @@ function AuthCallbackInner() {
         const tokens = await authService.handleOAuthCallback(code, state || undefined);
         console.log('✅ Tokens received successfully');
 
-        // Introspect token để lấy user info
-        console.log('🔄 Introspecting token...');
-        const userInfo = await authService.introspectToken();
+        // Lấy user info từ localStorage (đã được lưu trong handleOAuthCallback)
+        // Nếu không có, gọi introspectToken để lấy từ backend
+        let userInfo = authService.getUserInfo();
         
         if (!userInfo || !userInfo.email) {
-          throw new Error('Không thể lấy thông tin người dùng');
+          console.log('🔄 User info not found in storage, introspecting token...');
+          userInfo = await authService.introspectToken();
+          
+          if (!userInfo || !userInfo.email) {
+            throw new Error('Không thể lấy thông tin người dùng. Vui lòng thử đăng nhập lại.');
+          }
         }
 
-        console.log('✅ User info:', userInfo);
+        console.log('✅ User info:', {
+          id: userInfo.id,
+          email: userInfo.email,
+          name: userInfo.name,
+          roles: userInfo.roles,
+          role: userInfo.role,
+        });
 
-        // Kiểm tra / tạo user với luồng tuyến tính, chỉ gọi check một lần
-        const selectedRoleFromLogin = role;
-        const { databaseRole, userStatus } = await handleUserProvisioning(
-          userInfo,
-          selectedRoleFromLogin
-        );
+        // Backend đã tự động tạo user trong OAuth flow
+        // Lấy role từ token/introspect response (đã được backend xác thực)
+        const databaseRole = getUserRoleFromToken(userInfo);
+        const selectedRoleFromLogin = role; // Role user selected on login page (optional)
 
         // Kiểm tra role: User chỉ có thể đăng nhập với role của mình trong database
         // Chỉ admin mới có thể đăng nhập với role khác
@@ -221,25 +115,27 @@ function AuthCallbackInner() {
           selectedRole: selectedRoleFromLogin,
           userInfoRole: userInfo.role,
           rolesFromToken: userInfo.roles || userInfo.roleName,
-          isAdmin: databaseRole === 'admin'
+          isAdmin: databaseRole.toUpperCase() === 'ADMIN'
         });
 
-        if (databaseRole && databaseRole !== 'admin') {
-          // Nếu không phải admin, phải đăng nhập với role của mình
-          if (selectedRoleFromLogin && selectedRoleFromLogin !== databaseRole) {
-            console.log('❌ Role mismatch: User tried to login with different role', {
-              databaseRole: databaseRole,
-              selectedRole: selectedRoleFromLogin
-            });
-            await authService.logout();
-            router.push('/login?error=role_mismatch');
-            return;
-          }
-        }
-        // Nếu là admin, có thể đăng nhập với bất kỳ role nào (hoặc role đã chọn)
+        // Map backend role to app role for comparison
+        const mappedDatabaseRole = mapRoleToAppRole(databaseRole);
+        const mappedSelectedRole = selectedRoleFromLogin ? mapRoleToAppRole(selectedRoleFromLogin) : null;
 
-        // Sử dụng role từ database hoặc token (role thực tế), không phải role đã chọn
-        const rawActualRole = databaseRole || userInfo.role || 'user';
+        if (mappedDatabaseRole !== 'admin' && mappedSelectedRole && mappedSelectedRole !== mappedDatabaseRole) {
+          // Non-admin user tried to login with different role
+          console.log('❌ Role mismatch: User tried to login with different role', {
+            databaseRole: mappedDatabaseRole,
+            selectedRole: mappedSelectedRole
+          });
+          await authService.logout();
+          router.push('/login?error=role_mismatch');
+          return;
+        }
+        // Admin có thể đăng nhập với bất kỳ role nào (hoặc role đã chọn)
+
+        // Sử dụng role từ token (role thực tế từ backend)
+        const rawActualRole = databaseRole;
         const actualRole = (await import('@/lib/auth-service')).mapRoleToAppRole(rawActualRole as string);
         console.log('💾 Saving user info, role from database/token (mapped):', { rawActualRole, actualRole });
         
@@ -260,16 +156,13 @@ function AuthCallbackInner() {
         document.cookie = `role=${actualRole}; path=/; max-age=86400`;
         document.cookie = `isLoggedIn=true; path=/; max-age=86400`;
 
-        // Redirect dựa trên role từ database/token
+        // Redirect dựa trên role FE (đã map từ backend role sang: admin | office | staff | user)
         const redirectUrl = (() => {
           switch (actualRole) {
             case 'admin':
               return '/admin/dashboard';
             case 'office':
               return '/office/dashboard';
-            case 'lecturer':
-            case 'guest':
-              return '/user/dashboard';
             case 'staff':
               return '/staff/dashboard';
             default:

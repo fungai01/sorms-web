@@ -66,13 +66,20 @@ export default function LoginPage() {
 
   const handleGoogleSignIn = async () => {
     // Vai trò là tùy chọn, không bắt buộc chọn
+    // Nếu không chọn, role sẽ được lấy từ database/token sau khi xác thực
     setIsLoading(true);
     setError("");
 
     try {
-      // Lưu role vào sessionStorage để sử dụng sau khi callback
+      // Lưu role vào sessionStorage để sử dụng sau khi callback (nếu có)
+      // Nếu không chọn role, để trống - callback sẽ dùng role từ database/token
       if (typeof window !== 'undefined') {
-        sessionStorage.setItem('selectedRole', selectedRole);
+        if (selectedRole) {
+          sessionStorage.setItem('selectedRole', selectedRole);
+        } else {
+          // Xóa selectedRole nếu không chọn (để dùng role từ database/token)
+          sessionStorage.removeItem('selectedRole');
+        }
       }
 
       // Sử dụng backend API để lấy Google OAuth URL
@@ -136,10 +143,13 @@ export default function LoginPage() {
             </div>
           )}
 
-          {/* Role Selection */}
+          {/* Role Selection - Optional (chỉ cần cho admin muốn login với role khác) */}
           <div className="mb-6">
             <label className="block text-sm font-semibold text-gray-700 mb-2">
-              Chọn vai trò của bạn
+              Chọn vai trò (tùy chọn)
+              <span className="text-xs font-normal text-gray-500 ml-2">
+                - Để trống để đăng nhập với vai trò mặc định
+              </span>
             </label>
             <div className="relative">
               <button
@@ -192,9 +202,9 @@ export default function LoginPage() {
           {/* Google Sign-In Button */}
           <button
             onClick={handleGoogleSignIn}
-            disabled={!selectedRole || isLoading}
+            disabled={isLoading}
             className={`w-full py-3 px-4 rounded-xl font-semibold transition-all duration-300 ${
-              !selectedRole || isLoading
+              isLoading
                 ? "bg-gray-300 text-gray-500 cursor-not-allowed"
                 : "bg-gradient-to-r from-blue-500 to-indigo-500 text-white hover:from-blue-600 hover:to-indigo-600 shadow-md hover:shadow-lg hover:scale-[1.01] active:scale-[0.99]"
             }`}

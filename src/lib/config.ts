@@ -2,8 +2,24 @@
 export const API_CONFIG = {
   // Backend API base URL
   // Support both NEXT_PUBLIC_API_BASE_URL and NEXT_PUBLIC_API_URL for backward compatibility
-  BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || 'http://103.81.87.99:5656/api',
-
+  // Normalize: remove trailing slash, ensure it ends with /api
+  BASE_URL: (() => {
+    const rawUrl = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || 'https://backend.sorms.online/api'
+    // Remove trailing slash if exists
+    const normalized = rawUrl.endsWith('/') ? rawUrl.slice(0, -1) : rawUrl
+    // Validate URL scheme
+    try {
+      const url = new URL(normalized)
+      if (!['http:', 'https:'].includes(url.protocol)) {
+        console.error('⚠️ Invalid API URL scheme:', url.protocol, '- Falling back to default')
+        return 'https://backend.sorms.online/api'
+      }
+      return normalized
+    } catch {
+      console.error('⚠️ Invalid API URL format:', rawUrl, '- Falling back to default')
+      return 'https://backend.sorms.online/api'
+    }
+  })(),
   // API endpoints
   ENDPOINTS: {
     ROOMS: '/rooms',

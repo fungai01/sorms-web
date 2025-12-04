@@ -1,14 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getToken } from "next-auth/jwt";
-
-// Helper: Check if email is admin (supports multiple admins)
-function isAdminEmail(email: string): boolean {
-	const adminEmails = (process.env.ADMIN_EMAIL_WHITELIST || 'quyentnqe170062@fpt.edu.vn').split(',');
-	return adminEmails.some(adminEmail =>
-		email.toLowerCase() === adminEmail.trim().toLowerCase()
-	);
-}
-
 export async function middleware(req: NextRequest) {
 	const { pathname } = req.nextUrl;
 
@@ -34,15 +25,7 @@ export async function middleware(req: NextRequest) {
 		return NextResponse.redirect(url);
 	}
 
-	// Check if user is super admin (can access all routes)
-	const isSuperAdmin = isAdminEmail(email);
-
-	if (isSuperAdmin) {
-		console.log('✅ Super admin access granted:', email);
-		return NextResponse.next();
-	}
-
-	// Check role-based access for non-admin users
+	// Check role-based access cho user (không còn cơ chế super admin, chỉ dùng role)
 	if (pathname.startsWith("/admin")) {
 		// Only admin role can access admin routes
 		if (roleFromCookie !== "admin") {
