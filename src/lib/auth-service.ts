@@ -32,13 +32,13 @@ export const mapRoleToAppRole = (role?: string): 'admin' | 'office' | 'staff' | 
   if (!role) return 'user'
   const r = role.trim().toUpperCase()
   // Admin variants
-  if (['ADMIN','ADMIN_SYSTEM','ADMIN_SYTEM','ADMINISTRATOR'].includes(r)) return 'admin'
+  if (['ADMIN_SYTEM'].includes(r)) return 'admin'
   // Manager/Office variants
-  if (['MANAGER','ADMINISTRATIVE','ADMINITRATIVE','OFFICE'].includes(r)) return 'office'
+  if (['ADMINISTRATIVE'].includes(r)) return 'office'
   // Staff variants (includes SECURITY typo)
-  if (['STAFF','SECURITY','SERCURITY'].includes(r)) return 'staff'
+  if (['STAFF','SECURITY'].includes(r)) return 'staff'
   // Lecturer/Guest/User -> user area
-  if (['LECTURER','GUEST','USER'].includes(r)) return 'user'
+  if (['USER'].includes(r)) return 'user'
   return 'user'
 }
 
@@ -339,15 +339,22 @@ Vui lòng thử đăng nhập lại.`
 
     const data = response.data as any
     console.log('📦 Response data structure:', {
-      hasAccessToken: !!(data.accessToken || data.access_token || data.token),
-      hasRefreshToken: !!(data.refreshToken || data.refresh_token),
+      authenticated: data.authenticated,
+      hasToken: !!(data.token || data.accessToken || data.access_token),
+      hasAccountInfo: !!data.accountInfo,
       keys: Object.keys(data),
       fullData: JSON.stringify(data, null, 2),  // Log toàn bộ data để debug
     })
 
-    // Backend trả về format: { token, accountInfo }
+    // Backend trả về format: { authenticated: true, token: "string", accountInfo: {...} }
+    // Kiểm tra authenticated flag
+    if (data.authenticated === false) {
+      console.error('❌ Authentication failed: authenticated flag is false')
+      throw new Error('Xác thực thất bại. Vui lòng thử đăng nhập lại.')
+    }
+
+    // Extract token (ưu tiên data.token theo API spec)
     const accessToken = data.token || data.accessToken || data.access_token
-    const accountInfo = data.accountInfo || data.user
 
     // Validate access token (bắt buộc)
     if (!accessToken) {
@@ -371,26 +378,44 @@ Vui lòng thử đăng nhập lại.`
     this.setTokens(tokens)
 
     // Lưu user info từ accountInfo
+    // Format: accountInfo có { id, email, firstName, lastName, avatarUrl, roleName[] }
+    const accountInfo = data.accountInfo
     if (accountInfo) {
       console.log('💾 Saving user info from accountInfo')
+      
+      // Parse roleName array (theo API spec)
+      const roleNameArray = Array.isArray(accountInfo.roleName) ? accountInfo.roleName : []
+      const rolesArray = Array.isArray(accountInfo.roles) ? accountInfo.roles : []
+      const allRoles = roleNameArray.length > 0 ? roleNameArray : rolesArray
+      
       const userInfo: UserInfo = {
-        id: accountInfo.id,
+        id: accountInfo.id || '',
         email: accountInfo.email || '',
         username: accountInfo.username,
         firstName: accountInfo.firstName,
         lastName: accountInfo.lastName,
         name: accountInfo.firstName && accountInfo.lastName 
           ? `${accountInfo.firstName} ${accountInfo.lastName}`
-          : accountInfo.firstName || accountInfo.lastName || accountInfo.email,
+          : accountInfo.firstName || accountInfo.lastName || accountInfo.email || '',
         picture: accountInfo.avatarUrl || accountInfo.picture,
         avatarUrl: accountInfo.avatarUrl,
-        role: accountInfo.roleName?.[0] || accountInfo.roles?.[0],  // Lấy role đầu tiên
-        roleName: accountInfo.roleName || accountInfo.roles,
-        roles: accountInfo.roleName || accountInfo.roles,
+        role: allRoles.length > 0 ? String(allRoles[0]) : accountInfo.role,
+        roleName: allRoles.length > 0 ? allRoles : (roleNameArray.length > 0 ? roleNameArray : []),
+        roles: allRoles.length > 0 ? allRoles : (rolesArray.length > 0 ? rolesArray : roleNameArray),
       }
+      
+      console.log('💾 Parsed user info:', {
+        id: userInfo.id,
+        email: userInfo.email,
+        name: userInfo.name,
+        roles: userInfo.roles,
+        role: userInfo.role,
+      })
+      
+      // Lưu userInfo với token (setUserInfo sẽ tự động thêm token)
       this.setUserInfo(userInfo)
     } else if (data.email || data.name) {
-      // Fallback: nếu user info nằm trực tiếp trong data
+      // Fallback: nếu user info nằm trực tiếp trong data (legacy format)
       console.log('💾 Saving user info from data root (fallback)')
       this.setUserInfo({
         email: data.email || '',
@@ -400,6 +425,8 @@ Vui lòng thử đăng nhập lại.`
         role: data.role,
         status: data.status,
       })
+    } else {
+      console.warn('⚠️ No accountInfo found in response, user info will be fetched via introspect')
     }
 
     return tokens
@@ -481,6 +508,7 @@ Vui lòng thử đăng nhập lại.`
           roleName: accountInfo.roleName || accountInfo.roles,
           roles: accountInfo.roleName || accountInfo.roles,
         }
+        // Lưu userInfo với token mới (setUserInfo sẽ tự động thêm token mới)
         this.setUserInfo(userInfo)
       }
 
@@ -493,8 +521,16 @@ Vui lòng thử đăng nhập lại.`
   // Set user info and sync cookies (role + user_info)
   setUserInfo(user: UserInfo): void {
     if (typeof window !== 'undefined') {
+      // Lấy token hiện tại để lưu vào accountInfo
+      const currentToken = this.getAccessToken()
+      
+      // Tạo userInfo với token nếu có
+      const userInfoWithToken = currentToken 
+        ? { ...user, token: currentToken }  // ✅ Thêm token vào accountInfo
+        : user
+      
       try {
-        localStorage.setItem(this.USER_INFO_KEY, JSON.stringify(user))
+        localStorage.setItem(this.USER_INFO_KEY, JSON.stringify(userInfoWithToken))
       } catch {}
 
       // Determine app role from backend roles
@@ -507,7 +543,12 @@ Vui lòng thử đăng nhập lại.`
       try { cookieManager.setRole(appRole) } catch {}
 
       // Save user info in cookie for convenience (small, not secure storage)
-      try { cookieManager.setUserInfo({ id: user.id, email: user.email, name: user.name, role: appRole }) } catch {}
+      // Lưu cả token vào cookie nếu có
+      const cookieUserInfo: any = { id: user.id, email: user.email, name: user.name, role: appRole }
+      if (currentToken) {
+        cookieUserInfo.token = currentToken  // ✅ Thêm token vào cookie userInfo
+      }
+      try { cookieManager.setUserInfo(cookieUserInfo) } catch {}
     }
   }
 
@@ -550,29 +591,42 @@ Vui lòng thử đăng nhập lại.`
         }
 
         // Backend trả về format: { valid, accountId, username, roles, accountInfo }
-        // roles có thể ở root level hoặc trong accountInfo
-        const rolesFromRoot = (data as any).roles || []
-        const accountInfo = data.accountInfo || data
-        const rolesFromAccountInfo = accountInfo.roles || []
+        // Format mới: data có { valid, accountId, username, roles[], accountInfo: {...} }
+        // accountInfo có: { id, username, email, firstName, lastName, dob, address, phoneNumber, avatarUrl, roles[] }
         
-        // Ưu tiên roles từ root, sau đó từ accountInfo
-        const allRoles = rolesFromRoot.length > 0 ? rolesFromRoot : rolesFromAccountInfo
+        const accountInfo = data.accountInfo || {}
+        const rolesFromRoot = Array.isArray(data.roles) ? data.roles : []
+        const rolesFromAccountInfo = Array.isArray(accountInfo.roles) ? accountInfo.roles : []
+        const roleNameFromAccountInfo = Array.isArray(accountInfo.roleName) ? accountInfo.roleName : []
         
-        const appRole = mapRoleToAppRole(allRoles[0] || accountInfo.roleName?.[0] || accountInfo.role)
+        // Ưu tiên roles từ root level, sau đó từ accountInfo.roles, cuối cùng là accountInfo.roleName
+        const allRoles = rolesFromRoot.length > 0 
+          ? rolesFromRoot 
+          : rolesFromAccountInfo.length > 0 
+            ? rolesFromAccountInfo 
+            : roleNameFromAccountInfo
+        
+        // Lấy role đầu tiên để map sang app role
+        const firstRole = allRoles.length > 0 
+          ? String(allRoles[0]) 
+          : accountInfo.role || 'user'
+        
+        const appRole = mapRoleToAppRole(firstRole)
+        
         const userInfo: UserInfo = {
-          id: accountInfo.id || (data as any).accountId,
+          id: accountInfo.id || data.accountId || '',
           email: accountInfo.email || '',
-          username: accountInfo.username || (data as any).username,
+          username: accountInfo.username || data.username,
           firstName: accountInfo.firstName,
           lastName: accountInfo.lastName,
           name: accountInfo.firstName && accountInfo.lastName 
             ? `${accountInfo.firstName} ${accountInfo.lastName}`
-            : accountInfo.firstName || accountInfo.lastName || accountInfo.email,
+            : accountInfo.firstName || accountInfo.lastName || accountInfo.email || data.username || '',
           picture: accountInfo.avatarUrl || accountInfo.picture,
           avatarUrl: accountInfo.avatarUrl,
           role: appRole,
-          roleName: allRoles.length > 0 ? allRoles : (accountInfo.roleName || []),
-          roles: allRoles.length > 0 ? allRoles : (accountInfo.roles || accountInfo.roleName || []),
+          roleName: allRoles.length > 0 ? allRoles : (roleNameFromAccountInfo.length > 0 ? roleNameFromAccountInfo : []),
+          roles: allRoles.length > 0 ? allRoles : (rolesFromAccountInfo.length > 0 ? rolesFromAccountInfo : roleNameFromAccountInfo),
           dob: accountInfo.dob,
           address: accountInfo.address,
           phoneNumber: accountInfo.phoneNumber,
@@ -592,6 +646,19 @@ Vui lòng thử đăng nhập lại.`
       console.error('Token introspection failed:', error)
     }
 
+    return null
+  }
+  
+  // Get token from accountInfo (fallback method)
+  getAccessTokenFromAccountInfo(): string | null {
+    try {
+      const userInfo = this.getUserInfo()
+      if (userInfo && (userInfo as any).token) {
+        return (userInfo as any).token
+      }
+    } catch {
+      // ignore
+    }
     return null
   }
 

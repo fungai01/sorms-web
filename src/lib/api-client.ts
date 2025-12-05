@@ -2,6 +2,7 @@
 import { API_CONFIG } from './config'
 import { authService } from './auth-service'
 import { authFetch } from './http'
+import { generateBookingCode, getErrorMessage } from './utils'
 
 const API_BASE_URL = API_CONFIG.BASE_URL
 
@@ -19,46 +20,6 @@ class ApiClient {
     this.baseURL = baseURL
   }
 
-  private mapErrorMessage(responseCode: string, originalMessage: string): string {
-    // Map backend error codes to user-friendly messages
-    const errorMappings: { [key: string]: string } = {
-      'SYSTEM_ERROR': 'Hệ thống đang gặp sự cố. Vui lòng thử lại sau.',
-      'S0001': 'Hệ thống đang gặp sự cố. Vui lòng thử lại sau.',
-      'E0001': 'Dữ liệu không hợp lệ.',
-      'E0002': 'Không tìm thấy dữ liệu.',
-      'E0003': 'Không có quyền truy cập.',
-      'E0004': 'Phiên đăng nhập đã hết hạn.',
-      'E0005': 'Lỗi kết nối cơ sở dữ liệu.',
-      'E0006': 'Dịch vụ tạm thời không khả dụng.',
-      'E0007': 'Dữ liệu đã tồn tại.',
-      'E0008': 'Dữ liệu không được phép xóa.',
-      'E0009': 'Lỗi xác thực.',
-      'E0010': 'Thao tác không được phép.',
-    }
-
-    // Ensure all inputs are strings
-    const safeResponseCode = String(responseCode || '')
-    const safeOriginalMessage = String(originalMessage || '')
-
-    // Try to map responseCode first
-    const mappedByCode = errorMappings[safeResponseCode]
-    if (mappedByCode) {
-      return mappedByCode
-    }
-    
-    // If responseCode not found, try to map the originalMessage (which might be an error code)
-    if (safeOriginalMessage && safeOriginalMessage !== 'undefined' && safeOriginalMessage !== 'null') {
-      const mappedByMessage = errorMappings[safeOriginalMessage]
-      if (mappedByMessage) {
-        return mappedByMessage
-      }
-      // If message can be mapped, use it; otherwise use original message
-      return safeOriginalMessage
-    }
-    
-    return 'Có lỗi xảy ra. Vui lòng thử lại.'
-  }
-
   private async request<T>(
     endpoint: string,
     options: RequestInit = {}
@@ -68,32 +29,134 @@ class ApiClient {
       const baseURLWithoutTrailingSlash = this.baseURL.endsWith('/') ? this.baseURL.slice(0, -1) : this.baseURL
       const endpointWithLeadingSlash = endpoint.startsWith('/') ? endpoint : `/${endpoint}`
       const url = `${baseURLWithoutTrailingSlash}${endpointWithLeadingSlash}`
-
-      // Thêm Authorization header nếu có token
-      let token = authService.getAccessToken()
-      // Try get token from server cookies when running in Next.js API route
-      if (!token) {
-        try {
-          const mod: any = await import('next/headers')
-          if (typeof mod.cookies === 'function') {
-            const maybePromise = mod.cookies()
-            const cookieStore =
-              typeof maybePromise?.then === 'function' ? await maybePromise : maybePromise
-            const cookieToken = cookieStore?.get?.('access_token')?.value
-            if (cookieToken) token = cookieToken
+      
+      // Validate URL scheme (must be http or https for CORS)
+      try {
+        const urlObj = new URL(url)
+        if (!['http:', 'https:'].includes(urlObj.protocol)) {
+          return {
+            success: false,
+            error: `URL scheme không hợp lệ: ${urlObj.protocol}. Chỉ hỗ trợ http:// hoặc https://`
           }
-        } catch {
-          // ignore (client-side or not in Next.js environment)
+        }
+      } catch (urlError) {
+        return {
+          success: false,
+          error: `URL không hợp lệ: ${url}. Vui lòng kiểm tra cấu hình API_BASE_URL.`
         }
       }
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        ...(options.headers as Record<string, string> || {}),
+
+      // Extract headers from options first (priority)
+      const incomingHeaders = options.headers as Record<string, string> | Headers | undefined
+      let authHeaderFromOptions: string | null = null
+      
+      if (incomingHeaders) {
+        if (incomingHeaders instanceof Headers) {
+          // Headers instance - check both lowercase and capitalized
+          authHeaderFromOptions = incomingHeaders.get('authorization') || 
+                                  incomingHeaders.get('Authorization') ||
+                                  incomingHeaders.get('AUTHORIZATION') ||
+                                  null
+        } else if (typeof incomingHeaders === 'object') {
+          // Record<string, string> - check all possible key variations
+          authHeaderFromOptions = incomingHeaders['authorization'] || 
+                                  incomingHeaders['Authorization'] || 
+                                  incomingHeaders['AUTHORIZATION'] ||
+                                  null
+        }
       }
       
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`
+      // Thêm Authorization header nếu có token
+      // Priority: options.headers > accountInfo > authService > cookies
+      let token: string | null = null
+      
+      // 1. First priority: Use token from options.headers (from Next.js API route)
+      if (authHeaderFromOptions && authHeaderFromOptions.startsWith('Bearer ')) {
+        token = authHeaderFromOptions.substring(7)
+        console.log('[API Client] Token extracted from incoming request headers (options)')
+      } else {
+        // 2. Second priority: Get token from accountInfo (userInfo)
+        try {
+          const userInfo = authService.getUserInfo()
+          if (userInfo && (userInfo as any).token) {
+            token = (userInfo as any).token
+            console.log('[API Client] Token from accountInfo (userInfo)')
+          }
+        } catch {}
+        
+        // 3. Third priority: Get token from authService (client-side)
+        if (!token) {
+          token = authService.getAccessToken()
+          if (token) {
+            console.log('[API Client] Token from authService')
+          }
+        }
+        
+        // 4. Fourth priority: Try get token from server cookies (Next.js API route fallback)
+        if (!token) {
+          try {
+            const mod: any = await import('next/headers')
+            if (typeof mod.cookies === 'function') {
+              const maybePromise = mod.cookies()
+              const cookieStore =
+                typeof maybePromise?.then === 'function' ? await maybePromise : maybePromise
+              
+              // Try multiple cookie names for compatibility
+              const cookieToken = cookieStore?.get?.('access_token')?.value || 
+                                 cookieStore?.get?.('auth_access_token')?.value
+              
+              if (cookieToken) {
+                token = cookieToken
+                console.log('[API Client] Token found in server cookies')
+              }
+            }
+          } catch (e) {
+            // ignore (client-side or not in Next.js environment)
+          }
+        }
       }
+      
+      // List of public endpoints that don't require authentication
+      const publicEndpoints = [
+        '/auth/outbound/authentication',
+        '/auth/mobile/outbound/authentication',
+        '/auth/login',
+        '/auth/refresh',
+      ]
+      
+      const isPublicEndpoint = publicEndpoints.some(publicPath => endpoint.includes(publicPath))
+      
+      if (!token && !isPublicEndpoint) {
+        console.warn('[API Client] ⚠️ No access token available for request:', endpoint)
+      } else if (isPublicEndpoint) {
+        console.log('[API Client] Public endpoint, skipping token check:', endpoint)
+      }
+      
+      // Merge headers: options.headers first, then add Authorization if we have token
+      // RequestInit.headers can be Headers, Record<string, string>, or string[][]
+      let mergedHeaders: Record<string, string> = {
+        'Content-Type': 'application/json',
+      }
+      
+      // Merge headers from options
+      if (options.headers) {
+        if (options.headers instanceof Headers) {
+          mergedHeaders = { ...mergedHeaders, ...Object.fromEntries(options.headers.entries()) }
+        } else if (Array.isArray(options.headers)) {
+          // Handle string[][] format
+          mergedHeaders = { ...mergedHeaders, ...Object.fromEntries(options.headers) }
+        } else if (typeof options.headers === 'object') {
+          // Handle Record<string, string>
+          mergedHeaders = { ...mergedHeaders, ...(options.headers as Record<string, string>) }
+        }
+      }
+      
+      // Add Authorization header if we have token (will overwrite if already exists from options)
+      if (token) {
+        mergedHeaders['Authorization'] = `Bearer ${token}`
+      }
+      
+      const headers = mergedHeaders
 
       // Log request details for debugging
       let bodyContent = null
@@ -113,42 +176,105 @@ class ApiClient {
         hasBody: !!options.body,
         body: bodyContent,
         headers: Object.keys(headers),
+        hasAuthorization: !!headers['Authorization'],
+        authorizationPrefix: headers['Authorization']?.substring(0, 30) || 'none',
+        authorizationLength: headers['Authorization']?.length || 0,
+        tokenSource: token ? (authHeaderFromOptions ? 'options.headers' : (authService.getAccessToken() ? 'authService' : 'cookies')) : 'none',
+        tokenLength: token?.length || 0,
         timestamp: new Date().toISOString()
       })
 
+      // Merge options carefully: headers should come from our merged headers, not from options
+      // Create new options object without headers property to avoid overwriting
+      const restOptions: RequestInit = {}
+      if (options.method) restOptions.method = options.method
+      if (options.body) restOptions.body = options.body
+      if (options.signal) restOptions.signal = options.signal
+      if (options.cache) restOptions.cache = options.cache
+      if (options.credentials) restOptions.credentials = options.credentials
+      if (options.mode) restOptions.mode = options.mode
+      if (options.redirect) restOptions.redirect = options.redirect
+      if (options.referrer) restOptions.referrer = options.referrer
+      if (options.referrerPolicy) restOptions.referrerPolicy = options.referrerPolicy
+      if (options.integrity) restOptions.integrity = options.integrity
+      if (options.keepalive !== undefined) restOptions.keepalive = options.keepalive
+      
+      // Pass headers as Record<string, string> to authFetch
+      // authFetch will convert to Headers instance properly
       const response = await authFetch(url, {
-        headers: headers as HeadersInit,
-        ...options,
+        ...restOptions,
+        headers: headers, // Pass as Record<string, string>
       })
 
       // Log response details for debugging
       console.log(`[API Client] ${endpoint} - Response status:`, response.status, response.statusText)
+      console.log(`[API Client] ${endpoint} - Response headers:`, {
+        contentType: response.headers.get('content-type'),
+        hasBody: response.body !== null
+      })
       
       if (!response.ok) {
         // Try to get error message from response body
         let errorMessage = `HTTP error! status: ${response.status}`
+        let errorData: any = null
+        let rawResponseText: string = ''
         try {
-          const errorData = await response.json()
-          console.log(`[API Client] ${endpoint} - Error response body:`, JSON.stringify(errorData, null, 2))
+          // Clone response để có thể đọc text nhiều lần
+          const responseClone = response.clone()
+          rawResponseText = await responseClone.text()
+          console.log(`[API Client] ${endpoint} - Error response status: ${response.status} ${response.statusText}`)
+          console.log(`[API Client] ${endpoint} - Error response text (full):`, rawResponseText)
+          console.log(`[API Client] ${endpoint} - Error response headers:`, {
+            contentType: response.headers.get('content-type'),
+            contentLength: response.headers.get('content-length')
+          })
+          try {
+            errorData = JSON.parse(rawResponseText)
+            console.log(`[API Client] ${endpoint} - Error response body (parsed):`, JSON.stringify(errorData, null, 2))
+          } catch (parseErr) {
+            console.log(`[API Client] ${endpoint} - Error response is not JSON, raw text:`, rawResponseText)
+            errorMessage = rawResponseText || errorMessage
+          }
           
           // Try to map error code if present
-          if (errorData.responseCode) {
-            errorMessage = this.mapErrorMessage(errorData.responseCode, errorData.message || errorData.error || '')
-          } else if (errorData.message) {
-            errorMessage = errorData.message
-          } else if (errorData.error) {
-            // Check if error is a code that can be mapped
-            const mappedError = this.mapErrorMessage(errorData.error, '')
-            if (mappedError !== 'Có lỗi xảy ra. Vui lòng thử lại.') {
-              errorMessage = mappedError
-            } else {
-              errorMessage = errorData.error
+          if (errorData) {
+            console.log(`[API Client] ${endpoint} - Error data structure:`, {
+              hasResponseCode: !!errorData.responseCode,
+              responseCode: errorData.responseCode,
+              hasMessage: !!errorData.message,
+              message: errorData.message,
+              hasError: !!errorData.error,
+              error: errorData.error,
+              keys: Object.keys(errorData)
+            })
+            
+            if (errorData.responseCode) {
+              const mappedMessage = getErrorMessage(
+                String(errorData.responseCode),
+                errorData.message || errorData.error || ''
+              )
+              console.log(`[API Client] ${endpoint} - Mapped error message:`, mappedMessage)
+              errorMessage = mappedMessage
+            } else if (errorData.message) {
+              errorMessage = errorData.message
+            } else if (errorData.error) {
+              // Check if error is a code that can be mapped
+              const mappedError = getErrorMessage(String(errorData.error), '')
+              if (mappedError !== 'Có lỗi xảy ra. Vui lòng thử lại.') {
+                errorMessage = mappedError
+              } else {
+                errorMessage = errorData.error
+              }
             }
           }
-        } catch {
+        } catch (parseError) {
           // If we can't parse the error response, use the status text
+          console.error(`[API Client] ${endpoint} - Failed to parse error response:`, parseError)
+          console.error(`[API Client] ${endpoint} - Raw response text:`, rawResponseText)
           errorMessage = response.statusText || errorMessage
         }
+        
+        console.error(`[API Client] ${endpoint} - Final error message:`, errorMessage)
         
         return {
           success: false,
@@ -168,8 +294,10 @@ class ApiClient {
           }
         } else {
           // Map common error codes to user-friendly messages
-          // Even if message is missing, try to map the responseCode
-          const errorMessage = this.mapErrorMessage(data.responseCode, data.message || data.error || '')
+          const errorMessage = getErrorMessage(
+            String(data.responseCode),
+            data.message || data.error || ''
+          )
           return {
             success: false,
             error: String(errorMessage), // Ensure error is always a string
@@ -180,7 +308,7 @@ class ApiClient {
       // Check if response has error field (even with HTTP 200)
       if (data.error) {
         // Try to map error code if it looks like one
-        const mappedError = this.mapErrorMessage(data.error, data.message || '')
+        const mappedError = getErrorMessage(String(data.error), data.message || '')
         if (mappedError !== 'Có lỗi xảy ra. Vui lòng thử lại.') {
           return {
             success: false,
@@ -211,11 +339,29 @@ class ApiClient {
       // Handle network errors and other exceptions
       let errorMessage = 'Unknown error occurred'
 
-      if (error instanceof TypeError && error.message.includes('fetch')) {
-        errorMessage = 'Không thể kết nối đến server. Vui lòng kiểm tra kết nối mạng.'
+      if (error instanceof TypeError) {
+        if (error.message.includes('fetch') || error.message.includes('Failed to fetch')) {
+          // CORS or network error
+          errorMessage = 'Không thể kết nối đến server. Nguyên nhân có thể:\n' +
+            '- Backend không cho phép CORS từ domain này\n' +
+            '- Server backend đang offline\n' +
+            '- URL không hợp lệ (phải là http:// hoặc https://)\n' +
+            `- Kiểm tra BASE_URL: ${this.baseURL}`
+        } else if (error.message.includes('URL scheme')) {
+          errorMessage = error.message
+        } else {
+          errorMessage = error.message
+        }
       } else if (error instanceof Error) {
         errorMessage = error.message
       }
+      
+      console.error(`[API Client] ❌ Network/CORS error for ${endpoint}:`, {
+        error,
+        errorMessage,
+        url: `${this.baseURL}${endpoint}`,
+        baseURL: this.baseURL,
+      })
       
       return {
         success: false,
@@ -225,23 +371,25 @@ class ApiClient {
   }
 
   // GET request
-  async get<T>(endpoint: string): Promise<ApiResponse<T>> {
-    return this.request<T>(endpoint, { method: 'GET' })
+  async get<T>(endpoint: string, options?: RequestInit): Promise<ApiResponse<T>> {
+    return this.request<T>(endpoint, { method: 'GET', ...options })
   }
 
   // POST request
-  async post<T>(endpoint: string, data?: any): Promise<ApiResponse<T>> {
+  async post<T>(endpoint: string, data?: any, options?: RequestInit): Promise<ApiResponse<T>> {
     return this.request<T>(endpoint, {
       method: 'POST',
       body: data ? JSON.stringify(data) : undefined,
+      ...options,
     })
   }
 
   // PUT request
-  async put<T>(endpoint: string, data?: any): Promise<ApiResponse<T>> {
+  async put<T>(endpoint: string, data?: any, options?: RequestInit): Promise<ApiResponse<T>> {
     return this.request<T>(endpoint, {
       method: 'PUT',
       body: data ? JSON.stringify(data) : undefined,
+      ...options,
     })
   }
 
@@ -254,20 +402,20 @@ class ApiClient {
   }
 
   // DELETE request
-  async delete<T>(endpoint: string): Promise<ApiResponse<T>> {
-    return this.request<T>(endpoint, { method: 'DELETE' })
+  async delete<T>(endpoint: string, options?: RequestInit): Promise<ApiResponse<T>> {
+    return this.request<T>(endpoint, { ...options, method: 'DELETE' })
   }
 
   // Specific API methods for SORMS - Only use available endpoints
-  async getRooms() {
-    return this.get('/rooms')
+  async getRooms(options?: RequestInit) {
+    return this.get('/rooms', options)
   }
 
-  async getRoom(id: number) {
-    return this.get(`/rooms/${id}`)
+  async getRoom(id: number, options?: RequestInit) {
+    return this.get(`/rooms/${id}`, options)
   }
 
-  async createRoom(roomData: any) {
+  async createRoom(roomData: any, options?: RequestInit) {
     const formattedData = {
       code: roomData.code,
       name: roomData.name || '',
@@ -276,10 +424,10 @@ class ApiClient {
       status: roomData.status || 'AVAILABLE',
       description: roomData.description || ''
     }
-    return this.post('/rooms', formattedData)
+    return this.post('/rooms', formattedData, options)
   }
 
-  async updateRoom(id: number, roomData: any) {
+  async updateRoom(id: number, roomData: any, options?: RequestInit) {
     const formattedData = {
       code: roomData.code,
       name: roomData.name || '',
@@ -288,21 +436,21 @@ class ApiClient {
       status: roomData.status || 'AVAILABLE',
       description: roomData.description || ''
     }
-    return this.put(`/rooms/${id}`, formattedData)
+    return this.put(`/rooms/${id}`, formattedData, options)
   }
 
-  async deleteRoom(id: number) {
-    // Soft delete: deactivate instead of hard delete
-    return this.put(`/rooms/${id}/deactivate`)
+  async deleteRoom(id: number, options?: RequestInit) {
+    // Use DELETE endpoint as per backend controller
+    return this.delete(`/rooms/${id}`, options)
   }
 
   // Additional room methods for filtering
-  async getRoomsByStatus(status: string) {
-    return this.get(`/rooms/by-status/${status}`)
+  async getRoomsByStatus(status: string, options?: RequestInit) {
+    return this.get(`/rooms/by-status/${status}`, options)
   }
 
-  async getRoomsByRoomType(roomTypeId: number) {
-    return this.get(`/rooms/by-room-type/${roomTypeId}`)
+  async getRoomsByRoomType(roomTypeId: number, options?: RequestInit) {
+    return this.get(`/rooms/by-room-type/${roomTypeId}`, options)
   }
 
 
@@ -336,15 +484,15 @@ class ApiClient {
   }
 
 
-  async getRoomTypes() {
-    return this.get('/room-types')
+  async getRoomTypes(options?: RequestInit) {
+    return this.get('/room-types', options)
   }
 
-  async getRoomType(id: number) {
-    return this.get(`/room-types/${id}`)
+  async getRoomType(id: number, options?: RequestInit) {
+    return this.get(`/room-types/${id}`, options)
   }
 
-  async createRoomType(roomTypeData: any) {
+  async createRoomType(roomTypeData: any, options?: RequestInit) {
     const formattedData = {
       code: roomTypeData.code,
       name: roomTypeData.name,
@@ -352,10 +500,10 @@ class ApiClient {
       maxOccupancy: roomTypeData.maxOccupancy || 1,
       description: roomTypeData.description || ''
     }
-    return this.post('/room-types', formattedData)
+    return this.post('/room-types', formattedData, options)
   }
 
-  async updateRoomType(id: number, roomTypeData: any) {
+  async updateRoomType(id: number, roomTypeData: any, options?: RequestInit) {
     const formattedData = {
       code: roomTypeData.code,
       name: roomTypeData.name,
@@ -363,16 +511,16 @@ class ApiClient {
       maxOccupancy: roomTypeData.maxOccupancy || 1,
       description: roomTypeData.description || ''
     }
-    return this.put(`/room-types/${id}`, formattedData)
+    return this.put(`/room-types/${id}`, formattedData, options)
   }
 
-  async deleteRoomType(id: number) {
+  async deleteRoomType(id: number, options?: RequestInit) {
     // Soft delete: deactivate instead of hard delete
-    return this.put(`/room-types/${id}/deactivate`)
+    return this.put(`/room-types/${id}/deactivate`, undefined, options)
   }
 
-  async getBookings() {
-    return this.get('/bookings')
+  async getBookings(options?: RequestInit) {
+    return this.get('/bookings', options)
   }
 
   async getBooking(id: number) {
@@ -380,13 +528,6 @@ class ApiClient {
   }
 
   async createBooking(bookingData: any) {
-    // Generate booking code if not provided
-    const generateBookingCode = () => {
-      const timestamp = Date.now().toString(36).toUpperCase()
-      const random = Math.random().toString(36).substring(2, 6).toUpperCase()
-      return `BK-${timestamp}-${random}`
-    }
-
     // Ensure data matches API format - handle both camelCase and snake_case, and common variations
     const rawUserId = bookingData.userId || bookingData.user_id || null
     const formattedData = {
@@ -539,16 +680,11 @@ class ApiClient {
       if (!r) return undefined
       const v = String(r).trim().toUpperCase()
       // Primary roles used by BE security annotations
-      if (v === 'ADMIN') return 'ADMIN'
+      if (v === 'ADMIN_SYTEM') return 'ADMIN_SYTEM'
       if (v === 'STAFF') return 'STAFF'
-      if (v === 'MANAGER') return 'MANAGER'
+      if (v === 'ADMINISTRATIVE') return 'ADMINISTRATIVE'
+      if (v === 'SERCURITY') return 'SECURITY'
       if (v === 'USER') return 'USER'
-      // FE route aliases
-      if (v === 'OFFICE') return 'MANAGER' // office area maps to manager-level access
-      // Legacy synonyms from older data
-      if (v === 'ADMIN_SYSTEM' || v === 'ADMIN_SYTEM' || v === 'ADMINISTRATOR') return 'ADMIN'
-      if (v === 'ADMINITRATIVE' || v === 'ADMINISTRATIVE') return 'MANAGER'
-      if (v === 'SERCURITY' || v === 'SECURITY') return 'STAFF'
       return undefined
     }
 

@@ -6,12 +6,11 @@ import Image from "next/image";
 import Logo from "@/img/Logo.png";
 import Bg from "@/img/bg.jpg";
 import { useAuth } from "@/hooks/useAuth";
+import { authService } from "@/lib/auth-service";
 
 export default function LoginPage() {
   const router = useRouter();
   const { loginWithGoogle } = useAuth();
-  const [selectedRole, setSelectedRole] = useState("");
-  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -38,49 +37,98 @@ export default function LoginPage() {
       setError('Xác thực thất bại. Vui lòng thử đăng nhập lại.');
     } else if (errorParam === 'user_not_found') {
       setError('Tài khoản của bạn chưa được đăng ký trong hệ thống. Vui lòng liên hệ admin để được tạo tài khoản.');
-    } else if (errorParam === 'role_mismatch') {
-      setError('Bạn chỉ có thể đăng nhập với vai trò của mình trong hệ thống. Vui lòng chọn đúng vai trò.');
     }
   }, []);
 
-  const roles = [
-    { id: "admin", name: "Admin" },
-    { id: "office", name: "Phòng Hành chính" },
-    { id: "staff", name: "Nhân viên" },
-    { id: "user", name: "Người dùng" },
-  ];
-
-  // Tailwind màu cho từng option - Màu đẹp hơn với gradient và độ tương phản cao
-  const roleStyles: Record<string, { bg: string; hover: string; activeBg: string; text: string; ring: string; border: string; }> = {
-    admin:  { bg: "bg-gradient-to-r from-rose-100 to-pink-100",       hover: "hover:from-rose-200 hover:to-pink-200",       activeBg: "bg-gradient-to-r from-rose-200 to-pink-200",       text: "text-gray-800",       ring: "hover:ring-rose-300",       border: "border-rose-300" },
-    office: { bg: "bg-gradient-to-r from-sky-100 to-blue-100",        hover: "hover:from-sky-200 hover:to-blue-200",        activeBg: "bg-gradient-to-r from-sky-200 to-blue-200",        text: "text-gray-800",        ring: "hover:ring-sky-300",        border: "border-sky-300" },
-    staff:  { bg: "bg-gradient-to-r from-amber-100 to-orange-100",    hover: "hover:from-amber-200 hover:to-orange-200",    activeBg: "bg-gradient-to-r from-amber-200 to-orange-200",    text: "text-gray-800",      ring: "hover:ring-amber-300",      border: "border-amber-300" },
-    user:   { bg: "bg-gradient-to-r from-emerald-100 to-teal-100",    hover: "hover:from-emerald-200 hover:to-teal-200",    activeBg: "bg-gradient-to-r from-emerald-200 to-teal-200",    text: "text-gray-800",    ring: "hover:ring-emerald-300",    border: "border-emerald-300" },
-  };
-
-  const handleRoleSelect = (roleId: string) => {
-    setSelectedRole(roleId);
-    setIsDropdownOpen(false);
-    setError("");
-  };
-
   const handleGoogleSignIn = async () => {
-    // Vai trò là tùy chọn, không bắt buộc chọn
     setIsLoading(true);
     setError("");
 
     try {
-      // Lưu role vào sessionStorage để sử dụng sau khi callback
-      if (typeof window !== 'undefined') {
-        sessionStorage.setItem('selectedRole', selectedRole);
+      // Lấy Google OAuth URL từ backend
+      const redirectUrl = await authService.getGoogleOAuthUrl();
+      
+      // Mở popup window để đăng nhập Google
+      const width = 500;
+      const height = 600;
+      const left = (window.screen.width - width) / 2;
+      const top = (window.screen.height - height) / 2;
+      
+      const popup = window.open(
+        redirectUrl,
+        'google-login',
+        `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`
+      );
+
+      if (!popup) {
+        throw new Error('Không thể mở cửa sổ đăng nhập. Vui lòng cho phép popup và thử lại.');
       }
 
-      // Sử dụng backend API để lấy Google OAuth URL
-      await loginWithGoogle();
-      // loginWithGoogle sẽ redirect, nên không cần setIsLoading(false)
-    } catch (error) {
+      // Kiểm tra khi popup đóng mà không có message (user hủy)
+      let checkPopupClosed: NodeJS.Timeout;
+      
+      // Lắng nghe message từ popup
+      const messageListener = (event: MessageEvent) => {
+        // Kiểm tra origin để đảm bảo an toàn
+        if (event.origin !== window.location.origin) {
+          return;
+        }
+
+        if (event.data.type === 'GOOGLE_LOGIN_SUCCESS') {
+          // Đóng popup
+          popup.close();
+          window.removeEventListener('message', messageListener);
+          if (checkPopupClosed) {
+            clearInterval(checkPopupClosed);
+          }
+          
+          // Redirect đến dashboard (callback page đã lưu token vào localStorage)
+          const redirectUrl = event.data.redirectUrl || '/user/dashboard';
+          window.location.href = redirectUrl;
+        } else if (event.data.type === 'GOOGLE_LOGIN_ERROR') {
+          // Đóng popup
+          popup.close();
+          window.removeEventListener('message', messageListener);
+          if (checkPopupClosed) {
+            clearInterval(checkPopupClosed);
+          }
+          
+          // Hiển thị lỗi
+          setError(event.data.error || 'Đăng nhập thất bại. Vui lòng thử lại.');
+          setIsLoading(false);
+        }
+      };
+
+      window.addEventListener('message', messageListener);
+
+      checkPopupClosed = setInterval(() => {
+        if (popup.closed) {
+          clearInterval(checkPopupClosed);
+          window.removeEventListener('message', messageListener);
+          
+          // Kiểm tra xem có message nào được gửi không
+          // Nếu không có message và popup đã đóng, có nghĩa là user đã hủy
+          setIsLoading(false);
+          setError('Bạn đã hủy đăng nhập với Google. Vui lòng thử lại nếu muốn đăng nhập.');
+        }
+      }, 500);
+
+      // Cleanup sau 10 phút (timeout)
+      setTimeout(() => {
+        if (checkPopupClosed) {
+          clearInterval(checkPopupClosed);
+        }
+        window.removeEventListener('message', messageListener);
+        if (!popup.closed) {
+          popup.close();
+        }
+        setIsLoading(false);
+        setError('Đăng nhập quá thời gian. Vui lòng thử lại.');
+      }, 600000); // 10 phút
+
+    } catch (error: any) {
       console.error("Sign in error:", error);
-      setError("Có lỗi xảy ra khi đăng nhập. Vui lòng thử lại.");
+      setError(error.message || "Có lỗi xảy ra khi đăng nhập. Vui lòng thử lại.");
       setIsLoading(false);
     }
   };
@@ -136,72 +184,19 @@ export default function LoginPage() {
             </div>
           )}
 
-          {/* Role Selection */}
-          <div className="mb-6">
-            <label className="block text-sm font-semibold text-gray-700 mb-2">
-              Chọn vai trò của bạn
-            </label>
-            <div className="relative">
-              <button
-                onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                className={`w-full px-4 py-3 border-2 rounded-xl text-left flex items-center justify-between transition-colors focus:outline-none ${selectedRole ? `${roleStyles[selectedRole]?.bg ?? 'bg-white'} ${roleStyles[selectedRole]?.border ?? 'border-gray-300'}` : 'bg-white border-gray-300'}`}
-              >
-                <span className={selectedRole ? (roleStyles[selectedRole]?.text ?? "text-gray-800") : "text-gray-400"}>
-                  {selectedRole
-                    ? roles.find((r) => r.id === selectedRole)?.name
-                    : "Chọn vai trò..."}
-                </span>
-                <svg
-                  className={`w-5 h-5 ${selectedRole ? (roleStyles[selectedRole]?.text ?? 'text-gray-400') : 'text-gray-400'} transition-transform ${
-                    isDropdownOpen ? "rotate-180" : ""
-                  }`}
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M19 9l-7 7-7-7"
-                  />
-                </svg>
-              </button>
-
-              {/* Dropdown Menu */}
-              {isDropdownOpen && (
-                <div className="absolute z-20 w-full mt-2 bg-white border-2 border-gray-200 rounded-xl shadow-lg overflow-hidden">
-                  {roles.map((role) => {
-                    const style = roleStyles[role.id] ?? { bg: "bg-gray-50", hover: "hover:bg-gray-100", activeBg: "bg-gray-100", text: "text-gray-800", ring: "hover:ring-gray-200", border: "border-gray-300" };
-                    const isActive = selectedRole === role.id;
-                    return (
-                      <button
-                        key={role.id}
-                        onClick={() => handleRoleSelect(role.id)}
-                        className={`w-full px-4 py-3 text-left transition-colors ${isActive ? style.activeBg : style.bg} ${style.hover} ${style.text} ${style.ring} focus:outline-none focus:ring-2 ${isActive ? "ring-2 ring-offset-0 ring-black/10 font-semibold" : ""}`}
-                      >
-                        {role.name}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-
           {/* Google Sign-In Button */}
           <button
             onClick={handleGoogleSignIn}
-            disabled={!selectedRole || isLoading}
-            className={`w-full py-3 px-4 rounded-xl font-semibold transition-all duration-300 ${
-              !selectedRole || isLoading
-                ? "bg-gray-300 text-gray-500 cursor-not-allowed"
-                : "bg-gradient-to-r from-blue-500 to-indigo-500 text-white hover:from-blue-600 hover:to-indigo-600 shadow-md hover:shadow-lg hover:scale-[1.01] active:scale-[0.99]"
+            disabled={isLoading}
+            className={`w-full py-3 px-4 rounded-xl font-semibold transition-all duration-300 border-2 ${
+              isLoading
+                ? "bg-gray-300 text-gray-500 cursor-not-allowed border-gray-300"
+                : "bg-white text-gray-700 border-gray-300 hover:border-gray-400 hover:bg-gray-50 shadow-md hover:shadow-lg hover:scale-[1.01] active:scale-[0.99]"
             }`}
           >
             {isLoading ? (
               <div className="flex items-center justify-center gap-2">
-                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                <div className="w-5 h-5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"></div>
                 <span>Đang xử lý...</span>
               </div>
             ) : (

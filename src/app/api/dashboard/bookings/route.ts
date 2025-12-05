@@ -6,11 +6,29 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url)
     const days = Math.min(Math.max(Number(searchParams.get('days') || '14'), 7), 30)
     
+    console.log('[Dashboard API] Fetching bookings data, days:', days)
+    
+    // Extract Authorization header from request and pass to apiClient
+    const authHeader = req.headers.get('authorization')
+    console.log('[Dashboard API] Authorization header:', authHeader ? 'Found' : 'Not found')
+    
     // Get bookings data
-    const response = await apiClient.getBookings()
+    // Pass headers via options parameter
+    const headers: Record<string, string> = authHeader ? { 'Authorization': authHeader } : {}
+    const response = await apiClient.getBookings({ headers })
+    
+    console.log('[Dashboard API] Bookings response:', {
+      success: response.success,
+      hasData: !!response.data,
+      error: response.error,
+      dataType: typeof response.data,
+      isArray: Array.isArray(response.data),
+    })
+    
     if (!response.success) {
+      console.error('[Dashboard API] Failed to fetch bookings:', response.error)
       return NextResponse.json(
-        { error: 'Failed to fetch bookings data' }, 
+        { error: response.error || 'Failed to fetch bookings data' }, 
         { status: 500 }
       )
     }
@@ -41,11 +59,13 @@ export async function GET(req: NextRequest) {
       series.push({ date: dateStr, count })
     }
     
+    console.log('[Dashboard API] Bookings processed:', { pending, seriesCount: series.length })
+    
     return NextResponse.json({ pending, series })
   } catch (error) {
-    console.error('Bookings API error:', error)
+    console.error('[Dashboard API] Bookings error:', error)
     return NextResponse.json(
-      { error: 'Internal server error' }, 
+      { error: error instanceof Error ? error.message : 'Internal server error' }, 
       { status: 500 }
     )
   }

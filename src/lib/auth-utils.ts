@@ -45,22 +45,41 @@ export async function verifyToken(req: NextRequest): Promise<UserInfo | null> {
     const response = await apiClient.introspect(token)
     
     if (response.success && response.data) {
-      const accountInfo = (response.data as any).accountInfo || response.data
+      const data = response.data as any
+      
+      // Check if token is valid
+      if (data.valid === false) {
+        console.warn('[Auth Utils] Token introspection: token is invalid')
+        return null
+      }
+      
+      // Backend trả về format: { valid, accountId, username, roles[], accountInfo: {...} }
+      const accountInfo = data.accountInfo || {}
+      const rolesFromRoot = Array.isArray(data.roles) ? data.roles : []
+      const rolesFromAccountInfo = Array.isArray(accountInfo.roles) ? accountInfo.roles : []
+      const roleNameFromAccountInfo = Array.isArray(accountInfo.roleName) ? accountInfo.roleName : []
+      
+      // Ưu tiên roles từ root level, sau đó từ accountInfo
+      const allRoles = rolesFromRoot.length > 0 
+        ? rolesFromRoot 
+        : rolesFromAccountInfo.length > 0 
+          ? rolesFromAccountInfo 
+          : roleNameFromAccountInfo
       
       const userInfo: UserInfo = {
-        id: accountInfo.id,
+        id: accountInfo.id || data.accountId || '',
         email: accountInfo.email || '',
-        username: accountInfo.username,
+        username: accountInfo.username || data.username,
         firstName: accountInfo.firstName,
         lastName: accountInfo.lastName,
         name: accountInfo.firstName && accountInfo.lastName 
           ? `${accountInfo.firstName} ${accountInfo.lastName}`
-          : accountInfo.firstName || accountInfo.lastName || accountInfo.email,
+          : accountInfo.firstName || accountInfo.lastName || accountInfo.email || data.username || '',
         picture: accountInfo.avatarUrl || accountInfo.picture,
         avatarUrl: accountInfo.avatarUrl,
-        role: accountInfo.roleName?.[0] || accountInfo.roles?.[0],
-        roleName: accountInfo.roleName || accountInfo.roles,
-        roles: accountInfo.roleName || accountInfo.roles,
+        role: allRoles.length > 0 ? String(allRoles[0]) : accountInfo.role,
+        roleName: allRoles.length > 0 ? allRoles : (roleNameFromAccountInfo.length > 0 ? roleNameFromAccountInfo : []),
+        roles: allRoles.length > 0 ? allRoles : (rolesFromAccountInfo.length > 0 ? rolesFromAccountInfo : roleNameFromAccountInfo),
         status: accountInfo.status,
         dob: accountInfo.dob,
         address: accountInfo.address,
@@ -114,11 +133,3 @@ export async function isAdmin(req: NextRequest): Promise<boolean> {
     return false
   }
 }
-
-
-
-
-
-
-
-

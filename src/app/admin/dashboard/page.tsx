@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Badge from '@/components/ui/Badge'
+import { authService } from '@/lib/auth-service'
 
 // ===== Types =====
 type DateRange = { fromDate: string; toDate: string };
@@ -462,14 +463,26 @@ export default function AdminHome() {
             return;
           }
           
+        // Get token from authService (sử dụng key đúng từ auth-service)
+        const token = typeof window !== 'undefined' 
+          ? authService.getAccessToken()
+          : null
+        
         // Add credentials and headers for better compatibility
-        const fetchOptions = { 
+        const fetchOptions: RequestInit = { 
           signal: ac.signal,
           credentials: 'include' as RequestCredentials,
           headers: {
             'Content-Type': 'application/json',
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
           }
         };
+        
+        console.log('📤 Dashboard fetch options:', {
+          hasToken: !!token,
+          tokenLength: token?.length,
+          credentials: fetchOptions.credentials,
+        });
           
           const [occRes, bRes, cRes, pRes, soRes, tRes] = await Promise.all([
             fetch("/api/dashboard/occupancy", fetchOptions),

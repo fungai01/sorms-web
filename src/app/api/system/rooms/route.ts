@@ -1,13 +1,24 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { apiClient } from '@/lib/api-client';
 
 // GET - Fetch all rooms
-export async function GET(request: Request) {
+export async function GET(request: NextRequest) {
   try {
+    console.log('[API /system/rooms] GET request received');
+    
+    // Extract Authorization header from request
+    const authHeader = request.headers.get('authorization');
+    console.log('[API /system/rooms] Authorization header:', authHeader ? 'Found' : 'Not found');
+    
     const { searchParams } = new URL(request.url);
     const status = searchParams.get('status');
     const roomTypeId = searchParams.get('roomTypeId');
     const id = searchParams.get('id');
+
+    // Prepare headers to pass to apiClient
+    const headers: Record<string, string> = authHeader ? { 'Authorization': authHeader } : {};
+    const options: RequestInit = { headers };
+    console.log('[API /system/rooms] Options prepared:', { hasHeaders: !!headers['Authorization'] });
 
     // Get specific room by ID
     if (id) {
@@ -15,10 +26,11 @@ export async function GET(request: Request) {
       if (isNaN(roomId)) {
         return NextResponse.json({ error: 'Invalid room ID' }, { status: 400 });
       }
-      const response = await apiClient.getRoom(roomId);
+      const response = await apiClient.getRoom(roomId, options);
       if (response.success) {
         return NextResponse.json(response.data);
       }
+      console.error('[API /system/rooms] Failed to get room by ID:', response.error);
       return NextResponse.json({ error: response.error }, { status: 500 });
     }
 
@@ -29,9 +41,12 @@ export async function GET(request: Request) {
         return NextResponse.json({ error: 'Invalid room status' }, { status: 400 });
       }
 
-      const resp = await apiClient.getRoomsByStatus(status)
-      if (!resp.success) return NextResponse.json({ error: resp.error || 'Failed to fetch rooms by status' }, { status: 500 })
-      return NextResponse.json(resp.data)
+      const resp = await apiClient.getRoomsByStatus(status, options);
+      if (!resp.success) {
+        console.error('[API /system/rooms] Failed to get rooms by status:', resp.error);
+        return NextResponse.json({ error: resp.error || 'Failed to fetch rooms by status' }, { status: 500 });
+      }
+      return NextResponse.json(resp.data);
     }
 
     // Get rooms by room type
@@ -41,33 +56,88 @@ export async function GET(request: Request) {
         return NextResponse.json({ error: 'Invalid room type ID' }, { status: 400 });
       }
 
-      const resp = await apiClient.getRoomsByRoomType(typeId)
-      if (!resp.success) return NextResponse.json({ error: resp.error || 'Failed to fetch rooms by room type' }, { status: 500 })
-      const data: any = resp.data
-      const items = Array.isArray(data?.content) ? data.content : (Array.isArray(data) ? data : [])
-      return NextResponse.json({ items, total: items.length })
+      const resp = await apiClient.getRoomsByRoomType(typeId, options);
+      if (!resp.success) {
+        console.error('[API /system/rooms] Failed to get rooms by room type:', resp.error);
+        return NextResponse.json({ error: resp.error || 'Failed to fetch rooms by room type' }, { status: 500 });
+      }
+      const data: any = resp.data;
+      // Backend trả về ApiResponse<List<RoomResponse>> - data là array trực tiếp
+      const items = Array.isArray(data) ? data : [];
+      return NextResponse.json({ items, total: items.length });
     }
 
     // Get all rooms (default)
-    const response = await apiClient.getRooms();
+    console.log('[API /system/rooms] Calling apiClient.getRooms with options:', {
+      hasHeaders: !!options.headers,
+      headerKeys: options.headers ? Object.keys(options.headers as Record<string, string>) : [],
+      hasAuth: options.headers && (options.headers as Record<string, string>)['Authorization'] ? true : false
+    });
+    
+    let response
+    try {
+      response = await apiClient.getRooms(options);
+    } catch (apiError) {
+      console.error('[API /system/rooms] Exception calling apiClient.getRooms:', {
+        error: apiError,
+        message: apiError instanceof Error ? apiError.message : String(apiError),
+        stack: apiError instanceof Error ? apiError.stack : undefined
+      });
+      return NextResponse.json(
+        { error: apiError instanceof Error ? apiError.message : 'Failed to fetch rooms' },
+        { status: 500 }
+      );
+    }
+    
+    console.log('[API /system/rooms] Response:', {
+      success: response.success,
+      hasData: !!response.data,
+      error: response.error,
+      dataType: typeof response.data,
+      isArray: Array.isArray(response.data),
+      dataPreview: response.data ? JSON.stringify(response.data).substring(0, 500) : 'null',
+      errorPreview: response.error ? String(response.error).substring(0, 500) : 'null'
+    });
+    
     if (response.success) {
-      const data: any = response.data
-      const items = Array.isArray(data?.content) ? data.content : (Array.isArray(data) ? data : [])
+      const data: any = response.data;
+      // Backend trả về ApiResponse<List<RoomResponse>>
+      // Format: { responseCode: "S0000", message: "SUCCESS", data: [RoomResponse, ...] }
+      // data là array trực tiếp, không phải { content: [...] }
+      const items = Array.isArray(data) ? data : [];
+      console.log('[API /system/rooms] Returning items:', items.length);
       return NextResponse.json({ items, total: items.length });
     }
-    return NextResponse.json({ error: response.error }, { status: 500 });
+    
+    console.error('[API /system/rooms] Failed to get all rooms:', {
+      error: response.error,
+      fullError: JSON.stringify(response, null, 2)
+    });
+    return NextResponse.json(
+      { error: response.error || 'Failed to fetch rooms' },
+      { status: 500 }
+    );
   } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    console.error('[API /system/rooms] Exception:', error);
+    return NextResponse.json({ error: error.message || 'Internal server error' }, { status: 500 });
   }
 }
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     console.log('POST /api/system/rooms - Request body:', body);
 
-    const resp = await apiClient.createRoom(body)
-    if (!resp.success) return NextResponse.json({ error: resp.error || 'Failed to create room' }, { status: 500 })
+    // Extract Authorization header from request
+    const authHeader = request.headers.get('authorization');
+    const headers: Record<string, string> = authHeader ? { 'Authorization': authHeader } : {};
+    const options: RequestInit = { headers };
+
+    const resp = await apiClient.createRoom(body, options)
+    if (!resp.success) {
+      console.error('POST /api/system/rooms - Failed to create room:', resp.error)
+      return NextResponse.json({ error: resp.error || 'Failed to create room' }, { status: 500 })
+    }
     return NextResponse.json(resp.data, { status: 201 })
   } catch (error: any) {
     console.error('POST /api/system/rooms - Error:', error);
@@ -75,36 +145,52 @@ export async function POST(request: Request) {
   }
 }
 
-export async function PUT(request: Request) {
+export async function PUT(request: NextRequest) {
   try {
     const body = await request.json();
     const { id, ...updateData } = body;
     if (!id) {
       return NextResponse.json({ error: 'Room ID is required for update' }, { status: 400 });
     }
-    const response = await apiClient.updateRoom(id, updateData);
+
+    // Extract Authorization header from request
+    const authHeader = request.headers.get('authorization');
+    const headers: Record<string, string> = authHeader ? { 'Authorization': authHeader } : {};
+    const options: RequestInit = { headers };
+
+    const response = await apiClient.updateRoom(id, updateData, options);
     if (response.success) {
       return NextResponse.json(response.data);
     }
+    console.error('PUT /api/system/rooms - Failed to update room:', response.error)
     return NextResponse.json({ error: response.error }, { status: 500 });
   } catch (error: any) {
+    console.error('PUT /api/system/rooms - Error:', error)
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
 
-export async function DELETE(request: Request) {
+export async function DELETE(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
     if (!id) {
       return NextResponse.json({ error: 'Room ID is required for deletion' }, { status: 400 });
     }
-    const response = await apiClient.deleteRoom(Number(id));
+
+    // Extract Authorization header from request
+    const authHeader = request.headers.get('authorization');
+    const headers: Record<string, string> = authHeader ? { 'Authorization': authHeader } : {};
+    const options: RequestInit = { headers };
+
+    const response = await apiClient.deleteRoom(Number(id), options);
     if (response.success) {
       return NextResponse.json({ message: 'Room deleted successfully' });
     }
+    console.error('DELETE /api/system/rooms - Failed to delete room:', response.error)
     return NextResponse.json({ error: response.error }, { status: 500 });
   } catch (error: any) {
+    console.error('DELETE /api/system/rooms - Error:', error)
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
