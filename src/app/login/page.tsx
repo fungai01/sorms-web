@@ -6,6 +6,7 @@ import Image from "next/image";
 import Logo from "@/img/Logo.png";
 import Bg from "@/img/bg.jpg";
 import { useAuth } from "@/hooks/useAuth";
+import { authService } from "@/lib/auth-service";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -44,12 +45,90 @@ export default function LoginPage() {
     setError("");
 
     try {
-      // Sử dụng backend API để lấy Google OAuth URL
-      await loginWithGoogle();
-      // loginWithGoogle sẽ redirect, nên không cần setIsLoading(false)
-    } catch (error) {
+      // Lấy Google OAuth URL từ backend
+      const redirectUrl = await authService.getGoogleOAuthUrl();
+      
+      // Mở popup window để đăng nhập Google
+      const width = 500;
+      const height = 600;
+      const left = (window.screen.width - width) / 2;
+      const top = (window.screen.height - height) / 2;
+      
+      const popup = window.open(
+        redirectUrl,
+        'google-login',
+        `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`
+      );
+
+      if (!popup) {
+        throw new Error('Không thể mở cửa sổ đăng nhập. Vui lòng cho phép popup và thử lại.');
+      }
+
+      // Kiểm tra khi popup đóng mà không có message (user hủy)
+      let checkPopupClosed: NodeJS.Timeout;
+      
+      // Lắng nghe message từ popup
+      const messageListener = (event: MessageEvent) => {
+        // Kiểm tra origin để đảm bảo an toàn
+        if (event.origin !== window.location.origin) {
+          return;
+        }
+
+        if (event.data.type === 'GOOGLE_LOGIN_SUCCESS') {
+          // Đóng popup
+          popup.close();
+          window.removeEventListener('message', messageListener);
+          if (checkPopupClosed) {
+            clearInterval(checkPopupClosed);
+          }
+          
+          // Redirect đến dashboard (callback page đã lưu token vào localStorage)
+          const redirectUrl = event.data.redirectUrl || '/user/dashboard';
+          window.location.href = redirectUrl;
+        } else if (event.data.type === 'GOOGLE_LOGIN_ERROR') {
+          // Đóng popup
+          popup.close();
+          window.removeEventListener('message', messageListener);
+          if (checkPopupClosed) {
+            clearInterval(checkPopupClosed);
+          }
+          
+          // Hiển thị lỗi
+          setError(event.data.error || 'Đăng nhập thất bại. Vui lòng thử lại.');
+          setIsLoading(false);
+        }
+      };
+
+      window.addEventListener('message', messageListener);
+
+      checkPopupClosed = setInterval(() => {
+        if (popup.closed) {
+          clearInterval(checkPopupClosed);
+          window.removeEventListener('message', messageListener);
+          
+          // Kiểm tra xem có message nào được gửi không
+          // Nếu không có message và popup đã đóng, có nghĩa là user đã hủy
+          setIsLoading(false);
+          setError('Bạn đã hủy đăng nhập với Google. Vui lòng thử lại nếu muốn đăng nhập.');
+        }
+      }, 500);
+
+      // Cleanup sau 10 phút (timeout)
+      setTimeout(() => {
+        if (checkPopupClosed) {
+          clearInterval(checkPopupClosed);
+        }
+        window.removeEventListener('message', messageListener);
+        if (!popup.closed) {
+          popup.close();
+        }
+        setIsLoading(false);
+        setError('Đăng nhập quá thời gian. Vui lòng thử lại.');
+      }, 600000); // 10 phút
+
+    } catch (error: any) {
       console.error("Sign in error:", error);
-      setError("Có lỗi xảy ra khi đăng nhập. Vui lòng thử lại.");
+      setError(error.message || "Có lỗi xảy ra khi đăng nhập. Vui lòng thử lại.");
       setIsLoading(false);
     }
   };
@@ -109,15 +188,15 @@ export default function LoginPage() {
           <button
             onClick={handleGoogleSignIn}
             disabled={isLoading}
-            className={`w-full py-3 px-4 rounded-xl font-semibold transition-all duration-300 ${
+            className={`w-full py-3 px-4 rounded-xl font-semibold transition-all duration-300 border-2 ${
               isLoading
-                ? "bg-gray-300 text-gray-500 cursor-not-allowed"
-                : "bg-gradient-to-r from-blue-500 to-indigo-500 text-white hover:from-blue-600 hover:to-indigo-600 shadow-md hover:shadow-lg hover:scale-[1.01] active:scale-[0.99]"
+                ? "bg-gray-300 text-gray-500 cursor-not-allowed border-gray-300"
+                : "bg-white text-gray-700 border-gray-300 hover:border-gray-400 hover:bg-gray-50 shadow-md hover:shadow-lg hover:scale-[1.01] active:scale-[0.99]"
             }`}
           >
             {isLoading ? (
               <div className="flex items-center justify-center gap-2">
-                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                <div className="w-5 h-5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"></div>
                 <span>Đang xử lý...</span>
               </div>
             ) : (
