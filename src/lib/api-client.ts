@@ -680,16 +680,11 @@ class ApiClient {
       if (!r) return undefined
       const v = String(r).trim().toUpperCase()
       // Primary roles used by BE security annotations
-      if (v === 'ADMIN') return 'ADMIN'
+      if (v === 'ADMIN_SYTEM') return 'ADMIN_SYTEM'
       if (v === 'STAFF') return 'STAFF'
-      if (v === 'MANAGER') return 'MANAGER'
+      if (v === 'ADMINISTRATIVE') return 'ADMINISTRATIVE'
+      if (v === 'SERCURITY') return 'SECURITY'
       if (v === 'USER') return 'USER'
-      // FE route aliases
-      if (v === 'OFFICE') return 'MANAGER' // office area maps to manager-level access
-      // Legacy synonyms from older data
-      if (v === 'ADMIN_SYSTEM' || v === 'ADMIN_SYTEM' || v === 'ADMINISTRATOR') return 'ADMIN'
-      if (v === 'ADMINITRATIVE' || v === 'ADMINISTRATIVE') return 'MANAGER'
-      if (v === 'SERCURITY' || v === 'SECURITY') return 'STAFF'
       return undefined
     }
 

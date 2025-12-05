@@ -675,39 +675,18 @@ export default function UserPage() {
     if (selectedPayment) {
       try {
         const paymentDataToSend = {
+          paymentId: selectedPayment.id,
           amount: paymentData.amount,
-          description: selectedPayment.description,
           method: paymentData.method,
           status: 'PAID',
-          paidDate: new Date().toISOString(),
-          bookingId: (selectedPayment as any).bookingId,
-          serviceOrderId: (selectedPayment as any).serviceOrderId
+          paidDate: new Date().toISOString()
         };
 
-        // Call payment API
-        const res = await fetch('/api/system/payments?action=process', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${localStorage.getItem('auth_access_token') || ''}`
-          },
-          credentials: 'include',
-          body: JSON.stringify(paymentDataToSend)
-        });
-
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ error: 'Có lỗi xảy ra' }));
-          setFlash({ type: 'error', text: err.error || 'Có lỗi xảy ra khi thanh toán' });
-          return;
-        }
-
+        // Payment API not available yet - simulate success
         setPaymentModalOpen(false);
         setSelectedPayment(null);
         setPaymentData({ method: '', amount: 0 });
         setFlash({ type: 'success', text: 'Thanh toán thành công!' });
-        
-        // Refresh data
-        refetchServiceOrders();
       } catch (error) {
         setFlash({ type: 'error', text: 'Có lỗi xảy ra khi thanh toán' });
         console.error('Payment error:', error);
@@ -1358,139 +1337,12 @@ export default function UserPage() {
           {activeTab === 'payments' && (
             <div className="space-y-4">
               <div className="flex justify-between items-center">
-                <h2 className="text-lg font-semibold text-gray-900">Hóa đơn & Thanh toán</h2>
+                <h2 className="text-lg font-semibold text-gray-900">Hóa đơn</h2>
               </div>
               
-              {(() => {
-                // Calculate payments from bookings and service orders
-                const bookingPayments = bookings
-                  .filter(b => b.status === 'CONFIRMED')
-                  .map((b, idx) => ({
-                    id: `booking-${b.id}`,
-                    bookingId: b.id,
-                    description: `Thanh toán đặt phòng: ${b.roomType} (${b.checkIn} - ${b.checkOut})`,
-                    amount: 0, // Free bookings
-                    status: 'PAID' as const,
-                    dueDate: new Date(b.checkOut).toISOString().split('T')[0],
-                    paidDate: new Date(b.confirmedAt || b.createdAt).toISOString().split('T')[0],
-                    paymentMethod: 'Miễn phí'
-                  }));
-
-                const servicePayments = serviceOrders
-                  .filter(so => so.totalPrice > 0)
-                  .map((so, idx) => ({
-                    id: `service-${so.id}`,
-                    serviceOrderId: so.id,
-                    description: `Thanh toán dịch vụ: ${so.serviceName} (${so.quantity}x)`,
-                    amount: so.totalPrice,
-                    status: so.status === 'COMPLETED' ? 'PAID' : 'PENDING' as const,
-                    dueDate: so.deliveryDate || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-                    paidDate: so.status === 'COMPLETED' ? new Date().toISOString().split('T')[0] : undefined,
-                    paymentMethod: so.status === 'COMPLETED' ? 'Đã thanh toán' : undefined
-                  }));
-
-                const allPayments = [...bookingPayments, ...servicePayments];
-                const paidPayments = allPayments.filter(p => p.status === 'PAID').length;
-                const pendingPayments = allPayments.filter(p => p.status === 'PENDING').length;
-                const totalAmount = allPayments.reduce((sum, p) => sum + p.amount, 0);
-                const paidAmount = allPayments.filter(p => p.status === 'PAID').reduce((sum, p) => sum + p.amount, 0);
-
-                return (
-                  <>
-                    {/* Payment Stats */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                      <Card>
-                        <CardBody>
-                          <div className="text-center">
-                            <div className="text-2xl font-bold text-blue-600">{allPayments.length}</div>
-                            <div className="text-sm text-gray-600">Tổng hóa đơn</div>
-                          </div>
-                        </CardBody>
-                      </Card>
-                      <Card>
-                        <CardBody>
-                          <div className="text-center">
-                            <div className="text-2xl font-bold text-green-600">{paidPayments}</div>
-                            <div className="text-sm text-gray-600">Đã thanh toán</div>
-                          </div>
-                        </CardBody>
-                      </Card>
-                      <Card>
-                        <CardBody>
-                          <div className="text-center">
-                            <div className="text-2xl font-bold text-orange-600">{pendingPayments}</div>
-                            <div className="text-sm text-gray-600">Chờ thanh toán</div>
-                          </div>
-                        </CardBody>
-                      </Card>
-                      <Card>
-                        <CardBody>
-                          <div className="text-center">
-                            <div className="text-2xl font-bold text-purple-600">{totalAmount.toLocaleString()} VND</div>
-                            <div className="text-sm text-gray-600">Tổng tiền</div>
-                          </div>
-                        </CardBody>
-                      </Card>
-                    </div>
-
-                    {/* Payments List */}
-                    {allPayments.length === 0 ? (
-                      <Card>
-                        <CardBody>
               <div className="text-center py-8 text-gray-500">
-                            <p>Chưa có hóa đơn nào</p>
+                <p>Chức năng thanh toán đang được phát triển</p>
               </div>
-                        </CardBody>
-                      </Card>
-                    ) : (
-                      <div className="grid gap-4">
-                        {allPayments.map((payment) => (
-                          <Card key={payment.id}>
-                            <CardBody>
-                              <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-                                <div className="flex-1">
-                                  <div className="flex flex-wrap items-center gap-2 mb-2">
-                                    <h3 className="text-lg font-semibold text-gray-900">
-                                      {payment.description}
-                                    </h3>
-                                    {getStatusBadge(payment.status)}
-                                  </div>
-                                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm text-gray-600">
-                                    <div><span className="font-medium">Số tiền:</span> <span className="text-green-600 font-semibold">{payment.amount.toLocaleString()} VND</span></div>
-                                    <div><span className="font-medium">Hạn thanh toán:</span> {payment.dueDate}</div>
-                                    {payment.paidDate && (
-                                      <div><span className="font-medium">Ngày thanh toán:</span> {payment.paidDate}</div>
-                                    )}
-                                    {payment.paymentMethod && (
-                                      <div><span className="font-medium">Phương thức:</span> {payment.paymentMethod}</div>
-                                    )}
-                                  </div>
-                                </div>
-                                <div className="flex flex-col sm:flex-row gap-2">
-                                  {payment.status === 'PENDING' && payment.amount > 0 && (
-                                    <Button
-                                      onClick={() => {
-                                        setSelectedPayment(payment as any);
-                                        setPaymentModalOpen(true);
-                                      }}
-                                      className="bg-green-600 hover:bg-green-700 text-white"
-                                    >
-                                      Thanh toán
-                                    </Button>
-                                  )}
-                                  <Button variant="secondary">
-                                    Xem chi tiết
-                                  </Button>
-                                </div>
-                              </div>
-                            </CardBody>
-                          </Card>
-                        ))}
-                      </div>
-                    )}
-                  </>
-                );
-              })()}
             </div>
           )}
 

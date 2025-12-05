@@ -10,8 +10,6 @@ import { useAuth } from "@/hooks/useAuth";
 export default function LoginPage() {
   const router = useRouter();
   const { loginWithGoogle } = useAuth();
-  const [selectedRole, setSelectedRole] = useState("");
-  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -38,50 +36,14 @@ export default function LoginPage() {
       setError('Xác thực thất bại. Vui lòng thử đăng nhập lại.');
     } else if (errorParam === 'user_not_found') {
       setError('Tài khoản của bạn chưa được đăng ký trong hệ thống. Vui lòng liên hệ admin để được tạo tài khoản.');
-    } else if (errorParam === 'role_mismatch') {
-      setError('Bạn chỉ có thể đăng nhập với vai trò của mình trong hệ thống. Vui lòng chọn đúng vai trò.');
     }
   }, []);
 
-  const roles = [
-    { id: "admin", name: "Admin" },
-    { id: "office", name: "Phòng Hành chính" },
-    { id: "staff", name: "Nhân viên" },
-    { id: "user", name: "Người dùng" },
-  ];
-
-  // Tailwind màu cho từng option - Màu đẹp hơn với gradient và độ tương phản cao
-  const roleStyles: Record<string, { bg: string; hover: string; activeBg: string; text: string; ring: string; border: string; }> = {
-    admin:  { bg: "bg-gradient-to-r from-rose-100 to-pink-100",       hover: "hover:from-rose-200 hover:to-pink-200",       activeBg: "bg-gradient-to-r from-rose-200 to-pink-200",       text: "text-gray-800",       ring: "hover:ring-rose-300",       border: "border-rose-300" },
-    office: { bg: "bg-gradient-to-r from-sky-100 to-blue-100",        hover: "hover:from-sky-200 hover:to-blue-200",        activeBg: "bg-gradient-to-r from-sky-200 to-blue-200",        text: "text-gray-800",        ring: "hover:ring-sky-300",        border: "border-sky-300" },
-    staff:  { bg: "bg-gradient-to-r from-amber-100 to-orange-100",    hover: "hover:from-amber-200 hover:to-orange-200",    activeBg: "bg-gradient-to-r from-amber-200 to-orange-200",    text: "text-gray-800",      ring: "hover:ring-amber-300",      border: "border-amber-300" },
-    user:   { bg: "bg-gradient-to-r from-emerald-100 to-teal-100",    hover: "hover:from-emerald-200 hover:to-teal-200",    activeBg: "bg-gradient-to-r from-emerald-200 to-teal-200",    text: "text-gray-800",    ring: "hover:ring-emerald-300",    border: "border-emerald-300" },
-  };
-
-  const handleRoleSelect = (roleId: string) => {
-    setSelectedRole(roleId);
-    setIsDropdownOpen(false);
-    setError("");
-  };
-
   const handleGoogleSignIn = async () => {
-    // Vai trò là tùy chọn, không bắt buộc chọn
-    // Nếu không chọn, role sẽ được lấy từ database/token sau khi xác thực
     setIsLoading(true);
     setError("");
 
     try {
-      // Lưu role vào sessionStorage để sử dụng sau khi callback (nếu có)
-      // Nếu không chọn role, để trống - callback sẽ dùng role từ database/token
-      if (typeof window !== 'undefined') {
-        if (selectedRole) {
-          sessionStorage.setItem('selectedRole', selectedRole);
-        } else {
-          // Xóa selectedRole nếu không chọn (để dùng role từ database/token)
-          sessionStorage.removeItem('selectedRole');
-        }
-      }
-
       // Sử dụng backend API để lấy Google OAuth URL
       await loginWithGoogle();
       // loginWithGoogle sẽ redirect, nên không cần setIsLoading(false)
@@ -142,59 +104,6 @@ export default function LoginPage() {
               <p className="text-red-600 text-sm text-center">{error}</p>
             </div>
           )}
-
-          {/* Role Selection - Optional (chỉ cần cho admin muốn login với role khác) */}
-          <div className="mb-6">
-            <label className="block text-sm font-semibold text-gray-700 mb-2">
-              Chọn vai trò (tùy chọn)
-            </label>
-            <div className="relative">
-              <button
-                onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                className={`w-full px-4 py-3 border-2 rounded-xl text-left flex items-center justify-between transition-colors focus:outline-none ${selectedRole ? `${roleStyles[selectedRole]?.bg ?? 'bg-white'} ${roleStyles[selectedRole]?.border ?? 'border-gray-300'}` : 'bg-white border-gray-300'}`}
-              >
-                <span className={selectedRole ? (roleStyles[selectedRole]?.text ?? "text-gray-800") : "text-gray-400"}>
-                  {selectedRole
-                    ? roles.find((r) => r.id === selectedRole)?.name
-                    : "Chọn vai trò..."}
-                </span>
-                <svg
-                  className={`w-5 h-5 ${selectedRole ? (roleStyles[selectedRole]?.text ?? 'text-gray-400') : 'text-gray-400'} transition-transform ${
-                    isDropdownOpen ? "rotate-180" : ""
-                  }`}
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M19 9l-7 7-7-7"
-                  />
-                </svg>
-              </button>
-
-              {/* Dropdown Menu */}
-              {isDropdownOpen && (
-                <div className="absolute z-20 w-full mt-2 bg-white border-2 border-gray-200 rounded-xl shadow-lg overflow-hidden">
-                  {roles.map((role) => {
-                    const style = roleStyles[role.id] ?? { bg: "bg-gray-50", hover: "hover:bg-gray-100", activeBg: "bg-gray-100", text: "text-gray-800", ring: "hover:ring-gray-200", border: "border-gray-300" };
-                    const isActive = selectedRole === role.id;
-                    return (
-                      <button
-                        key={role.id}
-                        onClick={() => handleRoleSelect(role.id)}
-                        className={`w-full px-4 py-3 text-left transition-colors ${isActive ? style.activeBg : style.bg} ${style.hover} ${style.text} ${style.ring} focus:outline-none focus:ring-2 ${isActive ? "ring-2 ring-offset-0 ring-black/10 font-semibold" : ""}`}
-                      >
-                        {role.name}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
 
           {/* Google Sign-In Button */}
           <button

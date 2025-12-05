@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-export type AppRole = "admin" | "office" | "staff" | "lecturer" | "guest" | "user" | null;
+export type AppRole = "admin" | "office" | "staff" | "user" | null;
 
 function readCookie(name: string): string | null {
   if (typeof document === "undefined") return null;
@@ -20,12 +20,6 @@ export function useCurrentRole(): AppRole {
     const fromCookie = readCookie("role");
     const fromStorage = localStorage.getItem("userRole");
     const r = (fromCookie || fromStorage) as AppRole;
-    // Normalize lecturer/guest to user route group used in app
-    if (r === "lecturer" || r === "guest") {
-      setRole("user");
-    } else {
-      setRole(r || null);
-    }
   }, []);
 
   return role;

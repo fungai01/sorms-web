@@ -11,11 +11,11 @@ export default function Button({
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant }) {
   const styles: Record<Variant, string> = {
     primary:
-      "bg-gray-900 hover:bg-gray-800 text-white border border-gray-300",
+      "bg-gray-700 hover:bg-gray-800 text-white shadow-sm",
     secondary:
       "bg-white hover:bg-gray-50 text-gray-900 border border-gray-300",
     danger:
-      "bg-white hover:bg-gray-50 text-gray-900 border border-gray-300",
+      "bg-red-600 hover:bg-red-700 text-white shadow-sm",
     ghost:
       "bg-transparent hover:bg-gray-50 text-gray-700 border-0",
   };

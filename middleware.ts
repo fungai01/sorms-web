@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { getToken } from "next-auth/jwt";
+
 export async function middleware(req: NextRequest) {
 	const { pathname } = req.nextUrl;
 
@@ -8,24 +8,21 @@ export async function middleware(req: NextRequest) {
 		return NextResponse.next();
 	}
 
-	const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
-
 	// Get role and login flag from cookies (set by client after auth)
 	const roleFromCookie = req.cookies.get("role")?.value;
 	const isLoggedInCookie = req.cookies.get("isLoggedIn")?.value === 'true';
-	const email = (token as any)?.email as string | undefined;
+	const accessToken = req.cookies.get("access_token")?.value;
 
-	console.log('🔒 Middleware check:', { pathname, role: roleFromCookie, email, hasToken: !!token, isLoggedInCookie });
+	console.log('🔒 Middleware check:', { pathname, role: roleFromCookie, hasToken: !!accessToken, isLoggedInCookie });
 
-	// Accept either Next-Auth session (email) OR role cookie OR isLoggedIn cookie
-	if (!email && !roleFromCookie && !isLoggedInCookie) {
-		console.log('❌ No session/email and no role/isLoggedIn cookie, redirecting to home page');
+	// Accept either access token OR role cookie OR isLoggedIn cookie
+	if (!accessToken && !roleFromCookie && !isLoggedInCookie) {
+		console.log('❌ No access token and no role/isLoggedIn cookie, redirecting to home page');
 		const url = req.nextUrl.clone();
 		url.pathname = "/";
 		return NextResponse.redirect(url);
 	}
 
-	// Check role-based access cho user (không còn cơ chế super admin, chỉ dùng role)
 	if (pathname.startsWith("/admin")) {
 		// Only admin role can access admin routes
 		if (roleFromCookie !== "admin") {

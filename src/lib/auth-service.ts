@@ -32,13 +32,13 @@ export const mapRoleToAppRole = (role?: string): 'admin' | 'office' | 'staff' | 
   if (!role) return 'user'
   const r = role.trim().toUpperCase()
   // Admin variants
-  if (['ADMIN','ADMIN_SYSTEM','ADMIN_SYTEM','ADMINISTRATOR'].includes(r)) return 'admin'
+  if (['ADMIN_SYTEM'].includes(r)) return 'admin'
   // Manager/Office variants
-  if (['MANAGER','ADMINISTRATIVE','ADMINITRATIVE','OFFICE'].includes(r)) return 'office'
+  if (['ADMINISTRATIVE'].includes(r)) return 'office'
   // Staff variants (includes SECURITY typo)
-  if (['STAFF','SECURITY','SERCURITY'].includes(r)) return 'staff'
+  if (['STAFF','SECURITY'].includes(r)) return 'staff'
   // Lecturer/Guest/User -> user area
-  if (['LECTURER','GUEST','USER'].includes(r)) return 'user'
+  if (['USER'].includes(r)) return 'user'
   return 'user'
 }
 
