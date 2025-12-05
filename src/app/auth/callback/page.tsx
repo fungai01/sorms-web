@@ -49,21 +49,53 @@ function AuthCallbackInner() {
       setHasProcessed(true);
       // Kiểm tra nếu có lỗi từ OAuth
       if (errorParam) {
-        setError(`Lỗi OAuth: ${errorParam}`);
+        const errorMessage = `Lỗi OAuth: ${errorParam}`;
+        setError(errorMessage);
         setIsProcessing(false);
-        setTimeout(() => {
-          router.push('/login?error=oauth_error');
-        }, 2000);
+        
+        // Kiểm tra xem có phải đang trong popup không
+        if (window.opener && !window.opener.closed) {
+          // Gửi message về parent window với lỗi
+          window.opener.postMessage({
+            type: 'GOOGLE_LOGIN_ERROR',
+            error: errorMessage
+          }, window.location.origin);
+          
+          // Đóng popup sau một chút để đảm bảo message được gửi
+          setTimeout(() => {
+            window.close();
+          }, 100);
+        } else {
+          setTimeout(() => {
+            router.push('/login?error=oauth_error');
+          }, 2000);
+        }
         return;
       }
 
       // Kiểm tra nếu không có code
       if (!code) {
-        setError('Không nhận được mã xác thực từ Google');
+        const errorMessage = 'Không nhận được mã xác thực từ Google';
+        setError(errorMessage);
         setIsProcessing(false);
-        setTimeout(() => {
-          router.push('/login?error=no_code');
-        }, 2000);
+        
+        // Kiểm tra xem có phải đang trong popup không
+        if (window.opener && !window.opener.closed) {
+          // Gửi message về parent window với lỗi
+          window.opener.postMessage({
+            type: 'GOOGLE_LOGIN_ERROR',
+            error: errorMessage
+          }, window.location.origin);
+          
+          // Đóng popup sau một chút để đảm bảo message được gửi
+          setTimeout(() => {
+            window.close();
+          }, 100);
+        } else {
+          setTimeout(() => {
+            router.push('/login?error=no_code');
+          }, 2000);
+        }
         return;
       }
 
@@ -180,7 +212,22 @@ function AuthCallbackInner() {
           window.history.replaceState({}, '', newUrl.toString());
         }
         
-        router.push(redirectUrl);
+        // Kiểm tra xem có phải đang trong popup không
+        if (window.opener && !window.opener.closed) {
+          // Gửi message về parent window
+          window.opener.postMessage({
+            type: 'GOOGLE_LOGIN_SUCCESS',
+            redirectUrl: redirectUrl
+          }, window.location.origin);
+          
+          // Đóng popup sau một chút để đảm bảo message được gửi
+          setTimeout(() => {
+            window.close();
+          }, 100);
+        } else {
+          // Nếu không phải popup, redirect bình thường
+          router.push(redirectUrl);
+        }
       } catch (err) {
         console.error('❌ OAuth callback error:', err);
         const errorMessage = err instanceof Error ? err.message : 'Có lỗi xảy ra trong quá trình xác thực';
@@ -209,10 +256,24 @@ function AuthCallbackInner() {
           errorParam = 'redirect_uri_mismatch';
         }
         
-        // Redirect về login sau 2 giây với error code
-        setTimeout(() => {
-          router.push(`/login?error=${errorParam}`);
-        }, 2000);
+        // Kiểm tra xem có phải đang trong popup không
+        if (window.opener && !window.opener.closed) {
+          // Gửi message về parent window với lỗi
+          window.opener.postMessage({
+            type: 'GOOGLE_LOGIN_ERROR',
+            error: errorMessage
+          }, window.location.origin);
+          
+          // Đóng popup sau một chút để đảm bảo message được gửi
+          setTimeout(() => {
+            window.close();
+          }, 100);
+        } else {
+          // Nếu không phải popup, redirect về login sau 2 giây với error code
+          setTimeout(() => {
+            router.push(`/login?error=${errorParam}`);
+          }, 2000);
+        }
       } finally {
         setIsProcessing(false);
       }
