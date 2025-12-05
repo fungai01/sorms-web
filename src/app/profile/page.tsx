@@ -195,6 +195,7 @@ export default function ProfilePage() {
   const [selectedWard, setSelectedWard] = useState<string | "">("");
   const [addressDetail, setAddressDetail] = useState("");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [loadingCommunes, setLoadingCommunes] = useState(false);
 
   const displayName = useMemo(() => {
     if (!profile) return "";
@@ -229,10 +230,29 @@ export default function ProfilePage() {
   useEffect(() => {
     if (!editModalOpen) return;
     if (allCommunes.length > 0) return;
+    
     const loadCommunes = async () => {
+      setLoadingCommunes(true);
       try {
-        const res = await fetch("https://production.cas.so/address-kit/2025-07-01/communes");
-        const data = await res.json();
+        // Sử dụng Next.js API route proxy để tránh CORS
+        const res = await fetch('/api/address/communes', {
+          cache: 'no-store',
+        });
+        
+        // Kiểm tra response status
+        if (!res.ok) {
+          const errorData = await res.json().catch(() => ({}));
+          throw new Error(errorData.error || `API trả về lỗi: ${res.status} ${res.statusText}`);
+        }
+        
+        // Parse JSON với error handling
+        let data;
+        try {
+          data = await res.json();
+        } catch (parseError) {
+          throw new Error('Không thể parse dữ liệu từ API (response không phải JSON hợp lệ)');
+        }
+        
         const list = Array.isArray(data?.communes) ? data.communes : [];
         const mapped: Ward[] = list.map((c: any) => ({
           code: String(c.code),
@@ -248,11 +268,28 @@ export default function ProfilePage() {
           }
         });
         setProvinces(Array.from(provinceMap.values()));
-      } catch {
+      } catch (error) {
+        // Log lỗi chi tiết để debug
+        console.error('Lỗi khi load communes:', error);
+        
+        // Hiển thị thông báo lỗi cho user
+        const errorMessage = error instanceof Error 
+          ? error.message 
+          : 'Không thể tải danh sách địa chỉ. Vui lòng thử lại sau.';
+        
+        setFlash({
+          type: 'error',
+          text: `Lỗi tải dữ liệu địa chỉ: ${errorMessage}`,
+        });
+        
+        // Set empty arrays để UI không bị crash
         setAllCommunes([]);
         setProvinces([]);
+      } finally {
+        setLoadingCommunes(false);
       }
     };
+    
     loadCommunes();
   }, [editModalOpen, allCommunes.length]);
 
