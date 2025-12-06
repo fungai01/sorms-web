@@ -515,8 +515,8 @@ class ApiClient {
   }
 
   async deleteRoomType(id: number, options?: RequestInit) {
-    // Soft delete: deactivate instead of hard delete
-    return this.put(`/room-types/${id}/deactivate`, undefined, options)
+    // DELETE /room-types/{id} - Hard delete as per API spec
+    return this.delete(`/room-types/${id}`, options)
   }
 
   async getBookings(options?: RequestInit) {
@@ -545,17 +545,21 @@ class ApiClient {
   }
 
   async updateBooking(id: number, bookingData: any) {
-    const formattedData = {
-      code: bookingData.code,
-      userId: bookingData.userId || bookingData.user_id,
+    // PUT /bookings/{id} - Body format: { id, roomId, checkinDate, checkoutDate, numGuests, note, status? }
+    // Note: status có thể được gửi để cập nhật trạng thái booking
+    const formattedData: any = {
+      id: id, // Include id in body as per API spec
       roomId: bookingData.roomId || bookingData.room_id,
       checkinDate: bookingData.checkinDate || bookingData.checkin_date,
       checkoutDate: bookingData.checkoutDate || bookingData.checkout_date,
-      numGuests: bookingData.numGuests || bookingData.num_guests,
-      note: bookingData.note || '',
-      status: bookingData.status
+      numGuests: bookingData.numGuests || bookingData.num_guests || 1,
+      note: bookingData.note || ''
     }
-    return this.patch(`/bookings/${id}`, formattedData)
+    // Thêm status nếu có (để cập nhật trạng thái booking)
+    if (bookingData.status) {
+      formattedData.status = bookingData.status
+    }
+    return this.put(`/bookings/${id}`, formattedData)
   }
 
   async deleteBooking(id: number) {
@@ -845,46 +849,6 @@ class ApiClient {
         series: [] 
       } 
     }
-  }
-
-  // Check-in methods
-  async getCheckins() {
-    return this.get('/checkins')
-  }
-
-  async createCheckin(checkinData: any) {
-    const formattedData = {
-      booking_code: checkinData.booking_code,
-      user_name: checkinData.user_name,
-      room_code: checkinData.room_code,
-      checkin_at: checkinData.checkin_at,
-      checkout_at: checkinData.checkout_at,
-      face_ref: checkinData.face_ref,
-      status: checkinData.status || 'PENDING'
-    }
-    return this.post('/checkins', formattedData)
-  }
-
-  async updateCheckin(id: number, checkinData: any) {
-    const formattedData = {
-      booking_code: checkinData.booking_code,
-      user_name: checkinData.user_name,
-      room_code: checkinData.room_code,
-      checkin_at: checkinData.checkin_at,
-      checkout_at: checkinData.checkout_at,
-      face_ref: checkinData.face_ref,
-      status: checkinData.status
-    }
-    return this.put(`/checkins/${id}`, formattedData)
-  }
-
-  async deleteCheckin(id: number) {
-    // Soft delete: deactivate instead of hard delete
-    return this.put(`/checkins/${id}/deactivate`)
-  }
-
-  async getCheckin(id: number) {
-    return this.get(`/checkins/${id}`)
   }
 
   // Authentication methods

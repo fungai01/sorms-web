@@ -1,7 +1,7 @@
 // Client-side helper cho QR booking
 
 export async function getBookingQr(bookingId: number) {
-  const res = await fetch(`/api/user/bookings/${bookingId}/qr`, {
+  const res = await fetch(`/api/user/bookings?bookingId=${bookingId}&action=qr`, {
     credentials: 'include',
   })
 

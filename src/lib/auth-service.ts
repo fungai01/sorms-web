@@ -28,11 +28,16 @@ export interface UserInfo {
 
 // Map backend roles/departments to app route roles (FE)
 // BE uses: ADMIN, MANAGER, STAFF, USER (plus some historical typos)
+// Supports both ROLE_ADMIN_SYTEM and ADMIN_SYTEM formats
 export const mapRoleToAppRole = (role?: string): 'admin' | 'office' | 'staff' | 'user' => {
   if (!role) return 'user'
-  const r = role.trim().toUpperCase()
+  let r = role.trim().toUpperCase()
+  // Strip ROLE_ prefix if present
+  if (r.startsWith('ROLE_')) {
+    r = r.substring(5)
+  }
   // Admin variants
-  if (['ADMIN_SYTEM'].includes(r)) return 'admin'
+  if (['ADMIN', 'ADMIN_SYTEM'].includes(r)) return 'admin'
   // Manager/Office variants
   if (['ADMINISTRATIVE'].includes(r)) return 'office'
   // Staff variants (includes SECURITY typo)

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
@@ -8,11 +8,12 @@ import Modal from "@/components/ui/Modal";
 import Input from "@/components/ui/Input";
 import { createBookingNotification } from "@/lib/notifications";
 import { useRooms, useUserBookings, useServiceOrders, useServices, useStaffUsers, useAllBookings } from "@/hooks/useApi";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { authService } from "@/lib/auth-service";
 import { apiClient } from "@/lib/api-client";
-import { getFaceStatus } from "@/lib/face-service";
+import { getFaceStatus, deleteFace } from "@/lib/face-service";
 import { getBookingQr } from "@/lib/qr-service";
+import QRCode from "qrcode";
 
 type Room = {
   id: number;
@@ -110,8 +111,10 @@ const parseBookingNote = (note?: string) => {
   };
 };
 
-export default function UserPage() {
+function UserPageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  
   // Set user role in sessionStorage
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -136,6 +139,18 @@ export default function UserPage() {
   }, []);
 
   const [activeTab, setActiveTab] = useState<'rooms' | 'booking' | 'services' | 'payments' | 'history'>('rooms');
+  
+  // Tự động mở tab booking nếu có bookingId trong query
+  useEffect(() => {
+    const bookingId = searchParams.get('bookingId');
+    if (bookingId) {
+      setActiveTab('booking');
+      // Xóa query parameter sau khi đã xử lý
+      const url = new URL(window.location.href);
+      url.searchParams.delete('bookingId');
+      router.replace(url.pathname + url.search, { scroll: false });
+    }
+  }, [searchParams, router]);
   const [loading, setLoading] = useState({ rooms: true, bookings: true, services: true });
   
   // Determine if user is lecturer
@@ -151,7 +166,7 @@ export default function UserPage() {
   // Use API hooks for data fetching
   const { data: roomsData, loading: roomsLoading, error: roomsError, refetch: refetchRooms } = useRooms();
   const { data: bookingsData, loading: bookingsLoading, error: bookingsError, refetch: refetchUserBookings } = useUserBookings();
-  const { data: allBookingsData } = useAllBookings();
+  const { data: allBookingsData, refetch: refetchAllBookings } = useAllBookings();
   const { data: serviceOrdersData, loading: serviceOrdersLoading, error: serviceOrdersError, refetch: refetchServiceOrders } = useServiceOrders();
   const { data: servicesData, loading: servicesLoading } = useServices(); // Danh sách dịch vụ có sẵn
   const { data: staffUsersData, loading: staffUsersLoading } = useStaffUsers(); // Danh sách nhân viên
@@ -236,8 +251,17 @@ export default function UserPage() {
     loading: boolean;
     registered?: boolean;
     qrToken?: string | null;
+    qrDataUrl?: string | null;
     error?: string | null;
   }>>({});
+  
+  // State cho QR code modal
+  const [qrModalOpen, setQrModalOpen] = useState(false);
+  const [selectedQrData, setSelectedQrData] = useState<{
+    qrDataUrl: string;
+    bookingId: number;
+    bookingData?: any;
+  } | null>(null);
 
   // Auto-hide success/error messages after a few seconds
   useEffect(() => {
@@ -309,6 +333,47 @@ export default function UserPage() {
     }
   };
 
+  const handleDeleteFace = async (bookingId: number) => {
+    if (!confirm('Bạn có chắc chắn muốn xóa khuôn mặt đã đăng ký? Bạn sẽ cần đăng ký lại để sử dụng tính năng check-in bằng khuôn mặt.')) {
+      return;
+    }
+    
+    setFaceStates(prev => ({
+      ...prev,
+      [bookingId]: {
+        ...prev[bookingId],
+        loading: true,
+        error: null
+      }
+    }));
+    
+    try {
+      await deleteFace(bookingId);
+      setFaceStates(prev => ({
+        ...prev,
+        [bookingId]: {
+          ...prev[bookingId],
+          loading: false,
+          registered: false,
+          qrToken: null,
+          error: null
+        }
+      }));
+      setFlash({ type: 'success', text: 'Đã xóa khuôn mặt thành công. Bạn có thể đăng ký lại nếu cần.' });
+      refetchUserBookings();
+    } catch (e) {
+      setFaceStates(prev => ({
+        ...prev,
+        [bookingId]: {
+          ...prev[bookingId],
+          loading: false,
+          error: e instanceof Error ? e.message : 'Không thể xóa khuôn mặt'
+        }
+      }));
+      setFlash({ type: 'error', text: e instanceof Error ? e.message : 'Không thể xóa khuôn mặt' });
+    }
+  };
+
   const handleLoadQrForBooking = async (bookingId: number) => {
     setFaceStates(prev => ({
       ...prev,
@@ -339,6 +404,25 @@ export default function UserPage() {
       }
 
       const qr = await getBookingQr(bookingId);
+      
+      // Tạo QR code image từ token
+      let qrDataUrl: string | null = null;
+      if (qr.token) {
+        try {
+          qrDataUrl = await QRCode.toDataURL(qr.token, {
+            errorCorrectionLevel: "H",
+            margin: 1,
+            width: 300,
+            color: {
+              dark: "#000000",
+              light: "#FFFFFF",
+            },
+          });
+        } catch (err) {
+          console.error("Error generating QR code:", err);
+        }
+      }
+      
       setFaceStates(prev => ({
         ...prev,
         [bookingId]: {
@@ -346,6 +430,7 @@ export default function UserPage() {
           loading: false,
           registered: true,
           qrToken: qr.token,
+          qrDataUrl: qrDataUrl,
           error: null
         }
       }));
@@ -363,6 +448,50 @@ export default function UserPage() {
       }));
     }
   };
+
+  // Tự động kiểm tra trạng thái khuôn mặt và load QR code cho các booking đã confirmed
+  useEffect(() => {
+    const autoLoadFaceAndQr = async () => {
+      for (const booking of bookings) {
+        if (booking.status === 'CONFIRMED') {
+          const faceState = faceStates[booking.id];
+          
+          // Nếu chưa có thông tin face state, kiểm tra trạng thái
+          if (!faceState || faceState.registered === undefined) {
+            try {
+              const result = await getFaceStatus(booking.id);
+              const isRegistered = !!result?.registered;
+              
+              setFaceStates(prev => ({
+                ...prev,
+                [booking.id]: {
+                  ...prev[booking.id],
+                  registered: isRegistered,
+                  loading: false,
+                }
+              }));
+              
+              // Nếu đã đăng ký khuôn mặt, tự động load QR code
+              if (isRegistered) {
+                await handleLoadQrForBooking(booking.id);
+              }
+            } catch (e) {
+              // Ignore errors, sẽ hiển thị khi user click button
+            }
+          } 
+          // Nếu đã đăng ký khuôn mặt nhưng chưa có QR code, tự động load
+          else if (faceState.registered && !faceState.qrDataUrl && !faceState.loading) {
+            await handleLoadQrForBooking(booking.id);
+          }
+        }
+      }
+    };
+    
+    if (bookings.length > 0) {
+      autoLoadFaceAndQr();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookings]);
 
   // Get user info from session and API for Service Order Modal
   useEffect(() => {
@@ -558,8 +687,12 @@ export default function UserPage() {
         phoneNumber: ''
       });
       
-      // Refresh bookings data
-      refetchUserBookings();
+      // Refresh all data after successful booking
+      await Promise.all([
+        refetchRooms(),
+        refetchUserBookings(),
+        refetchAllBookings()
+      ]);
       
       // Create notification
       createBookingNotification(
@@ -723,7 +856,12 @@ export default function UserPage() {
   const pendingPayments = 0;
   const overduePayments = 0;
 
-  const allBookingsRaw: any[] = Array.isArray(allBookingsData) ? (allBookingsData as any[]) : [];
+  // Xử lý dữ liệu bookings từ API (có thể là { items: [...] } hoặc array trực tiếp)
+  const allBookingsRaw: any[] = Array.isArray(allBookingsData) 
+    ? (allBookingsData as any[]) 
+    : (allBookingsData && typeof allBookingsData === 'object' && Array.isArray((allBookingsData as any).items))
+      ? (allBookingsData as any).items
+      : [];
   const relevantStatusesForAvailability = ['PENDING', 'APPROVED', 'CHECKED_IN'];
 
   const todayStr = new Date().toISOString().slice(0, 10);
@@ -1130,6 +1268,7 @@ export default function UserPage() {
                         </div>
                       </div>
                     )}
+
                   </CardBody>
                 </Card>
               )}
@@ -1218,10 +1357,35 @@ export default function UserPage() {
                                   <Button
                                     variant="secondary"
                                     className="text-sm"
-                                    onClick={() => handleLoadQrForBooking(booking.id)}
+                                    onClick={async () => {
+                                      // Nếu chưa có QR code, load trước
+                                      if (!faceState?.qrDataUrl) {
+                                        await handleLoadQrForBooking(booking.id);
+                                        // Đợi một chút để state update
+                                        setTimeout(() => {
+                                          const updatedState = faceStates[booking.id];
+                                          if (updatedState?.qrDataUrl) {
+                                            setSelectedQrData({
+                                              qrDataUrl: updatedState.qrDataUrl,
+                                              bookingId: booking.id,
+                                              bookingData: booking
+                                            });
+                                            setQrModalOpen(true);
+                                          }
+                                        }, 100);
+                                      } else {
+                                        // Nếu đã có QR code, mở modal ngay
+                                        setSelectedQrData({
+                                          qrDataUrl: faceState.qrDataUrl,
+                                          bookingId: booking.id,
+                                          bookingData: booking
+                                        });
+                                        setQrModalOpen(true);
+                                      }
+                                    }}
                                     disabled={faceState?.loading}
                                   >
-                                    Xem mã QR
+                                    {faceState?.loading ? 'Đang tải...' : 'Xem mã QR'}
                                   </Button>
                                   <Button
                                     variant="secondary"
@@ -1232,17 +1396,17 @@ export default function UserPage() {
                                   >
                                     Đăng ký / quản lý khuôn mặt
                                   </Button>
+                                  {faceState?.registered && (
+                                    <Button
+                                      variant="secondary"
+                                      className="text-sm text-red-600 hover:text-red-700"
+                                      onClick={() => handleDeleteFace(booking.id)}
+                                      disabled={faceState?.loading}
+                                    >
+                                      Xóa khuôn mặt
+                                    </Button>
+                                  )}
                                 </div>
-                                {faceState?.qrToken && (
-                                  <div className="mt-2">
-                                    <p className="text-xs text-gray-700">
-                                      Mã QR cho đặt phòng này (xuất trình khi check‑in):
-                                    </p>
-                                    <div className="mt-1 p-2 rounded-md bg-gray-100 break-all text-xs font-mono text-gray-800">
-                                      {faceState.qrToken}
-                                    </div>
-                                  </div>
-                                )}
                               </div>
                             )}
                           </div>
@@ -1903,7 +2067,6 @@ export default function UserPage() {
                 <option value="">Chọn phương thức</option>
                 <option value="Tiền mặt">Tiền mặt</option>
                 <option value="Chuyển khoản">Chuyển khoản</option>
-                <option value="Thẻ tín dụng">Thẻ tín dụng</option>
               </select>
             </div>
             <div>
@@ -1918,6 +2081,94 @@ export default function UserPage() {
           </div>
         )}
       </Modal>
+
+      {/* QR Code Modal */}
+      <Modal
+        open={qrModalOpen}
+        onClose={() => setQrModalOpen(false)}
+        title="📱 Mã QR Check-in"
+      >
+        {selectedQrData && (
+          <div className="space-y-6">
+            <div className="text-center">
+              <p className="text-sm text-gray-600 mb-4">
+                Xuất trình mã QR này tại lễ tân khi check-in
+              </p>
+              {selectedQrData.bookingData && (
+                <div className="bg-gray-50 p-3 rounded-lg mb-4 text-left">
+                  <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Thông tin đặt phòng</p>
+                  <p className="text-sm font-medium text-gray-900">
+                    Phòng {selectedQrData.bookingData.roomType} - {selectedQrData.bookingData.roomNumber}
+                  </p>
+                  <p className="text-xs text-gray-600 mt-1">
+                    {selectedQrData.bookingData.guestName}
+                  </p>
+                </div>
+              )}
+            </div>
+            
+            <div className="flex justify-center">
+              <div className="bg-white p-6 rounded-lg border-2 border-blue-200 shadow-lg">
+                <img 
+                  src={selectedQrData.qrDataUrl} 
+                  alt="QR Code" 
+                  className="w-64 h-64 object-contain"
+                />
+              </div>
+            </div>
+            
+            <div className="flex flex-col sm:flex-row gap-3 justify-center">
+              <Button
+                onClick={() => {
+                  if (selectedQrData.qrDataUrl) {
+                    const link = document.createElement("a");
+                    link.href = selectedQrData.qrDataUrl;
+                    link.download = `check-in-qr-${selectedQrData.bookingId}.png`;
+                    link.click();
+                  }
+                }}
+                className="bg-green-600 hover:bg-green-700 text-white"
+              >
+                ⬇️ Tải mã QR
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => setQrModalOpen(false)}
+              >
+                Đóng
+              </Button>
+            </div>
+            
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+              <p className="text-xs text-blue-800 font-semibold mb-1">💡 Hướng dẫn:</p>
+              <ul className="text-xs text-blue-700 space-y-1 ml-4 list-disc">
+                <li>Lưu hoặc chụp ảnh mã QR này</li>
+                <li>Xuất trình mã QR tại lễ tân khi check-in</li>
+                <li>Nhân viên sẽ quét mã để xác nhận thông tin của bạn</li>
+              </ul>
+            </div>
+          </div>
+        )}
+      </Modal>
     </>
+  );
+}
+
+export default function UserPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <Card>
+          <CardBody>
+            <div className="text-center">
+              <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mb-4"></div>
+              <p className="text-sm text-gray-600">Đang tải...</p>
+            </div>
+          </CardBody>
+        </Card>
+      </div>
+    }>
+      <UserPageContent />
+    </Suspense>
   );
 }

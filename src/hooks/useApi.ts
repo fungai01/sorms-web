@@ -225,10 +225,6 @@ export function useStaffUsers() {
   return useApi(() => fetchList('/api/user/staff'))
 }
 
-export function useCheckins() {
-  return useApi(() => fetchList('/api/system/checkins'))
-}
-
 // Dashboard stats derived from real endpoints
 export function useDashboardStats() {
   return useApi(() => apiClient.getDashboardStats())

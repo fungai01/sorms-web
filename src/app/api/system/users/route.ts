@@ -53,14 +53,28 @@ export async function GET(req: NextRequest) {
     }
 
     // Không phải self: yêu cầu quyền admin
+    console.log('[API] Checking admin access for /api/system/users')
+    console.log('[API] Request headers:', {
+      hasAuthorization: !!req.headers.get('authorization'),
+      authorizationPrefix: req.headers.get('authorization')?.substring(0, 30) || 'none',
+      cookies: {
+        hasAuthAccessToken: !!req.cookies.get('auth_access_token'),
+        hasAccessToken: !!req.cookies.get('access_token'),
+        hasUserInfo: !!req.cookies.get('user_info')
+      }
+    })
+    
     const adminCheck = await isAdmin(req)
     if (!adminCheck) {
       console.warn('[API] Unauthorized access attempt to /api/system/users')
+      console.warn('[API] Admin check result:', adminCheck)
       return NextResponse.json({ 
         error: 'Unauthorized - Admin access required',
         message: 'You must be an admin to access this resource'
       }, { status: 403 })
     }
+    
+    console.log('[API] Admin check passed, proceeding with request')
 
     const page = searchParams.get('page') || '0'
     const size = searchParams.get('size') || '50'

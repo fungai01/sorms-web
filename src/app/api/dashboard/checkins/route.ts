@@ -1,70 +1,86 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { apiClient } from '@/lib/api-client'
 
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url)
     const days = Math.min(Math.max(Number(searchParams.get('days') || '14'), 7), 30)
-
-    // Fetch real checkins from system API
-    const baseUrl = process.env.NEXT_PUBLIC_BASE_PATH || `http://localhost:${process.env.PORT || 3002}`
-    const url = `${baseUrl}/api/system/checkins`
-
-    console.log('[Dashboard Checkins] Fetching from:', url)
-
-    const res = await fetch(url, {
-      headers: { 'Content-Type': 'application/json' },
-      cache: 'no-store',
+    
+    console.log('[Dashboard API] Fetching checkins data, days:', days)
+    
+    // Extract Authorization header from request and pass to apiClient
+    const authHeader = req.headers.get('authorization')
+    console.log('[Dashboard API] Authorization header:', authHeader ? 'Found' : 'Not found')
+    
+    // Get all bookings and filter by CHECKED_IN status
+    // Pass headers via options parameter
+    const headers: Record<string, string> = authHeader ? { 'Authorization': authHeader } : {}
+    const response = await apiClient.getBookings({ headers })
+    
+    console.log('[Dashboard API] Checkins response:', {
+      success: response.success,
+      hasData: !!response.data,
+      error: response.error,
+      dataType: typeof response.data,
+      isArray: Array.isArray(response.data),
     })
     
-    console.log('[Dashboard Checkins] Response status:', res.status)
-    
-    if (!res.ok) {
-      console.error('[Dashboard Checkins] Failed to fetch:', res.status, res.statusText)
-      // Return empty series instead of error to prevent dashboard from breaking
-      const today = new Date()
-      const series: { date: string; count: number }[] = []
-      for (let i = days - 1; i >= 0; i--) {
-        const d = new Date(today)
-        d.setDate(today.getDate() - i)
-        series.push({ date: d.toISOString().slice(0, 10), count: 0 })
-      }
-      return NextResponse.json({ series })
+    if (!response.success) {
+      console.error('[Dashboard API] Failed to fetch checkins:', response.error)
+      return NextResponse.json(
+        { error: response.error || 'Failed to fetch checkins data' }, 
+        { status: 500 }
+      )
     }
-    
-    const data = await res.json().catch(() => ({ items: [] }))
-    const list: any[] = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : [])
 
-    console.log('[Dashboard Checkins] Found items:', list.length)
+    interface Booking {
+      status: string
+      checkinDate?: string
+      // Add other properties if needed
+    }
 
+    // Normalize response data
+    const raw: any = response.data
+    const allBookings: Booking[] = Array.isArray(raw?.content) 
+      ? raw.content 
+      : Array.isArray(raw?.items)
+        ? raw.items
+        : Array.isArray(raw) 
+          ? raw 
+          : []
+
+    // Filter bookings with CHECKED_IN status
+    const checkins = allBookings.filter((b: any) => b.status === 'CHECKED_IN')
+
+    // Generate simple time series data
     const today = new Date()
     const series: { date: string; count: number }[] = []
+
     for (let i = days - 1; i >= 0; i--) {
-      const d = new Date(today)
-      d.setDate(today.getDate() - i)
-      const dateStr = d.toISOString().slice(0, 10)
-      const count = list.filter((r) => {
-        const ci = String(r.checkin_at || r.checkinAt || r.checkin_at_time || r.checkInDate || '')
-        return ci.slice(0, 10) === dateStr
-      }).length
+      const date = new Date(today)
+      date.setDate(today.getDate() - i)
+      const dateStr = date.toISOString().slice(0, 10)
+      
+      // Count checkins for this date (bookings with CHECKED_IN status on this date)
+      const count = checkins.filter((b: any) => 
+        b.checkinDate && b.checkinDate.slice(0, 10) === dateStr
+      ).length
+      
       series.push({ date: dateStr, count })
     }
-
+    
+    console.log('[Dashboard API] Checkins processed:', { 
+      totalCheckins: checkins.length,
+      seriesCount: series.length 
+    })
+    
     return NextResponse.json({ series })
   } catch (error) {
-    console.error('[Dashboard Checkins] API error:', error)
-    // Return empty series instead of error to prevent dashboard from breaking
-    const { searchParams } = new URL(req.url)
-    const days = Math.min(Math.max(Number(searchParams.get('days') || '14'), 7), 30)
-    const today = new Date()
-    const series: { date: string; count: number }[] = []
-    for (let i = days - 1; i >= 0; i--) {
-      const d = new Date(today)
-      d.setDate(today.getDate() - i)
-      series.push({ date: d.toISOString().slice(0, 10), count: 0 })
-    }
-    return NextResponse.json({ series })
+    console.error('[Dashboard API] Checkins error:', error)
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Internal server error' }, 
+      { status: 500 }
+    )
   }
 }
-
-
 

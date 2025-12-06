@@ -97,15 +97,34 @@ export default function BookingsPage() {
       setRooms(roomsData as any[])
     } else if (roomsError) {
       setRooms([])
+    } else if (!roomsLoading && !roomsData) {
+      // Nếu không loading và không có data, set mảng rỗng
+      setRooms([])
     }
 
-    // Đồng bộ đặt phòng
-    if (bookingsData && Array.isArray(bookingsData)) {
-      setRows(bookingsData as Booking[])
+    // Đồng bộ đặt phòng - API trả về format: { items: [...], total: ... }
+    if (bookingsData) {
+      // API route trả về format: { items: [...] }
+      const data: any = bookingsData
+      const list = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : [])
+      console.log('[BookingsPage] Syncing bookings data:', {
+        hasData: !!bookingsData,
+        dataType: typeof bookingsData,
+        hasItems: !!data?.items,
+        itemsLength: Array.isArray(data?.items) ? data.items.length : 0,
+        isArray: Array.isArray(data),
+        dataKeys: data ? Object.keys(data) : []
+      })
+      setRows(list as Booking[])
     } else if (bookingsError) {
+      console.error('[BookingsPage] Bookings error:', bookingsError)
+      setRows([])
+    } else if (!bookingsLoading && !bookingsData) {
+      // Nếu không loading và không có data, set mảng rỗng
+      console.warn('[BookingsPage] No bookings data and no error, setting empty array')
       setRows([])
     }
-  }, [bookingsData, roomsData, bookingsError, roomsError])
+  }, [bookingsData, roomsData, bookingsError, roomsError, bookingsLoading, roomsLoading])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -182,65 +201,152 @@ export default function BookingsPage() {
     }
     
     // Gọi API
-    const payload = {
-      code: edit.code.trim(),
-      // Giữ nguyên userId gốc nếu có, không ép về 1 để tránh lỗi "User not found"
-      userId: edit.userId,
-      roomId: edit.roomId,
-      checkinDate: edit.checkinDate,
-      checkoutDate: edit.checkoutDate,
-      numGuests: edit.numGuests,
-      status: edit.status,
-      note: edit.note.trim() || '',
-    }
-    
     try {
       if (edit.id) {
         const isApprove = edit.status === 'APPROVED'
+        const isReject = edit.status === 'REJECTED'
+        const isCancel = edit.status === 'CANCELLED'
+        const isCheckin = edit.status === 'CHECKED_IN'
+        const isCheckout = edit.status === 'CHECKED_OUT'
 
-        // Cập nhật thông tin đặt phòng
-        const response = await fetch('/api/system/bookings', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: edit.id, ...payload })
-        })
-        if (!response.ok) {
-          const error = await response.json()
-          throw new Error(error.error || 'Failed to update booking')
-        }
-
-        // Nếu status được chọn là APPROVED, gọi thêm API duyệt đặt phòng
+        // Nếu status là APPROVED, chỉ gọi POST /bookings/{id}/approve (không gọi PUT)
         if (isApprove) {
           const token = authService.getAccessToken()
-          const headers: HeadersInit = {}
+          const headers: HeadersInit = { 'Content-Type': 'application/json' }
           if (token) {
             headers['Authorization'] = `Bearer ${token}`
           }
 
+          // Lấy user info để lấy approverId
+          const userInfo = authService.getUserInfo()
+          const approverId = userInfo?.id || 'SYSTEM'
+
+          // POST /bookings/{id}/approve với body: { bookingId, approverId, decision, reason }
+          const approvePayload = {
+            bookingId: edit.id,
+            approverId: String(approverId),
+            decision: 'APPROVED',
+            reason: ''
+          }
+
           const approveRes = await fetch(`/api/system/bookings?action=approve&id=${edit.id}`, {
             method: 'POST',
-            headers
+            headers,
+            body: JSON.stringify(approvePayload)
           })
 
           if (!approveRes.ok) {
             const approveError = await approveRes.json().catch(() => ({}))
             throw new Error(approveError.error || 'Failed to approve booking')
           }
-        }
 
-        await refetchBookings()
-        setFlash({ type: 'success', text: isApprove ? 'Đã duyệt đặt phòng thành công.' : 'Đã cập nhật đặt phòng.' })
+          // Cập nhật state ngay lập tức để hiển thị thay đổi ngay, không cần đợi refetch
+          setRows(prevRows => prevRows.map(booking => 
+            booking.id === edit.id 
+              ? { ...booking, status: 'APPROVED' as BookingStatus }
+              : booking
+          ))
+
+          // Gọi refetch ở background để đồng bộ dữ liệu (không đợi)
+          refetchBookings().catch(err => console.error('Background refetch error:', err))
+
+          setFlash({ type: 'success', text: 'Đã duyệt đặt phòng thành công.' })
+        } else {
+          // Nếu status khác APPROVED, gọi PUT để cập nhật thông tin và status
+          // PUT /bookings/{id} - Body format: { id, roomId, checkinDate, checkoutDate, numGuests, note, status }
+          const updatePayload: any = {
+            id: edit.id,
+            roomId: edit.roomId,
+            checkinDate: edit.checkinDate,
+            checkoutDate: edit.checkoutDate,
+            numGuests: edit.numGuests,
+            note: edit.note.trim() || '',
+            status: edit.status
+          }
+
+          // Cập nhật thông tin đặt phòng
+          const response = await fetch('/api/system/bookings', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updatePayload)
+          })
+          if (!response.ok) {
+            const error = await response.json()
+            throw new Error(error.error || 'Failed to update booking')
+          }
+
+          // Cập nhật state ngay lập tức để hiển thị thay đổi ngay, không cần đợi refetch
+          setRows(prevRows => prevRows.map(booking => 
+            booking.id === edit.id 
+              ? { 
+                  ...booking, 
+                  status: edit.status,
+                  roomId: edit.roomId,
+                  checkinDate: edit.checkinDate,
+                  checkoutDate: edit.checkoutDate,
+                  numGuests: edit.numGuests,
+                  note: edit.note.trim() || ''
+                }
+              : booking
+          ))
+
+          // Gọi refetch ở background để đồng bộ dữ liệu (không đợi)
+          refetchBookings().catch(err => console.error('Background refetch error:', err))
+
+          let successMessage = 'Đã cập nhật đặt phòng.'
+          if (isReject) successMessage = 'Đã từ chối đặt phòng.'
+          else if (isCancel) successMessage = 'Đã hủy đặt phòng.'
+          else if (isCheckin) successMessage = 'Đã check-in đặt phòng.'
+          else if (isCheckout) successMessage = 'Đã check-out đặt phòng.'
+          setFlash({ type: 'success', text: successMessage })
+        }
       } else {
+        // POST /bookings - Create new booking
+        const createPayload = {
+          code: edit.code.trim(),
+          userId: edit.userId,
+          roomId: edit.roomId,
+          checkinDate: edit.checkinDate,
+          checkoutDate: edit.checkoutDate,
+          numGuests: edit.numGuests,
+          status: edit.status,
+          note: edit.note.trim() || '',
+        }
         const response = await fetch('/api/system/bookings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
+          body: JSON.stringify(createPayload)
         })
         if (!response.ok) {
           const error = await response.json()
           throw new Error(error.error || 'Failed to create booking')
         }
-        await refetchBookings()
+
+        // Parse response để lấy booking mới
+        const createdBooking = await response.json()
+        const newBooking: Booking = {
+          id: createdBooking.id || createdBooking.data?.id || Date.now(),
+          code: createdBooking.code || createdBooking.data?.code || edit.code.trim(),
+          userId: createdBooking.userId || createdBooking.data?.userId || edit.userId || 0,
+          userName: createdBooking.userName || createdBooking.data?.userName,
+          roomId: createdBooking.roomId || createdBooking.data?.roomId || edit.roomId,
+          roomCode: createdBooking.roomCode || createdBooking.data?.roomCode,
+          checkinDate: createdBooking.checkinDate || createdBooking.data?.checkinDate || edit.checkinDate,
+          checkoutDate: createdBooking.checkoutDate || createdBooking.data?.checkoutDate || edit.checkoutDate,
+          numGuests: createdBooking.numGuests || createdBooking.data?.numGuests || edit.numGuests,
+          note: createdBooking.note || createdBooking.data?.note || edit.note.trim() || '',
+          status: createdBooking.status || createdBooking.data?.status || edit.status,
+          isActive: createdBooking.isActive !== undefined ? createdBooking.isActive : (createdBooking.data?.isActive !== undefined ? createdBooking.data.isActive : true),
+          created_at: createdBooking.created_at || createdBooking.data?.created_at || new Date().toISOString(),
+          updated_at: createdBooking.updated_at || createdBooking.data?.updated_at || new Date().toISOString()
+        }
+
+        // Thêm booking mới vào state ngay lập tức
+        setRows(prevRows => [...prevRows, newBooking])
+
+        // Gọi refetch ở background để đồng bộ dữ liệu (không đợi)
+        refetchBookings().catch(err => console.error('Background refetch error:', err))
+
         setFlash({ type: 'success', text: 'Đã tạo đặt phòng mới.' })
       }
       setEditOpen(false)
@@ -265,7 +371,13 @@ export default function BookingsPage() {
           const error = await response.json()
           throw new Error(error.error || 'Failed to deactivate booking')
         }
-        await refetchBookings()
+
+        // Xóa booking khỏi state ngay lập tức
+        setRows(prevRows => prevRows.filter(booking => booking.id !== id))
+
+        // Gọi refetch ở background để đồng bộ dữ liệu (không đợi)
+        refetchBookings().catch(err => console.error('Background refetch error:', err))
+
         setFlash({ type: 'success', text: 'Đã vô hiệu hóa đặt phòng.' })
       }
     } catch (error: any) {
@@ -282,7 +394,17 @@ export default function BookingsPage() {
         const error = await response.json()
         throw new Error(error.error || 'Failed to activate booking')
       }
-      await refetchBookings()
+
+      // Cập nhật state ngay lập tức để hiển thị thay đổi ngay
+      setRows(prevRows => prevRows.map(booking => 
+        booking.id === id 
+          ? { ...booking, isActive: true }
+          : booking
+      ))
+
+      // Gọi refetch ở background để đồng bộ dữ liệu (không đợi)
+      refetchBookings().catch(err => console.error('Background refetch error:', err))
+
       setFlash({ type: 'success', text: 'Đã kích hoạt đặt phòng.' })
     } catch (error: any) {
       setFlash({ type: 'error', text: error.message || 'Có lỗi xảy ra' })
@@ -353,6 +475,25 @@ export default function BookingsPage() {
           {(bookingsLoading || roomsLoading) && (
             <div className="rounded-md border p-2 sm:p-3 text-xs sm:text-sm shadow-sm bg-yellow-50 border-yellow-200 text-yellow-800">
               Đang tải dữ liệu đặt phòng...
+            </div>
+          )}
+
+          {/* Error indicator */}
+          {bookingsError && (
+            <div className="rounded-md border p-2 sm:p-3 text-xs sm:text-sm shadow-sm bg-red-50 border-red-200 text-red-800">
+              <p className="font-semibold">Lỗi khi tải dữ liệu đặt phòng:</p>
+              <p>{bookingsError}</p>
+            </div>
+          )}
+
+          {/* Empty state */}
+          {!bookingsLoading && !bookingsError && rows.length === 0 && (
+            <div className="rounded-md border p-4 sm:p-6 text-center shadow-sm bg-gray-50 border-gray-200">
+              <svg className="w-12 h-12 mx-auto text-gray-400 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              <p className="text-sm font-medium text-gray-700">Không có dữ liệu đặt phòng</p>
+              <p className="text-xs text-gray-500 mt-1">Vui lòng thử lại hoặc tạo đặt phòng mới</p>
             </div>
           )}
 

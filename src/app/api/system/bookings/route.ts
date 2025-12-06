@@ -102,18 +102,38 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Invalid booking ID' }, { status: 400 });
       }
 
-      // Lấy approverId từ token nếu có
+      // Đọc body nếu có (format: { bookingId, approverId, decision, reason })
       let approverId: string | undefined
+      let reason: string | undefined
+      
       try {
-        const userInfo = await verifyToken(req)
-        if (userInfo?.id) {
-          approverId = String(userInfo.id)
+        // Clone request để có thể đọc body nhiều lần
+        const clonedReq = req.clone()
+        const body = await clonedReq.json().catch(() => ({}))
+        if (body.approverId) {
+          approverId = String(body.approverId)
+        }
+        if (body.reason) {
+          reason = String(body.reason)
         }
       } catch (e) {
-        console.error('Error getting approver info from token:', e)
+        // Ignore JSON parse errors, will fallback to token
+        console.warn('Could not parse approve request body:', e)
       }
 
-      const response = await apiClient.approveBooking(bookingId, approverId)
+      // Fallback: Lấy approverId từ token nếu không có trong body
+      if (!approverId) {
+        try {
+          const userInfo = await verifyToken(req)
+          if (userInfo?.id) {
+            approverId = String(userInfo.id)
+          }
+        } catch (e) {
+          console.error('Error getting approver info from token:', e)
+        }
+      }
+
+      const response = await apiClient.approveBooking(bookingId, approverId, reason)
       if (response.success) {
         return NextResponse.json(response.data);
       }

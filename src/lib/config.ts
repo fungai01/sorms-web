@@ -32,6 +32,9 @@ export const API_CONFIG = {
     USERS: '/users',
   },
 
+  // AI Recognition backend base URL
+  AI_BASE_URL: process.env.NEXT_PUBLIC_AI_BASE_URL || 'http://103.81.87.99:9001',
+
   // Request timeout (in milliseconds)
   TIMEOUT: 30000, // Increased to 30s for Vercel cold starts
 

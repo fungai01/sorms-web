@@ -169,23 +169,18 @@ export default function Sidebar({ user, isVisible = false, collapsed = true, onT
           current: pathname.startsWith('/admin/bookings')
         },
         { 
-          name: 'Check-in/out', 
-          href: '/admin/checkins', 
-          icon: <Icons.Checkin />, 
-          current: pathname.startsWith('/admin/checkins')
-        },
-        { 
           name: 'Dịch vụ', 
           href: '/admin/services', 
           icon: <Icons.Services />, 
           current: pathname.startsWith('/admin/services')
         },
-        { 
-          name: 'Đơn dịch vụ', 
-          href: '/admin/service-orders', 
-          icon: <Icons.ServiceOrders />, 
-          current: pathname.startsWith('/admin/service-orders')
-        },
+        // Đã ẩn: Đơn dịch vụ không còn được sử dụng
+        // { 
+        //   name: 'Đơn dịch vụ', 
+        //   href: '/admin/service-orders', 
+        //   icon: <Icons.ServiceOrders />, 
+        //   current: pathname.startsWith('/admin/service-orders')
+        // },
         { 
           name: 'Thanh toán', 
           href: '/admin/payments', 
