@@ -45,6 +45,13 @@ export async function middleware(req: NextRequest) {
 			url.pathname = "/user/dashboard";
 			return NextResponse.redirect(url);
 		}
+	} else if (pathname.startsWith("/security")) {
+		if (roleFromCookie !== "security") {
+			console.log('❌ Access denied - not security');
+			const url = req.nextUrl.clone();
+			url.pathname = "/user/dashboard";
+			return NextResponse.redirect(url);
+		}
 	}
 
 	return NextResponse.next();

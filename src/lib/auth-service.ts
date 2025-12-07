@@ -29,7 +29,7 @@ export interface UserInfo {
 // Map backend roles/departments to app route roles (FE)
 // BE uses: ADMIN, MANAGER, STAFF, USER (plus some historical typos)
 // Supports both ROLE_ADMIN_SYTEM and ADMIN_SYTEM formats
-export const mapRoleToAppRole = (role?: string): 'admin' | 'office' | 'staff' | 'user' => {
+export const mapRoleToAppRole = (role?: string): 'admin' | 'office' | 'security' | 'staff' | 'user' => {
   if (!role) return 'user'
   let r = role.trim().toUpperCase()
   // Strip ROLE_ prefix if present
@@ -40,20 +40,24 @@ export const mapRoleToAppRole = (role?: string): 'admin' | 'office' | 'staff' | 
   if (['ADMIN', 'ADMIN_SYTEM'].includes(r)) return 'admin'
   // Manager/Office variants
   if (['ADMINISTRATIVE'].includes(r)) return 'office'
-  // Staff variants (includes SECURITY typo)
-  if (['STAFF','SECURITY'].includes(r)) return 'staff'
+  // Security variants (include common typo)
+  if (['SECURITY', 'SERCURITY', 'SECURITY_GUARD'].includes(r)) return 'security'
+  // Staff variants
+  if (['STAFF'].includes(r)) return 'staff'
+  
   // Lecturer/Guest/User -> user area
   if (['USER'].includes(r)) return 'user'
   return 'user'
 }
 
-export const getHighestAppRole = (roles: Array<string | undefined>): 'admin' | 'office' | 'staff' | 'user' => {
+export const getHighestAppRole = (roles: Array<string | undefined>): 'admin' | 'office' | 'security' | 'staff' | 'user' => {
   const mapped = roles
     .filter(Boolean)
     .map(r => mapRoleToAppRole(String(r)))
-  // Priority: admin > office > staff > user
+  // Priority: admin > office > security > staff > user
   if (mapped.includes('admin')) return 'admin'
   if (mapped.includes('office')) return 'office'
+  if (mapped.includes('security')) return 'security'
   if (mapped.includes('staff')) return 'staff'
   return 'user'
 }

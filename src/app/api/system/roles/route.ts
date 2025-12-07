@@ -1,169 +1,150 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { API_CONFIG } from '@/lib/config'
+import { apiClient } from '@/lib/api-client'
+import { isAdmin, verifyToken } from '@/lib/auth-utils'
 
-const BASE = API_CONFIG.BASE_URL
-
+// GET - Lấy danh sách roles hoặc role theo ID
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url)
     const id = searchParams.get('id')
-    const q = searchParams.get('q')
-    const page = searchParams.get('page') || '0'
-    const size = searchParams.get('size') || '50'
 
-    console.log('[API] GET /api/system/roles - params:', { id, q, page, size })
-    console.log('[API] Backend URL:', BASE)
-
+    // Lấy role theo ID
     if (id) {
-      console.log('[API] Fetching role by ID:', id)
-      const auth = req.headers.get('authorization') || ''
-      const res = await fetch(`${BASE}/roles/${id}`, { headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) }, cache: 'no-store' }).catch((e) => {
-        console.error(`[API] Fetch failed for /roles/${id}:`, e);
-        return new Response(JSON.stringify({ error: 'Failed to connect to backend API', details: e.message }), { status: 503, headers: { 'Content-Type': 'application/json' } });
-      });
-      const data = await res.json().catch(() => ({}))
-      console.log('[API] Backend response for role by ID:', data)
-      if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
-      return NextResponse.json(data?.data ?? data)
+      const response = await apiClient.getRole(id)
+      if (response.success) {
+        return NextResponse.json(response.data)
+      }
+      return NextResponse.json({ error: response.error }, { status: 500 })
     }
 
-    if (q || searchParams.has('page') || searchParams.has('size')) {
-      const url = new URL(`${BASE}/roles/search`)
-      url.searchParams.set('page', page)
-      url.searchParams.set('size', size)
-      if (q) url.searchParams.set('keyword', q)
-      console.log('[API] Searching roles:', url.toString())
-      const auth = req.headers.get('authorization') || ''
-      const res = await fetch(url.toString(), { headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) }, cache: 'no-store' }).catch((e) => {
-        console.error(`[API] Fetch failed for /roles/search:`, e);
-        return new Response(JSON.stringify({ error: 'Failed to connect to backend API', details: e.message }), { status: 503, headers: { 'Content-Type': 'application/json' } });
-      });
-      const data = await res.json().catch(() => ({}))
-      console.log('[API] Backend search response:', data)
-      if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
-      const items = Array.isArray(data?.data?.content) ? data.data.content : []
-      return NextResponse.json({ items })
+    // Lấy danh sách roles với search params
+    const name = searchParams.get('name') || undefined
+    const code = searchParams.get('code') || undefined
+    const description = searchParams.get('description') || undefined
+    const isActiveParam = searchParams.get('isActive')
+    const isActive = isActiveParam ? isActiveParam === 'true' : undefined
+    const page = parseInt(searchParams.get('page') || '0')
+    const size = parseInt(searchParams.get('size') || '10')
+
+    const response = await apiClient.getRoles({
+      name,
+      code,
+      description,
+      isActive,
+      page,
+      size,
+    })
+
+    if (response.success) {
+      const data: any = response.data
+      // Backend trả về PageResponse format
+      const items = Array.isArray(data?.content) ? data.content : (Array.isArray(data) ? data : [])
+      const total = data?.totalElements || data?.total || items.length
+      return NextResponse.json({ items, total })
     }
 
-    // Backend GET /roles có vấn đề, sử dụng search endpoint thay thế
-    console.log('[API] Fetching all roles using search endpoint')
-    const searchUrl = new URL(`${BASE}/roles/search`)
-    searchUrl.searchParams.set('page', '0')
-    searchUrl.searchParams.set('size', '100') // Lấy nhiều để đảm bảo có đủ
-
-    console.log('[API] Search URL:', searchUrl.toString())
-    const res = await fetch(searchUrl.toString(), {
-      headers: { 'Content-Type': 'application/json', accept: '*/*' },
-      cache: 'no-store'
-    }).catch((e) => {
-      console.error('[API] Fetch failed:', e);
-      return new Response(JSON.stringify({ error: 'Failed to connect to backend API', details: e.message }), { status: 503, headers: { 'Content-Type': 'application/json' } });
-    });
-
-    console.log('[API] Backend response status:', res.status)
-    const rawText = await res.text()
-    console.log('[API] Backend raw response:', rawText)
-
-    const data = rawText ? JSON.parse(rawText) : {}
-    console.log('[API] Backend parsed data:', data)
-
-    if (!res.ok) {
-      console.error('[API] Backend search endpoint also failed:', data)
-      console.warn('[API] Returning empty array as fallback')
-      // Trả về empty array thay vì error để UI không bị crash
-      return NextResponse.json({ items: [] })
-    }
-
-    // Search endpoint trả về data.data.content
-    const items = Array.isArray(data?.data?.content) ? data.data.content :
-                  (Array.isArray(data?.data) ? data.data :
-                  (Array.isArray(data) ? data : []));
-    console.log('[API] Returning items count:', items.length)
-    return NextResponse.json({ items })
-  } catch (e: any) {
-    console.error('[API] Error in GET /api/system/roles:', e);
-    if (e.cause) {
-      return NextResponse.json({
-        error: 'Could not connect to the backend service.',
-        details: `The request to the backend API failed. Please ensure the backend at ${BASE} is running and accessible.`
-      }, { status: 503 });
-    }
-    return NextResponse.json({ error: e?.message || 'An internal server error occurred.' }, { status: 500 });
+    return NextResponse.json({ error: response.error }, { status: 500 })
+  } catch (error: any) {
+    console.error('GET /api/system/roles error:', error)
+    return NextResponse.json({ error: error.message || 'Internal server error' }, { status: 500 })
   }
 }
 
+// POST - Tạo role mới
 export async function POST(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url)
-    const action = searchParams.get('action')
-    const idParam = searchParams.get('id')
-
-    console.log('[API] POST /api/system/roles - action:', action, 'id:', idParam)
-
-    if (action && idParam) {
-      const code = idParam // Sử dụng code thay vì id
-      const endpoint = action === 'activate' ? `${BASE}/roles/${code}/activate` : action === 'deactivate' ? `${BASE}/roles/${code}/deactivate` : ''
-      if (!endpoint) return NextResponse.json({ error: 'Unsupported action' }, { status: 400 })
-      console.log('[API] Calling endpoint:', endpoint)
-      const auth = req.headers.get('authorization') || ''
-      const res = await fetch(endpoint, { method: 'PUT', headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) } })
-      const data = await res.json().catch(() => ({}))
-      console.log('[API] Response:', res.status, data)
-      if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
-      return NextResponse.json(data?.data ?? data)
+    // Yêu cầu quyền admin
+    if (!await isAdmin(req)) {
+      return NextResponse.json({ error: 'Unauthorized - Admin access required' }, { status: 403 })
     }
 
-    const body = await req.json().catch(() => ({}))
-    const payload = { code: body.code, name: body.name, description: body.description }
-    console.log('[API] Creating role with payload:', payload)
-    const res = await fetch(`${BASE}/roles`, { method: 'POST', headers: { 'Content-Type': 'application/json', accept: '*/*' }, body: JSON.stringify(payload) })
-    const data = await res.json().catch(() => ({}))
-    console.log('[API] Create response:', res.status, data)
-    if (!res.ok) {
-      console.error('[API] Create failed:', data)
-      return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
+    const body = await req.json()
+    const response = await apiClient.createRole(body)
+
+    if (response.success) {
+      return NextResponse.json(response.data, { status: 201 })
     }
-    return NextResponse.json(data?.data ?? data, { status: 201 })
-  } catch (e: any) {
-    console.error('[API] POST error:', e)
-    return NextResponse.json({ error: e?.message || 'Internal server error' }, { status: 500 })
+
+    return NextResponse.json({ error: response.error }, { status: 500 })
+  } catch (error: any) {
+    console.error('POST /api/system/roles error:', error)
+    return NextResponse.json({ error: error.message || 'Internal server error' }, { status: 500 })
   }
 }
 
+// PUT - Cập nhật role hoặc activate/deactivate
 export async function PUT(req: NextRequest) {
   try {
-    const body = await req.json().catch(() => ({}))
-    const code = body.code
-    if (!code) return NextResponse.json({ error: 'code is required' }, { status: 400 })
-    console.log('[API] Updating role:', code, 'with payload:', body)
-    const payload = { code: body.code, name: body.name, description: body.description }
-    const res = await fetch(`${BASE}/roles/${code}`, { method: 'PUT', headers: { 'Content-Type': 'application/json', accept: '*/*' }, body: JSON.stringify(payload) })
-    const data = await res.json().catch(() => ({}))
-    console.log('[API] Update response:', res.status, data)
-    if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
-    return NextResponse.json(data?.data ?? data)
-  } catch (e: any) {
-    console.error('[API] PUT error:', e)
-    return NextResponse.json({ error: e?.message || 'Internal server error' }, { status: 500 })
+    // Yêu cầu quyền admin
+    if (!await isAdmin(req)) {
+      return NextResponse.json({ error: 'Unauthorized - Admin access required' }, { status: 403 })
+    }
+
+    const { searchParams } = new URL(req.url)
+    const action = searchParams.get('action')
+    const id = searchParams.get('id')
+
+    if (!id) {
+      return NextResponse.json({ error: 'Role ID is required' }, { status: 400 })
+    }
+
+    // Activate role
+    if (action === 'activate') {
+      const response = await apiClient.activateRole(id)
+      if (response.success) {
+        return NextResponse.json(response.data)
+      }
+      return NextResponse.json({ error: response.error }, { status: 500 })
+    }
+
+    // Deactivate role
+    if (action === 'deactivate') {
+      const response = await apiClient.deactivateRole(id)
+      if (response.success) {
+        return NextResponse.json(response.data)
+      }
+      return NextResponse.json({ error: response.error }, { status: 500 })
+    }
+
+    // Update role
+    const body = await req.json()
+    const response = await apiClient.updateRole(id, body)
+
+    if (response.success) {
+      return NextResponse.json(response.data)
+    }
+
+    return NextResponse.json({ error: response.error }, { status: 500 })
+  } catch (error: any) {
+    console.error('PUT /api/system/roles error:', error)
+    return NextResponse.json({ error: error.message || 'Internal server error' }, { status: 500 })
   }
 }
 
+// DELETE - Xóa role
 export async function DELETE(req: NextRequest) {
   try {
+    // Yêu cầu quyền admin
+    if (!await isAdmin(req)) {
+      return NextResponse.json({ error: 'Unauthorized - Admin access required' }, { status: 403 })
+    }
+
     const { searchParams } = new URL(req.url)
-    const code = searchParams.get('code')
-    if (!code) return NextResponse.json({ error: 'code is required' }, { status: 400 })
-    console.log('[API] Deactivating role:', code)
-    // Soft delete: deactivate instead of hard delete
-    const res = await fetch(`${BASE}/roles/${code}/deactivate`, { method: 'PUT', headers: { 'Content-Type': 'application/json', accept: '*/*' } })
-    const data = await res.json().catch(() => ({}))
-    console.log('[API] Deactivate response:', res.status, data)
-    if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
-    return NextResponse.json(data?.data ?? data)
-  } catch (e: any) {
-    console.error('[API] DELETE error:', e)
-    return NextResponse.json({ error: e?.message || 'Internal server error' }, { status: 500 })
+    const id = searchParams.get('id')
+
+    if (!id) {
+      return NextResponse.json({ error: 'Role ID is required' }, { status: 400 })
+    }
+
+    const response = await apiClient.deleteRole(id)
+
+    if (response.success) {
+      return NextResponse.json({ message: 'Role deleted successfully' })
+    }
+
+    return NextResponse.json({ error: response.error }, { status: 500 })
+  } catch (error: any) {
+    console.error('DELETE /api/system/roles error:', error)
+    return NextResponse.json({ error: error.message || 'Internal server error' }, { status: 500 })
   }
 }
-
-

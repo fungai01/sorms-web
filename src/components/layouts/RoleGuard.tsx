@@ -21,8 +21,7 @@ export default function RoleGuard({ children }: { children: React.ReactNode }) {
       "/admin": "admin",
       "/office": "office", // office routes behave like user area
       "/staff": "staff",
-      "/lecturer": "user", // lecturer maps to user area in app
-      "/guest": "user",
+      "/security": "security",
       "/user": "user",
     };
 
@@ -34,6 +33,7 @@ export default function RoleGuard({ children }: { children: React.ReactNode }) {
       admin: "/admin/dashboard",
       office: "/office/dashboard", // office should land on user area
       staff: "/staff/dashboard",
+      security:"/security/dashboard",
       user: "/user/dashboard",
     };
 

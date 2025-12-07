@@ -214,6 +214,21 @@ class ApiClient {
       })
       
       if (!response.ok) {
+        // Auto refresh token on 401 (client-side only) and retry once
+        const alreadyRetried = (options as any)?._retried === true
+        if (response.status === 401 && typeof window !== 'undefined' && !alreadyRetried) {
+          try {
+            console.warn('[API Client] 401 received, attempting refresh token...')
+            await authService.refreshAccessToken()
+            // Retry the request once with the same options
+            const retryOptions: RequestInit & { _retried?: boolean } = { ...(options || {}), _retried: true }
+            return await this.request<T>(endpoint, retryOptions)
+          } catch (refreshErr) {
+            console.error('[API Client] Refresh token failed:', refreshErr)
+            // fallthrough to parse original error
+          }
+        }
+
         // Try to get error message from response body
         let errorMessage = `HTTP error! status: ${response.status}`
         let errorData: any = null
@@ -523,8 +538,8 @@ class ApiClient {
     return this.get('/bookings', options)
   }
 
-  async getBooking(id: number) {
-    return this.get(`/bookings/${id}`)
+  async getBooking(id: number, options?: RequestInit) {
+    return this.get(`/bookings/${id}`, options)
   }
 
   async createBooking(bookingData: any) {
@@ -568,12 +583,12 @@ class ApiClient {
   }
 
   // Additional booking methods for filtering and actions
-  async getBookingsByUser(userId: number) {
-    return this.get(`/bookings/by-user/${userId}`)
+  async getBookingsByUser(userId: number, options?: RequestInit) {
+    return this.get(`/bookings/by-user/${userId}`, options)
   }
 
-  async getBookingsByStatus(status: string) {
-    return this.get(`/bookings/by-status/${status}`)
+  async getBookingsByStatus(status: string, options?: RequestInit) {
+    return this.get(`/bookings/by-status/${status}`, options)
   }
 
   async checkinBooking(id: number) {
@@ -626,7 +641,13 @@ class ApiClient {
   }
 
   async deleteService(id: number) {
-    // Soft delete: deactivate instead of hard delete
+    // Hard delete: DELETE /services/{id}
+    return this.delete(`/services/${id}`)
+  }
+
+  async deactivateService(id: number) {
+    // Soft delete: deactivate service (if backend supports this endpoint)
+    // Note: Backend may not have this endpoint, use deleteService for hard delete
     return this.put(`/services/${id}/deactivate`)
   }
 
@@ -635,8 +656,13 @@ class ApiClient {
     return this.get('/orders')
   }
 
-  async getMyServiceOrders() {
-    return this.get('/orders/my-orders')
+  async getMyServiceOrders(bookingId?: number) {
+    const queryParams = new URLSearchParams()
+    if (bookingId !== undefined) {
+      queryParams.set('bookingId', bookingId.toString())
+    }
+    const endpoint = `/orders/my-orders${queryParams.toString() ? '?' + queryParams.toString() : ''}`
+    return this.get(endpoint)
   }
 
   async getServiceOrder(id: number) {
@@ -644,7 +670,29 @@ class ApiClient {
   }
 
   async createServiceOrder(orderData: any) {
-    return this.post('/orders', orderData)
+    // Normalize serviceTime to LocalDateTime format without timezone for Spring (yyyy-MM-dd'T'HH:mm:ss)
+    let st: string | undefined = orderData.serviceTime || orderData.scheduledDateTime
+    if (typeof st === 'string') {
+      // Strip timezone 'Z' and milliseconds if present
+      st = st.replace(/Z$/, '')
+      st = st.replace(/\.\d+$/, '')
+      // Ensure seconds are present
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(st)) {
+        st = st + ':00'
+      }
+    }
+
+    const payload = {
+      bookingId: orderData.bookingId,
+      orderId: orderData.orderId, // optional
+      serviceId: orderData.serviceId,
+      quantity: orderData.quantity,
+      assignedStaffId: orderData.assignedStaffId,
+      requestedBy: orderData.requestedBy, // optional
+      serviceTime: st, // BE expects LocalDateTime without timezone
+      note: orderData.note || ''
+    }
+    return this.post('/orders/service', payload)
   }
 
   async addOrderItem(orderId: number, itemData: any) {
@@ -656,7 +704,7 @@ class ApiClient {
   }
 
   // Payments
-  async createPayment(payload: { serviceOrderId: number; method: 'CASH' | 'PAYOS'; returnUrl: string; cancelUrl: string }) {
+  async createPayment(payload: { serviceOrderId: number; method: 'CASH' | 'CARD' | 'BANK_TRANSFER' | 'WALLET'; returnUrl?: string; cancelUrl?: string }) {
     return this.post('/payments/create', payload)
   }
 
@@ -668,8 +716,93 @@ class ApiClient {
     return { success: false, error: 'API not implemented yet' }
   }
 
+  // Staff Tasks API
   async getStaffTasks() {
-    return { success: false, error: 'API not implemented yet' }
+    return this.get('/staff-tasks')
+  }
+
+  async getStaffTask(id: number) {
+    return this.get(`/staff-tasks/${id}`)
+  }
+
+  async getStaffTasksByAssignee(assignedTo: number) {
+    return this.get(`/staff-tasks/by-assignee/${assignedTo}`)
+  }
+
+  async getStaffTasksByStatus(status: string) {
+    return this.get(`/staff-tasks/by-status?status=${encodeURIComponent(status)}`)
+  }
+
+  async getStaffTasksByRelated(relatedType: string, relatedId: number) {
+    return this.get(`/staff-tasks/by-related?relatedType=${encodeURIComponent(relatedType)}&relatedId=${relatedId}`)
+  }
+
+  async createStaffTask(taskData: any) {
+    return this.post('/staff-tasks', taskData)
+  }
+
+  async updateStaffTask(id: number, taskData: any) {
+    return this.put(`/staff-tasks/${id}`, taskData)
+  }
+
+  async deleteStaffTask(id: number) {
+    return this.delete(`/staff-tasks/${id}`)
+  }
+
+  // Roles API
+  async getRoles(params?: { name?: string; code?: string; description?: string; isActive?: boolean; page?: number; size?: number }) {
+    const queryParams = new URLSearchParams()
+    if (params?.name) queryParams.set('name', params.name)
+    if (params?.code) queryParams.set('code', params.code)
+    if (params?.description) queryParams.set('description', params.description)
+    if (params?.isActive !== undefined) queryParams.set('isActive', params.isActive.toString())
+    if (params?.page !== undefined) queryParams.set('page', params.page.toString())
+    if (params?.size !== undefined) queryParams.set('size', params.size.toString())
+
+    const endpoint = `/roles/search${queryParams.toString() ? '?' + queryParams.toString() : ''}`
+    return this.get(endpoint)
+  }
+
+  async getRole(id: string) {
+    return this.get(`/roles/${id}`)
+  }
+
+  async createRole(roleData: any) {
+    return this.post('/roles', roleData)
+  }
+
+  async updateRole(id: string, roleData: any) {
+    return this.put(`/roles/${id}`, roleData)
+  }
+
+  async activateRole(id: string) {
+    return this.put(`/roles/${id}/activate`)
+  }
+
+  async deactivateRole(id: string) {
+    return this.put(`/roles/${id}/deactivate`)
+  }
+
+  async deleteRole(id: string) {
+    return this.delete(`/roles/${id}`)
+  }
+  async staffConfirmOrder(orderId: number, staffId: number, note?: string) {
+    return this.post(`/orders/${orderId}/staff/confirm`, { staffId, note: note || '' })
+  }
+
+  async staffRejectOrder(orderId: number, staffId: number, reason?: string) {
+    return this.post(`/orders/${orderId}/staff/reject`, { staffId, reason: reason || '' })
+  }
+
+  async getStaffTasksForOrder(staffId: number, status?: string) {
+    const queryParams = new URLSearchParams()
+    if (status) queryParams.set('status', status)
+    const endpoint = `/orders/staff/${staffId}/tasks${queryParams.toString() ? '?' + queryParams.toString() : ''}`
+    return this.get(endpoint)
+  }
+
+  async getStaffTaskDetailForOrder(staffId: number, orderId: number) {
+    return this.get(`/orders/staff/${staffId}/tasks/${orderId}`)
   }
 
   // Users API

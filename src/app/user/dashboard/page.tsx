@@ -244,6 +244,14 @@ function UserPageContent() {
   const phoneRegex = /^[0-9]{10}$/;
   const [roomsFilterFrom, setRoomsFilterFrom] = useState('');
   const [roomsFilterTo, setRoomsFilterTo] = useState('');
+
+  // Default filters to today on first load
+  useEffect(() => {
+    const today = new Date().toISOString().slice(0, 10)
+    const tomorrow = addDays(today, 1)
+    setRoomsFilterFrom(today)
+    setRoomsFilterTo(tomorrow)
+  }, [])
   const [roomsFilterError, setRoomsFilterError] = useState<string | null>(null);
 
   // Trạng thái khuôn mặt & QR theo từng booking
@@ -273,7 +281,9 @@ function UserPageContent() {
   // Form states for new booking
   const [newBooking, setNewBooking] = useState({
     checkIn: '',
+    checkInTime: '12:00',
     checkOut: '',
+    checkOutTime: '10:00',
     guests: 1,
     purpose: 'Công tác để ở',
     guestName: '',
@@ -281,8 +291,34 @@ function UserPageContent() {
     phoneNumber: ''
   });
 
+  // Helpers for date handling
+  const addDays = (dateStr: string, days: number) => {
+    const d = new Date(dateStr)
+    d.setDate(d.getDate() + days)
+    return d.toISOString().slice(0, 10)
+  }
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const toISODateTime = (dateStr: string, timeStr?: string) => {
+    const t = (timeStr && timeStr.length >= 4) ? timeStr : '00:00'
+    return new Date(`${dateStr}T${t}`).toISOString()
+  }
+
+  // Initialize booking form dates with today/tomorrow on first load
+  useEffect(() => {
+    const today = new Date().toISOString().slice(0, 10)
+    const tomorrow = addDays(today, 1)
+    setNewBooking(prev => ({
+      ...prev,
+      checkIn: prev.checkIn || today,
+      checkOut: prev.checkOut || tomorrow,
+      checkInTime: prev.checkInTime || '14:00',
+      checkOutTime: prev.checkOutTime || '12:00',
+    }))
+  }, [])
+
   // Form states for new service order
   const [newServiceOrder, setNewServiceOrder] = useState({
+    orderId: 0,
     serviceId: 0,
     serviceName: '',
     serviceCode: '',
@@ -621,8 +657,12 @@ function UserPageContent() {
     if (!newBooking.checkOut) {
       nextErrors.checkOut = 'Vui lòng chọn ngày check-out'
     }
-    if (newBooking.checkIn && newBooking.checkOut && new Date(newBooking.checkIn) >= new Date(newBooking.checkOut)) {
-      nextErrors.checkOut = 'Ngày check-out phải sau ngày check-in'
+    if (newBooking.checkIn && newBooking.checkOut) {
+      const ci = new Date(toISODateTime(newBooking.checkIn, newBooking.checkInTime))
+      const co = new Date(toISODateTime(newBooking.checkOut, newBooking.checkOutTime))
+      if (!(ci < co)) {
+        nextErrors.checkOut = 'Thời điểm trả phòng phải sau thời điểm nhận phòng'
+      }
     }
     if (selectedRoom && newBooking.guests > selectedRoom.capacity) {
       nextErrors.guests = `Tối đa ${selectedRoom.capacity} người`
@@ -643,8 +683,8 @@ function UserPageContent() {
       // Gửi thêm thông tin khách (guestName, guestEmail, phoneNumber, purpose) ở top-level
       const bookingData = {
         roomId: selectedRoom.id,
-        checkinDate: newBooking.checkIn,
-        checkoutDate: newBooking.checkOut,
+        checkinDate: toISODateTime(newBooking.checkIn, newBooking.checkInTime),
+        checkoutDate: toISODateTime(newBooking.checkOut, newBooking.checkOutTime),
         numGuests: newBooking.guests,
         note: `Purpose: ${newBooking.purpose}\nGuest: ${newBooking.guestName}\nEmail: ${newBooking.guestEmail}\nPhone: ${newBooking.phoneNumber}`,
         guestName: newBooking.guestName,
@@ -679,7 +719,9 @@ function UserPageContent() {
       setSelectedRoom(null);
       setNewBooking({ 
         checkIn: '', 
+        checkInTime: '12:00',
         checkOut: '', 
+        checkOutTime: '10:00',
         guests: 1, 
         purpose: 'Công tác để ở',
         guestName: '',
@@ -710,6 +752,9 @@ function UserPageContent() {
   const handleCreateServiceOrder = async () => {
     // Validation
     const nextErrors: Record<string, string> = {}
+    if (newServiceOrder.orderId <= 0) {
+      nextErrors.orderId = 'Vui lòng nhập mã đơn hàng (orderId)'
+    }
     if (newServiceOrder.serviceId <= 0) {
       nextErrors.serviceId = 'Vui lòng chọn dịch vụ'
     }
@@ -729,30 +774,26 @@ function UserPageContent() {
     }
 
     try {
-      const serviceOrderData = {
+      const payload = {
+        orderId: newServiceOrder.orderId,
         serviceId: newServiceOrder.serviceId,
-        serviceName: newServiceOrder.serviceName,
-        serviceCode: newServiceOrder.serviceCode,
-        quantity: newServiceOrder.quantity,
-        unitPrice: newServiceOrder.unitPrice,
-        totalPrice: newServiceOrder.quantity * newServiceOrder.unitPrice,
-        userName: newServiceOrder.userName,
-        userEmail: newServiceOrder.userEmail,
-        userPhone: newServiceOrder.userPhone,
-        note: newServiceOrder.note,
-        staffId: newServiceOrder.staffId > 0 ? newServiceOrder.staffId : undefined, // Chỉ gửi nếu đã chọn staff
-        staffName: newServiceOrder.staffName || undefined
+        quantity: newServiceOrder.quantity
       };
 
-      const res = await fetch('/api/system/orders?action=cart', {
+      const accessToken = authService.getAccessToken();
+      const res = await fetch(`/api/system/orders?action=addItem&orderId=${newServiceOrder.orderId}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(serviceOrderData)
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {})
+        },
+        body: JSON.stringify(payload)
       })
 
       if (res.ok) {
         setServiceModalOpen(false);
         setNewServiceOrder({
+          orderId: 0,
           serviceId: 0,
           serviceName: '',
           serviceCode: '',
@@ -769,15 +810,16 @@ function UserPageContent() {
         setFlash({ type: 'success', text: 'Đặt dịch vụ thành công!' });
         setServiceFormMessage({ type: 'success', text: 'Đã gửi yêu cầu dịch vụ.' });
         setServiceErrors({});
-
+        
         // Refresh service orders data
         refetchServiceOrders();
-        if (serviceOrderData.totalPrice > 0) {
+        const totalPrice = newServiceOrder.unitPrice * newServiceOrder.quantity;
+        if (totalPrice > 0) {
           try {
             const payRes = await fetch('/api/system/payments?action=create', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ amount: serviceOrderData.totalPrice, description: `Thanh toán dịch vụ: ${serviceOrderData.serviceName}` })
+              body: JSON.stringify({ amount: totalPrice, description: `Thanh toán dịch vụ: ${newServiceOrder.serviceName}` })
             })
             if (!payRes.ok) {
               const errText = await payRes.text()
@@ -864,7 +906,6 @@ function UserPageContent() {
       : [];
   const relevantStatusesForAvailability = ['PENDING', 'APPROVED', 'CHECKED_IN'];
 
-  const todayStr = new Date().toISOString().slice(0, 10);
   const fromStr = roomsFilterFrom || todayStr;
   const toStr = roomsFilterTo || todayStr;
   const rangeFrom = new Date(fromStr);
@@ -1211,6 +1252,16 @@ function UserPageContent() {
                                   <Button 
                                     onClick={() => {
                                       setSelectedRoom(room);
+                                      const today = new Date().toISOString().slice(0, 10)
+                                      const from = roomsFilterFrom || today
+                                      // Ensure to > from
+                                      const toCandidate = roomsFilterTo || ''
+                                      const to = (toCandidate && new Date(toCandidate) > new Date(from)) ? toCandidate : addDays(from, 1)
+                                      setNewBooking(prev => ({
+                                        ...prev,
+                                        checkIn: from,
+                                        checkOut: to,
+                                      }))
                                       setBookingModalOpen(true);
                                     }}
                                     className="w-full bg-gray-700 hover:bg-gray-800 text-white font-semibold py-2.5 shadow-md hover:shadow-lg transition-all duration-200 transform hover:scale-[1.02]"
@@ -1346,7 +1397,37 @@ function UserPageContent() {
                                     ? <span className="text-green-700 font-semibold">Đã đăng ký khuôn mặt</span>
                                     : <span className="text-yellow-700">Chưa đăng ký khuôn mặt</span>}
                                 </p>
+                                {(() => { 
+                                  const co = new Date(booking.checkOut);
+                                  const diff = co.getTime() - Date.now();
+                                  const oneDay = 12 * 60 * 60 * 1000;
+                                  if (!Number.isNaN(co.getTime()) && diff <= oneDay) {
+                                    return (
+                                      <div className="mt-3 p-2 bg-yellow-50 border border-yellow-200 rounded">
+                                        <p className="text-xs text-yellow-800">Sắp đến giờ trả phòng. Vui lòng chuẩn bị trả chìa khóa tại bảo vệ hoặc thực hiện Check-out trực tuyến.</p>
+                                      </div>
+                                    )
+                                  }
+                                  return null
+                                })()}
                                 <div className="flex flex-wrap gap-2">
+                                  {(() => { 
+                                    const co = new Date(booking.checkOut);
+                                    const diff = co.getTime() - Date.now();
+                                    const oneDay = 24 * 60 * 60 * 1000;
+                                    if (!Number.isNaN(co.getTime()) && diff <= oneDay) {
+                                      return (
+                                        <Button
+                                          className="text-sm bg-red-600 hover:bg-red-700 text-white"
+                                          onClick={() => router.push(`/user/checkout?bookingId=${booking.id}`)}
+                                        >
+                                          Check-out
+                                        </Button>
+                                      )
+                                    }
+                                    return null
+                                  })()}
+
                                   <Button
                                     className="text-sm"
                                     onClick={() => handleCheckFaceStatus(booking.id)}
@@ -1434,9 +1515,20 @@ function UserPageContent() {
               )}
               <div className="flex justify-between items-center">
                 <h2 className="text-lg font-semibold text-gray-900">Dịch vụ đã đặt</h2>
-                <Button onClick={() => setServiceModalOpen(true)} className="bg-gray-700 hover:bg-gray-800 text-white">
-                  Đặt dịch vụ mới
-                </Button>
+                <div className="flex gap-2">
+                  <Button 
+                    variant="secondary"
+                    onClick={() => router.push('/user/orders')}
+                  >
+                    Xem tất cả
+                  </Button>
+                  <Button 
+                    onClick={() => router.push('/user/services/create')} 
+                    className="bg-gray-700 hover:bg-gray-800 text-white"
+                  >
+                    Đặt dịch vụ mới
+                  </Button>
+                </div>
               </div>
 
               {serviceOrders.length === 0 ? (
@@ -1449,51 +1541,67 @@ function UserPageContent() {
                   </CardBody>
                 </Card>
               ) : (
-                <div className="grid gap-4">
-                  {serviceOrders.map((order) => (
-                    <Card key={order.id}>
-                      <CardBody>
-                        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-                          <div className="flex-1">
-                            <div className="flex flex-wrap items-center gap-2 mb-2">
-                              <h3 className="text-lg font-semibold text-gray-900">
-                                {order.serviceName}
-                              </h3>
-                              {getStatusBadge(order.status)}
-                            </div>
-                            {order.note && (
-                              <p className="text-sm text-gray-600 mb-2">{order.note}</p>
-                            )}
-                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-sm text-gray-600">
-                              <div><span className="font-medium">Số lượng:</span> {order.quantity}</div>
-                              <div><span className="font-medium">Đơn giá:</span> {order.unitPrice.toLocaleString()} VND</div>
-                              <div><span className="font-medium">Tổng tiền:</span> <span className="text-green-600 font-semibold">{order.totalPrice.toLocaleString()} VND</span></div>
-                            </div>
+                <>
+                  <div className="grid gap-4">
+                    {/* Chỉ hiển thị 5 orders gần nhất */}
+                    {serviceOrders.slice(0, 5).map((order) => (
+                      <Card key={order.id}>
+                        <CardBody>
+                          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                            <div className="flex-1">
+                              <div className="flex flex-wrap items-center gap-2 mb-2">
+                                <h3 className="text-lg font-semibold text-gray-900">
+                                  {order.serviceName}
+                                </h3>
+                                {getStatusBadge(order.status)}
+                              </div>
+                              {order.note && (
+                                <p className="text-sm text-gray-600 mb-2">{order.note}</p>
+                              )}
+                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-sm text-gray-600">
+                                <div><span className="font-medium">Số lượng:</span> {order.quantity}</div>
+                                <div><span className="font-medium">Đơn giá:</span> {order.unitPrice.toLocaleString()} VND</div>
+                                <div><span className="font-medium">Tổng tiền:</span> <span className="text-green-600 font-semibold">{order.totalPrice.toLocaleString()} VND</span></div>
+                              </div>
 
-                            {/* Hiển thị thông tin nhân viên nếu có */}
-                            {(order as any).staffName && (
-                              <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded-lg">
-                                <div className="flex items-center gap-2 text-sm">
-                                  <span className="text-blue-900">👤 Nhân viên thực hiện:</span>
-                                  <span className="font-semibold text-blue-700">{(order as any).staffName}</span>
+                              {/* Hiển thị thông tin nhân viên nếu có */}
+                              {(order as any).staffName && (
+                                <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded-lg">
+                                  <div className="flex items-center gap-2 text-sm">
+                                    <span className="text-blue-900">👤 Nhân viên thực hiện:</span>
+                                    <span className="font-semibold text-blue-700">{(order as any).staffName}</span>
+                                  </div>
                                 </div>
-                              </div>
-                            )}
+                              )}
 
-                            <div className="mt-2 text-sm text-gray-500">
-                              Đặt lúc: {new Date(order.orderDate).toLocaleString('vi-VN')}
-                            </div>
-                            {order.deliveryDate && (
-                              <div className="text-sm text-gray-500">
-                                Giao hàng: {new Date(order.deliveryDate).toLocaleString('vi-VN')}
+                              <div className="mt-2 text-sm text-gray-500">
+                                Đặt lúc: {new Date(order.orderDate).toLocaleString('vi-VN')}
                               </div>
-                            )}
+                              {order.deliveryDate && (
+                                <div className="text-sm text-gray-500">
+                                  Giao hàng: {new Date(order.deliveryDate).toLocaleString('vi-VN')}
+                                </div>
+                              )}
+                            </div>
                           </div>
-                        </div>
+                        </CardBody>
+                      </Card>
+                    ))}
+                  </div>
+                  {serviceOrders.length > 5 && (
+                    <Card>
+                      <CardBody>
+                        <Button 
+                          variant="secondary"
+                          onClick={() => router.push('/user/orders')}
+                          className="w-full"
+                        >
+                          Xem thêm {serviceOrders.length - 5} đơn hàng khác
+                        </Button>
                       </CardBody>
                     </Card>
-                  ))}
-                </div>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -1751,8 +1859,20 @@ function UserPageContent() {
                   <Input
                     type="date"
                     value={newBooking.checkIn}
-                    onChange={(e) => setNewBooking(prev => ({ ...prev, checkIn: e.target.value }))}
+                    min={todayStr}
+                    onChange={(e) => {
+                      const v = e.target.value
+                      setNewBooking(prev => ({ ...prev, checkIn: v }))
+                    }}
                   />
+                  <div className="mt-2">
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Giờ nhận phòng</label>
+                    <Input
+                      type="time"
+                      value={newBooking.checkInTime}
+                      onChange={(e) => setNewBooking(prev => ({ ...prev, checkInTime: e.target.value }))}
+                    />
+                  </div>
                 {bookingErrors.checkIn && (
                   <p className="mt-1 text-xs text-red-600">{bookingErrors.checkIn}</p>
                 )}
@@ -1764,8 +1884,17 @@ function UserPageContent() {
                   <Input
                     type="date"
                     value={newBooking.checkOut}
+                    min={newBooking.checkIn ? newBooking.checkIn : todayStr}
                     onChange={(e) => setNewBooking(prev => ({ ...prev, checkOut: e.target.value }))}
                   />
+                  <div className="mt-2">
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Giờ trả phòng</label>
+                    <Input
+                      type="time"
+                      value={newBooking.checkOutTime}
+                      onChange={(e) => setNewBooking(prev => ({ ...prev, checkOutTime: e.target.value }))}
+                    />
+                  </div>
                 {bookingErrors.checkOut && (
                   <p className="mt-1 text-xs text-red-600">{bookingErrors.checkOut}</p>
                 )}
@@ -1843,6 +1972,21 @@ function UserPageContent() {
               {serviceFormMessage.text}
             </div>
           )}
+          {/* Mã đơn dịch vụ */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Mã đơn dịch vụ (orderId) *</label>
+            <Input
+              type="number"
+              min="1"
+              value={newServiceOrder.orderId}
+              onChange={(e) => setNewServiceOrder(prev => ({ ...prev, orderId: parseInt(e.target.value) || 0 }))}
+              placeholder="Nhập ID đơn dịch vụ đã có"
+            />
+            {serviceErrors.orderId && (
+              <p className="mt-1 text-xs text-red-600">{serviceErrors.orderId}</p>
+            )}
+          </div>
+
           {/* Chọn dịch vụ */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Chọn dịch vụ *</label>

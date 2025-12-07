@@ -28,6 +28,7 @@ export default function Sidebar({ user, isVisible = false, collapsed = true, onT
   const isAdmin = pathname.startsWith('/admin');
   const isOffice = pathname.startsWith('/office');
   const isStaff = pathname.startsWith('/staff');
+  const isSecurity = pathname.startsWith('/security');
   const isUser = pathname.startsWith('/user');
 
   const role = useCurrentRole();
@@ -231,6 +232,11 @@ export default function Sidebar({ user, isVisible = false, collapsed = true, onT
         { name: 'Dashboard', href: '/staff/dashboard', icon: <Icons.Dashboard />, current: pathname.startsWith('/staff/dashboard') },
       ];
     
+    } else if (isSecurity || currentRole === 'security') {
+      return [
+        { name: 'Dashboard', href: '/security/dashboard', icon: <Icons.Dashboard />, current: pathname.startsWith('/security/dashboard') },
+      ];
+
     } else if (isUser || currentRole === 'user') {
       return [
         { name: 'Dashboard', href: '/user/dashboard', icon: <Icons.Dashboard />, current: pathname.startsWith('/user/dashboard') },

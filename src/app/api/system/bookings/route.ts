@@ -10,13 +10,17 @@ export async function GET(req: NextRequest) {
     const userId = searchParams.get('userId');
     const status = searchParams.get('status');
 
+    // Forward Authorization header to apiClient (ensures backend auth)
+    const authHeader = req.headers.get('authorization');
+    const options: RequestInit = authHeader ? { headers: { Authorization: authHeader } } : {};
+
     // Get specific booking by ID
     if (id) {
       const bookingId = parseInt(id);
       if (isNaN(bookingId)) {
         return NextResponse.json({ error: 'Invalid booking ID' }, { status: 400 });
       }
-      const response = await apiClient.getBooking(bookingId);
+      const response = await apiClient.getBooking(bookingId, options as any);
       if (response.success) {
         return NextResponse.json(response.data);
       }
@@ -29,7 +33,7 @@ export async function GET(req: NextRequest) {
       if (isNaN(user)) {
         return NextResponse.json({ error: 'Invalid user ID' }, { status: 400 });
       }
-      const response = await apiClient.getBookingsByUser(user);
+      const response = await apiClient.getBookingsByUser(user, options as any);
       if (response.success) {
         const raw: any = response.data
         const items = Array.isArray(raw?.content) ? raw.content : (Array.isArray(raw) ? raw : [])
@@ -44,7 +48,7 @@ export async function GET(req: NextRequest) {
       if (!validStatuses.includes(status)) {
         return NextResponse.json({ error: 'Invalid booking status' }, { status: 400 });
       }
-      const response = await apiClient.getBookingsByStatus(status);
+      const response = await apiClient.getBookingsByStatus(status, options as any);
       if (response.success) {
         const raw: any = response.data
         const items = Array.isArray(raw?.content) ? raw.content : (Array.isArray(raw) ? raw : [])
@@ -54,7 +58,7 @@ export async function GET(req: NextRequest) {
     }
 
     // Get all bookings (default)
-    const response = await apiClient.getBookings()
+    const response = await apiClient.getBookings(options as any)
     
     if (!response.success) {
       return NextResponse.json(
@@ -82,17 +86,35 @@ export async function POST(req: NextRequest) {
     const action = searchParams.get('action');
     const id = searchParams.get('id');
 
-    // Handle checkin action
+    // Handle checkin action (Security): forward multipart form-data to backend /bookings/{id}/checkin
     if (action === 'checkin' && id) {
       const bookingId = parseInt(id);
       if (isNaN(bookingId)) {
         return NextResponse.json({ error: 'Invalid booking ID' }, { status: 400 });
       }
-      const response = await apiClient.checkinBooking(bookingId);
-      if (response.success) {
-        return NextResponse.json(response.data);
+      // Expect multipart/form-data
+      const contentType = req.headers.get('content-type') || ''
+      if (!contentType.includes('multipart/form-data')) {
+        // Allow JSON fallback but recommend multipart
+        // Try to parse JSON then convert to form
       }
-      return NextResponse.json({ error: response.error }, { status: 500 });
+      const form = await req.formData().catch(() => null)
+      if (!form) {
+        return NextResponse.json({ error: 'Invalid form data' }, { status: 400 })
+      }
+      const auth = req.headers.get('authorization') || ''
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || 'https://backend.sorms.online/api'}/bookings/${bookingId}/checkin`, {
+        method: 'POST',
+        headers: {
+          ...(auth ? { Authorization: auth } : {}),
+        },
+        body: form as unknown as BodyInit,
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
+      }
+      return NextResponse.json(data?.data ?? data)
     }
 
     // Handle approve action

@@ -200,10 +200,46 @@ export default function ServicesPage() {
 
   async function doDelete() {
     if (!confirmOpen.id) return
-    await fetch(`/api/system/services?id=${confirmOpen.id}`, { method: 'DELETE' })
-    await refetchServices()
-    setConfirmOpen({ open: false })
-    setFlash({ type: 'success', text: 'Đã xóa hóa dịch vụ.' })
+    try {
+      const res = await fetch(`/api/system/services?id=${confirmOpen.id}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}))
+        throw new Error(errorData.error || 'Xóa dịch vụ thất bại')
+      }
+      await refetchServices()
+      setConfirmOpen({ open: false })
+      setFlash({ type: 'success', text: 'Đã xóa dịch vụ.' })
+    } catch (e: any) {
+      setFlash({ type: 'error', text: e.message || 'Có lỗi xảy ra khi xóa dịch vụ' })
+    }
+  }
+
+  async function deactivateService(id: number) {
+    try {
+      // Try deactivate endpoint first (soft delete)
+      const res = await fetch(`/api/system/services`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, isActive: false })
+      })
+      
+      if (!res.ok) {
+        // If deactivate fails, fallback to hard delete
+        const errorData = await res.json().catch(() => ({}))
+        console.warn('Deactivate failed, trying hard delete:', errorData)
+        const deleteRes = await fetch(`/api/system/services?id=${id}`, { method: 'DELETE' })
+        if (!deleteRes.ok) {
+          const deleteError = await deleteRes.json().catch(() => ({}))
+          throw new Error(deleteError.error || 'Vô hiệu hóa dịch vụ thất bại')
+        }
+        setFlash({ type: 'success', text: 'Đã xóa dịch vụ (hard delete).' })
+      } else {
+        setFlash({ type: 'success', text: 'Đã vô hiệu hóa dịch vụ thành công.' })
+      }
+      await refetchServices()
+    } catch (e: any) {
+      setFlash({ type: 'error', text: e.message || 'Có lỗi xảy ra' })
+    }
   }
 
   async function activateService(id: number) {
@@ -448,13 +484,21 @@ export default function ServicesPage() {
                                   Sửa
                                 </Button>
                                 {row.isActive ? (
-                                  <Button
-                                    variant="danger"
-                                    className="h-8 px-3 text-xs"
-                                    onClick={() => confirmDelete(row.id)}
-                                  >
-                                    Xóa
-                                  </Button>
+                                  <>
+                                    <Button
+                                      className="h-8 px-3 text-xs bg-yellow-600 hover:bg-yellow-700 text-white"
+                                      onClick={() => deactivateService(row.id)}
+                                    >
+                                      Vô hiệu hóa
+                                    </Button>
+                                    <Button
+                                      variant="danger"
+                                      className="h-8 px-3 text-xs"
+                                      onClick={() => confirmDelete(row.id)}
+                                    >
+                                      Xóa
+                                    </Button>
+                                  </>
                                 ) : (
                                   <Button
                                     className="h-8 px-3 text-xs bg-green-600 hover:bg-green-700"
@@ -548,82 +592,15 @@ export default function ServicesPage() {
         </div>
 
         {/* Nút thao tác */}
-        <div className="grid grid-cols-3 gap-2 pt-3 border-t border-gray-100">
-          <Button
-            variant="secondary"
-            className="h-9 text-xs font-medium"
-            onClick={() => {
-              setSelected(row);
-              setDetailOpen(true);
-            }}
-          >
-            <svg
-              className="w-3 h-3 mr-1"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-              />
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
-              />
-            </svg>
-            Xem
-          </Button>
-
-          <Button
-            className="h-9 text-xs font-medium"
-            onClick={() => openEdit(row)}
-          >
-            <svg
-              className="w-3 h-3 mr-1"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-              />
-            </svg>
-            Sửa
-          </Button>
-
-          {row.isActive ? (
+        <div className="space-y-2 pt-3 border-t border-gray-100">
+          <div className="grid grid-cols-3 gap-2">
             <Button
-              variant="danger"
+              variant="secondary"
               className="h-9 text-xs font-medium"
-              onClick={() => confirmDelete(row.id)}
-            >
-              <svg
-                className="w-3 h-3 mr-1"
-                fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"
-              />
-            </svg>
-            Vô hiệu
-          </Button>
-          ) : (
-            <Button
-              className="h-9 text-xs font-medium bg-green-600 hover:bg-green-700"
-              onClick={() => activateService(row.id)}
+              onClick={() => {
+                setSelected(row);
+                setDetailOpen(true);
+              }}
             >
               <svg
                 className="w-3 h-3 mr-1"
@@ -635,10 +612,100 @@ export default function ServicesPage() {
                   strokeLinecap="round"
                   strokeLinejoin="round"
                   strokeWidth={2}
-                  d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                  d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                />
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
                 />
               </svg>
-              Kích hoạt
+              Xem
+            </Button>
+
+            <Button
+              className="h-9 text-xs font-medium"
+              onClick={() => openEdit(row)}
+            >
+              <svg
+                className="w-3 h-3 mr-1"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                />
+              </svg>
+              Sửa
+            </Button>
+
+            {row.isActive ? (
+              <Button
+                className="h-9 text-xs font-medium bg-yellow-600 hover:bg-yellow-700 text-white"
+                onClick={() => deactivateService(row.id)}
+              >
+                <svg
+                  className="w-3 h-3 mr-1"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"
+                  />
+                </svg>
+                Vô hiệu
+              </Button>
+            ) : (
+              <Button
+                className="h-9 text-xs font-medium bg-green-600 hover:bg-green-700"
+                onClick={() => activateService(row.id)}
+              >
+                <svg
+                  className="w-3 h-3 mr-1"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                  />
+                </svg>
+                Kích hoạt
+              </Button>
+            )}
+          </div>
+          {row.isActive && (
+            <Button
+              variant="danger"
+              className="w-full h-9 text-xs font-medium"
+              onClick={() => confirmDelete(row.id)}
+            >
+              <svg
+                className="w-3 h-3 mr-1"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                />
+              </svg>
+              Xóa vĩnh viễn
             </Button>
           )}
         </div>

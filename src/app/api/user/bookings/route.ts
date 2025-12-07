@@ -59,12 +59,15 @@ export async function GET(req: NextRequest) {
         userId: userInfo.id,
         bookingCode: booking.code,
         userName: booking.userName,
+        userEmail: booking.userEmail || userInfo.email,
         roomId: booking.roomId,
         roomCode: booking.roomCode,
         checkinDate: booking.checkinDate,
         checkoutDate: booking.checkoutDate,
         numGuests: booking.numGuests,
         note: booking.note,
+        bookingCreatedAt: booking.createdAt || booking.created_at || new Date().toISOString(), // Ngày giờ đặt phòng
+        bookingDate: booking.createdAt || booking.created_at || new Date().toISOString(), // Alias for compatibility
       }
 
       const json = JSON.stringify(payload)

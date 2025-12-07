@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-export type AppRole = "admin" | "office" | "staff" | "user" | null;
+export type AppRole = "admin" | "office" | "security" | "staff" | "user" | null;
 
 function readCookie(name: string): string | null {
   if (typeof document === "undefined") return null;
@@ -20,9 +20,10 @@ export function useCurrentRole(): AppRole {
     const fromCookie = readCookie("role");
     const fromStorage = localStorage.getItem("userRole");
     const r = (fromCookie || fromStorage) as AppRole;
+    if (r && ["admin","office","security","staff","user"].includes(r)) {
+      setRole(r);
+    }
   }, []);
 
   return role;
 }
-
-

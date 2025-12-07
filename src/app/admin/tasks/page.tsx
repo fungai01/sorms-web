@@ -32,6 +32,9 @@ export default function TasksPage() {
 
   const [query, setQuery] = useState("")
   const [filterStatus, setFilterStatus] = useState<'ALL' | TaskStatus>('ALL')
+  const [filterAssignee, setFilterAssignee] = useState<string>('')
+  const [filterRelatedType, setFilterRelatedType] = useState<string>('')
+  const [filterRelatedId, setFilterRelatedId] = useState<string>('')
   const [sortKey, setSortKey] = useState<'id' | 'created' | 'due' | 'priority'>("created")
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>("desc")
   const [page, setPage] = useState(1)
@@ -60,7 +63,17 @@ export default function TasksPage() {
   async function refetchTasks() {
     setLoading(true)
     try {
-      const res = await fetch('/api/system/tasks', { headers: { 'Content-Type': 'application/json' }, credentials: 'include' })
+      // Build query params based on filters
+      const params = new URLSearchParams()
+      if (filterAssignee) params.set('assignedTo', filterAssignee)
+      if (filterStatus !== 'ALL') params.set('status', filterStatus)
+      if (filterRelatedType && filterRelatedId) {
+        params.set('relatedType', filterRelatedType)
+        params.set('relatedId', filterRelatedId)
+      }
+      
+      const endpoint = `/api/system/tasks${params.toString() ? '?' + params.toString() : ''}`
+      const res = await fetch(endpoint, { headers: { 'Content-Type': 'application/json' }, credentials: 'include' })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
       if (Array.isArray(data)) setRows(data)
@@ -72,6 +85,12 @@ export default function TasksPage() {
       setLoading(false)
     }
   }
+  
+  // Refetch when filters change
+  useEffect(() => {
+    refetchTasks()
+  }, [filterStatus, filterAssignee, filterRelatedType, filterRelatedId])
+  
   useEffect(() => { refetch() }, [])
 
   useEffect(() => { if (!flash) return; const t = setTimeout(() => setFlash(null), 3000); return () => clearTimeout(t) }, [flash])
@@ -291,6 +310,44 @@ export default function TasksPage() {
             <option value="desc">Giảm dần</option>
           </select>
         </div>
+        <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Người phụ trách (ID)</label>
+          <Input
+            type="number"
+            placeholder="Nhập ID người phụ trách"
+            value={filterAssignee}
+            onChange={(e) => setFilterAssignee(e.target.value)}
+            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg"
+          />
+        </div>
+        <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Loại liên quan</label>
+          <select 
+            value={filterRelatedType} 
+            onChange={(e) => {
+              setFilterRelatedType(e.target.value)
+              if (!e.target.value) setFilterRelatedId('')
+            }}
+            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="">-- Chọn loại --</option>
+            <option value="BOOKING">BOOKING</option>
+            <option value="SERVICE_ORDER">SERVICE_ORDER</option>
+            <option value="ROOM">ROOM</option>
+          </select>
+        </div>
+        {filterRelatedType && (
+          <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">ID liên quan</label>
+            <Input
+              type="number"
+              placeholder="Nhập ID"
+              value={filterRelatedId}
+              onChange={(e) => setFilterRelatedId(e.target.value)}
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg"
+            />
+          </div>
+        )}
       </div>
 
           {/* Desktop */}
@@ -324,6 +381,44 @@ export default function TasksPage() {
                 <option value="CANCELLED">CANCELLED</option>
               </select>
             </div>
+            <div className="w-32 flex-shrink-0">
+              <label className="block text-xs font-medium text-gray-600 mb-1">Người phụ trách</label>
+              <Input
+                type="number"
+                placeholder="ID"
+                value={filterAssignee}
+                onChange={(e) => setFilterAssignee(e.target.value)}
+                className="w-full px-3 py-2 text-sm"
+              />
+            </div>
+            <div className="w-36 flex-shrink-0">
+              <label className="block text-xs font-medium text-gray-600 mb-1">Loại liên quan</label>
+              <select 
+                value={filterRelatedType} 
+                onChange={(e) => {
+                  setFilterRelatedType(e.target.value)
+                  if (!e.target.value) setFilterRelatedId('')
+                }}
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">-- Chọn --</option>
+                <option value="BOOKING">BOOKING</option>
+                <option value="SERVICE_ORDER">SERVICE_ORDER</option>
+                <option value="ROOM">ROOM</option>
+              </select>
+            </div>
+            {filterRelatedType && (
+              <div className="w-32 flex-shrink-0">
+                <label className="block text-xs font-medium text-gray-600 mb-1">ID liên quan</label>
+                <Input
+                  type="number"
+                  placeholder="ID"
+                  value={filterRelatedId}
+                  onChange={(e) => setFilterRelatedId(e.target.value)}
+                  className="w-full px-3 py-2 text-sm"
+                />
+              </div>
+            )}
             <div className="w-36 flex-shrink-0">
               <label className="block text-xs font-medium text-gray-600 mb-1">Sắp xếp</label>
               <select

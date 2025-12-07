@@ -8,8 +8,8 @@ export interface Notification {
   unread: boolean;
   type?: 'info' | 'success' | 'warning' | 'error';
   category?: 'booking' | 'task' | 'system' | 'payment';
-  visibleTo?: ('admin' | 'office' | 'staff' | 'user')[]; // Who can see this notification
-  createdBy?: 'admin' | 'office' | 'staff' | 'user'; // Who created this notification
+  visibleTo?: ('admin' | 'office' | 'staff' | 'security' | 'user')[]; // Who can see this notification
+  createdBy?: 'admin' | 'office' | 'staff' | 'security' | 'user'; // Who created this notification
 }
 
 // Store notifications in localStorage for persistence
