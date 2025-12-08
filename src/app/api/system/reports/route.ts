@@ -1,5 +1,6 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { apiClient } from '@/lib/api-client'
+import { isAdmin } from '@/lib/auth-utils'
 
 type ReportItem = {
   id: number
@@ -191,7 +192,10 @@ async function buildReportFromAPI(): Promise<ReportResponse> {
   }
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  if (!await isAdmin(req)) {
+    return NextResponse.json({ error: 'Unauthorized - Admin access required' }, { status: 403 })
+  }
   const report = await buildReportFromAPI()
   return NextResponse.json(report)
 }

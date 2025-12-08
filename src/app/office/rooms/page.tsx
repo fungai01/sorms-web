@@ -57,7 +57,7 @@ export default function OfficeRoomsPage() {
 
   // Export CSV
   const exportCsv = () => {
-    const headers = ['ID','Mã phòng','Tên phòng','ID loại phòng','Tầng','Trạng thái','Mô tả'];
+    const headers = ['ID','Mã phòng','Tên phòng','ID Dãy Tòa','Tầng','Trạng thái','Mô tả'];
     const rows = rooms.map((r:any)=>[
       r.id,
       r.code,
@@ -235,8 +235,8 @@ export default function OfficeRoomsPage() {
               </div>
               {/* Placeholders for room type & status multi-selects (to integrate with existing UI lib) */}
               <div className="sm:col-span-2">
-                <label className="block text-sm text-gray-700 mb-1">Loại phòng</label>
-                <div className="text-xs text-gray-500">(Tùy chọn: multi-select loại phòng khi có dữ liệu)</div>
+                <label className="block text-sm text-gray-700 mb-1">Dãy Tòa</label>
+                <div className="text-xs text-gray-500">(Tùy chọn: multi-select Dãy Tòa khi có dữ liệu)</div>
               </div>
               <div className="sm:col-span-2">
                 <label className="block text-sm text-gray-700 mb-1">Trạng thái</label>

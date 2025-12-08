@@ -140,48 +140,59 @@ export default function Sidebar({ user, isVisible = false, collapsed = true, onT
 
   // Simplified navigation - no submenus, only single links
   const getNavigation = () => {
+    // Route-specific pages (ensure stable SSR/CSR output)
+    if (isProfile) {
+      return [
+        { name: 'Hồ sơ cá nhân', href: '/profile', icon: <Icons.Dashboard />, current: pathname === '/profile' },
+      ];
+    }
+    if (isNotifications) {
+      return [
+        { name: 'Thông báo', href: '/notifications', icon: <Icons.Dashboard />, current: pathname === '/notifications' },
+      ];
+    }
+
     // Check userRole from sessionStorage first, then fallback to path detection
     const currentRole = (role || userRole || (isAdmin ? 'admin' : isOffice ? 'office' : isStaff ? 'staff' : isUser ? 'user' : null)) as string | null;
     
     if (isAdmin || currentRole === 'admin') {
       return [
         { 
-          name: 'Dashboard', 
+          name: 'Dashboard quản lý hệ thống', 
           href: '/admin/dashboard', 
           icon: <Icons.Dashboard />, 
           current: pathname === '/admin/dashboard'
         },
         { 
-          name: 'Phòng', 
+          name: 'Quản lý phòng', 
           href: '/admin/rooms', 
           icon: <Icons.Rooms />, 
           current: pathname.startsWith('/admin/rooms')
         },
         { 
-          name: 'Loại phòng', 
+          name: 'Quản lý dãy tòa', 
           href: '/admin/room-types', 
           icon: <Icons.RoomTypes />, 
           current: pathname.startsWith('/admin/room-types')
         },
         { 
-          name: 'Đặt phòng', 
+          name: 'Quản lý đặt phòng', 
           href: '/admin/bookings', 
           icon: <Icons.Bookings />, 
           current: pathname.startsWith('/admin/bookings')
         },
         { 
-          name: 'Dịch vụ', 
+          name: 'Quản lý dịch vụ', 
           href: '/admin/services', 
           icon: <Icons.Services />, 
           current: pathname.startsWith('/admin/services')
         },
-        // Đã ẩn: Đơn dịch vụ không còn được sử dụng
-        // { 
-        //   name: 'Đơn dịch vụ', 
-        //   href: '/admin/service-orders', 
-        //   icon: <Icons.ServiceOrders />, 
-        //   current: pathname.startsWith('/admin/service-orders')
-        // },
+        { 
+          name: 'Đơn dịch vụ', 
+          href: '/admin/service-orders', 
+          icon: <Icons.ServiceOrders />, 
+          current: pathname.startsWith('/admin/service-orders')
+        },
         { 
           name: 'Thanh toán', 
           href: '/admin/payments', 
@@ -189,25 +200,25 @@ export default function Sidebar({ user, isVisible = false, collapsed = true, onT
           current: pathname.startsWith('/admin/payments')
         },
         { 
-          name: 'Công việc', 
+          name: 'Quản lý Công việc', 
           href: '/admin/tasks', 
           icon: <Icons.Tasks />, 
           current: pathname.startsWith('/admin/tasks')
         },
         { 
-          name: 'Người dùng', 
+          name: 'Quản lý người dùng', 
           href: '/admin/users', 
           icon: <Icons.Users />, 
           current: pathname.startsWith('/admin/users')
         },
         { 
-          name: 'Nhân sự', 
+          name: 'Quản lý nhân sự', 
           href: '/admin/staff-profiles', 
           icon: <Icons.Users />, 
           current: pathname.startsWith('/admin/staff-profiles')
         },
         { 
-          name: 'Phân quyền', 
+          name: 'Quản lý phân quyền hệ thống', 
           href: '/admin/roles', 
           icon: <Icons.Roles />, 
           current: pathname.startsWith('/admin/roles')

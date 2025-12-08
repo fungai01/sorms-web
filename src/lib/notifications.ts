@@ -8,21 +8,18 @@ export interface Notification {
   unread: boolean;
   type?: 'info' | 'success' | 'warning' | 'error';
   category?: 'booking' | 'task' | 'system' | 'payment';
-  visibleTo?: ('admin' | 'office' | 'staff' | 'security' | 'user')[]; // Who can see this notification
-  createdBy?: 'admin' | 'office' | 'staff' | 'security' | 'user'; // Who created this notification
+  visibleTo?: ('admin' | 'office' | 'staff' | 'security' | 'user')[];
+  createdBy?: 'admin' | 'office' | 'staff' | 'security' | 'user';
 }
 
-// Store notifications in localStorage for persistence
 const NOTIFICATIONS_KEY = 'sorms_notifications';
 
-// Helper function to fix duplicate IDs
 const fixDuplicateIds = (notifications: Notification[]): Notification[] => {
   const seenIds = new Set<number>();
   const fixedNotifications: Notification[] = [];
   
   for (const notification of notifications) {
     if (seenIds.has(notification.id)) {
-      // Generate new unique ID for duplicate using shared util
       const newId = generateUniqueId();
       fixedNotifications.push({ ...notification, id: newId });
       seenIds.add(newId);
@@ -42,14 +39,12 @@ export const getNotifications = (): Notification[] => {
     const stored = localStorage.getItem(NOTIFICATIONS_KEY);
     if (stored) {
       const notifications = JSON.parse(stored);
-      // Fix any duplicate IDs by reassigning them
       const fixedNotifications = fixDuplicateIds(notifications);
       if (fixedNotifications !== notifications) {
         saveNotifications(fixedNotifications);
       }
       return fixedNotifications;
     } else {
-      // Do not seed sample data; keep empty until real events create notifications
       const empty: Notification[] = [];
       saveNotifications(empty);
       return empty;
@@ -78,17 +73,14 @@ export const addNotification = (notification: Omit<Notification, 'id' | 'time' |
     unread: true,
   };
   
-  // Add to beginning of array (newest first)
   notifications.unshift(newNotification);
   
-  // Keep only last 50 notifications
   if (notifications.length > 50) {
     notifications.splice(50);
   }
   
   saveNotifications(notifications);
   
-  // Dispatch custom event to notify other components
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('notificationsUpdated', { 
       detail: { notifications } 
@@ -103,7 +95,6 @@ export const markAsRead = (id: number): void => {
   );
   saveNotifications(updated);
   
-  // Dispatch custom event
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('notificationsUpdated', { 
       detail: { notifications: updated } 
@@ -116,7 +107,6 @@ export const markAllAsRead = (): void => {
   const updated = notifications.map(n => ({ ...n, unread: false }));
   saveNotifications(updated);
   
-  // Dispatch custom event
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('notificationsUpdated', { 
       detail: { notifications: updated } 
@@ -129,7 +119,6 @@ export const deleteNotification = (id: number): void => {
   const updated = notifications.filter(n => n.id !== id);
   saveNotifications(updated);
   
-  // Dispatch custom event
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('notificationsUpdated', { 
       detail: { notifications: updated } 
@@ -137,7 +126,6 @@ export const deleteNotification = (id: number): void => {
   }
 };
 
-// Helper function to create booking notifications
 export const createBookingNotification = (
   bookingId: number,
   guestName: string,
@@ -148,26 +136,26 @@ export const createBookingNotification = (
   let title = '';
   let message = '';
   let type: 'info' | 'success' | 'warning' | 'error' = 'info';
-  let visibleTo: ('admin' | 'office' | 'staff' | 'user')[] = [];
+  let visibleTo: ('admin' | 'office' | 'staff' | 'security' | 'user')[] = [];
   
   switch (status) {
     case 'PENDING':
       title = 'Yêu cầu đặt phòng mới';
       message = `Có yêu cầu đặt phòng mới từ ${guestName} cho ${roomInfo}. Vui lòng xem xét và xác nhận.`;
       type = 'info';
-      visibleTo = ['admin', 'office']; // Only admin and office can see pending requests
+      visibleTo = ['admin', 'office'];
       break;
     case 'CONFIRMED':
       title = 'Đặt phòng đã được xác nhận';
       message = `Yêu cầu đặt phòng của bạn cho ${roomInfo} đã được hành chính xác nhận thành công.`;
       type = 'success';
-      visibleTo = ['admin', 'user']; // Admin and user can see confirmations
+      visibleTo = ['admin', 'office', 'user'];
       break;
     case 'REJECTED':
       title = 'Đặt phòng bị từ chối';
       message = `Yêu cầu đặt phòng của bạn cho ${roomInfo} đã bị từ chối. Lý do: ${rejectionReason || 'Không có lý do cụ thể'}.`;
       type = 'warning';
-      visibleTo = ['admin', 'user']; // Admin and user can see rejections
+      visibleTo = ['admin', 'office', 'user'];
       break;
   }
   
@@ -181,28 +169,21 @@ export const createBookingNotification = (
   });
 };
 
-// Get notifications filtered by user role
-export const getNotificationsByRole = (userRole: 'admin' | 'office' | 'staff' | 'user'): Notification[] => {
+export const getNotificationsByRole = (userRole: 'admin' | 'office' | 'staff' | 'security' | 'user'): Notification[] => {
   const allNotifications = getNotifications();
   
-  // Admin can see all notifications
   if (userRole === 'admin') {
     return allNotifications;
   }
   
-  // Filter notifications based on visibleTo field
   return allNotifications.filter(notification => {
-    // If no visibleTo specified, show to everyone
     if (!notification.visibleTo || notification.visibleTo.length === 0) {
       return true;
     }
-    
-    // Check if user role is in visibleTo array
     return notification.visibleTo.includes(userRole);
   });
 };
 
-// Helper function to create task notifications
 export const createTaskNotification = (
   taskTitle: string,
   status: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'IN_PROGRESS' | 'COMPLETED',
@@ -212,38 +193,38 @@ export const createTaskNotification = (
   let title = '';
   let message = '';
   let type: 'info' | 'success' | 'warning' | 'error' = 'info';
-  let visibleTo: ('admin' | 'office' | 'staff' | 'user')[] = [];
+  let visibleTo: ('admin' | 'office' | 'staff' | 'security' | 'user')[] = [];
   
   switch (status) {
     case 'PENDING':
       title = 'Công việc mới';
       message = `Bạn có công việc mới: '${taskTitle}'. Giao bởi: ${assignedBy || 'Quản lý'}.`;
       type = 'info';
-      visibleTo = ['admin', 'staff']; // Admin and staff can see new tasks
+      visibleTo = ['admin', 'staff'];
       break;
     case 'ACCEPTED':
       title = 'Công việc đã được nhận';
       message = `Công việc '${taskTitle}' đã được nhận và sẵn sàng để bắt đầu.`;
       type = 'success';
-      visibleTo = ['admin', 'office', 'staff']; // Admin, office, and staff can see acceptances
+      visibleTo = ['admin', 'office', 'staff'];
       break;
     case 'REJECTED':
       title = 'Công việc bị từ chối';
       message = `Công việc '${taskTitle}' đã bị từ chối. Lý do: ${rejectionReason || 'Không có lý do cụ thể'}.`;
       type = 'warning';
-      visibleTo = ['admin', 'office', 'staff']; // Admin, office, and staff can see rejections
+      visibleTo = ['admin', 'office', 'staff'];
       break;
     case 'IN_PROGRESS':
       title = 'Công việc đang thực hiện';
       message = `Công việc '${taskTitle}' đã được bắt đầu thực hiện.`;
       type = 'info';
-      visibleTo = ['admin', 'office', 'staff']; // Admin, office, and staff can see progress
+      visibleTo = ['admin', 'office', 'staff'];
       break;
     case 'COMPLETED':
       title = 'Công việc hoàn thành';
       message = `Công việc '${taskTitle}' đã được hoàn thành thành công.`;
       type = 'success';
-      visibleTo = ['admin', 'office', 'staff']; // Admin, office, and staff can see completions
+      visibleTo = ['admin', 'office', 'staff'];
       break;
   }
   

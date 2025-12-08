@@ -1,8 +1,6 @@
-// Client-side helper cho luồng đăng ký khuôn mặt
 import { API_CONFIG } from '@/lib/config'
 import { authService } from '@/lib/auth-service'
 
-// Lấy token và userInfo từ authService
 function getAuthHeaders(): HeadersInit {
   const token = authService.getAccessToken()
   const headers: HeadersInit = {}
@@ -54,13 +52,6 @@ export async function registerFace(bookingId: number, formData: FormData) {
 
   const headers = getAuthHeaders()
   const url = `${API_CONFIG.BASE_URL}/ai/recognition/face/register?student_id=${userInfo.id}`
-  const token = authService.getAccessToken()
-  
-  console.log('[Face Service] Registering face:', {
-    url,
-    student_id: userInfo.id,
-    hasToken: !!token,
-  })
 
   const res = await fetch(url, {
     method: 'POST',
@@ -76,12 +67,7 @@ export async function registerFace(bookingId: number, formData: FormData) {
     } catch {
       error = { message: errorText || `HTTP ${res.status}` }
     }
-    console.error('[Face Service] Register failed:', {
-      status: res.status,
-      statusText: res.statusText,
-      error,
-      url,
-    })
+    console.error('[Face Service] Register failed:', res.status, error)
     throw new Error(error.error || error.message || `Không thể đăng ký khuôn mặt (${res.status})`)
   }
 
@@ -128,7 +114,6 @@ export async function deleteFace(bookingId: number) {
   )
 
   if (!res.ok) {
-    // 404 có thể coi là thành công (đã xóa rồi)
     if (res.status === 404) {
       return {
         success: true,

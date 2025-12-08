@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiClient } from '@/lib/api-client'
-import { verifyToken } from '@/lib/auth-utils'
+import { verifyToken, isAdmin } from '@/lib/auth-utils'
 
 // GET - Lấy danh sách staff tasks hoặc task theo ID
 export async function GET(req: NextRequest) {

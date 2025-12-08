@@ -7,16 +7,21 @@ import Badge from "@/components/ui/Badge";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import Modal from "@/components/ui/Modal";
 import { StaffProfile } from "@/lib/types";
-import { useStaffProfiles } from "@/hooks/useApi";
+import { useStaffProfilesFiltered, useRoles } from "@/hooks/useApi";
 
 type StatusFilter = "ALL" | "ACTIVE" | "INACTIVE";
 
+type RoleItem = { id?: number; code: string; name: string; description?: string; isActive?: boolean }
+
 export default function StaffProfilesPage() {
-  const { data, refetch } = useStaffProfiles();
   const [rows, setRows] = useState<StaffProfile[]>([]);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
   const [departmentFilter, setDepartmentFilter] = useState<string>("ALL");
+  const { data, refetch } = useStaffProfilesFiltered(
+    statusFilter !== 'ALL' ? (statusFilter === 'ACTIVE' ? 'ACTIVE' : 'INACTIVE') : undefined,
+    departmentFilter !== 'ALL' ? departmentFilter : undefined
+  );
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(10);
   const [flash, setFlash] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -32,6 +37,10 @@ export default function StaffProfilesPage() {
   const [openJob, setOpenJob] = useState(true);
   const [openReview, setOpenReview] = useState(true);
   const [openSkills, setOpenSkills] = useState(true);
+  // Multi-roles selection for user assignment
+  const { data: rolesData } = useRoles({ page: 0, size: 100 });
+  const roles: RoleItem[] = Array.isArray((rolesData as any)?.items) ? (rolesData as any).items : (Array.isArray(rolesData as any) ? rolesData as any : []);
+  const [selectedRoles, setSelectedRoles] = useState<string[]>([]);
 
   const formatCurrency = (value?: number | null) =>
     typeof value === "number" && !Number.isNaN(value) ? `${value.toLocaleString("vi-VN")} VND` : "—";
@@ -60,23 +69,9 @@ export default function StaffProfilesPage() {
   }, [rows]);
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return rows
-      .filter((r) => {
-        if (statusFilter === "ACTIVE" && !r.isActive) return false;
-        if (statusFilter === "INACTIVE" && r.isActive) return false;
-        if (departmentFilter !== "ALL" && r.department !== departmentFilter) return false;
-        if (!q) return true;
-        return (
-          r.employeeId.toLowerCase().includes(q) ||
-          (r.jobTitle || "").toLowerCase().includes(q) ||
-          (r.position || "").toLowerCase().includes(q) ||
-          (r.department || "").toLowerCase().includes(q) ||
-          (r.workEmail || "").toLowerCase().includes(q)
-        );
-      })
-      .sort((a, b) => a.employeeId.localeCompare(b.employeeId));
-  }, [rows, query, statusFilter, departmentFilter]);
+    // Rely on backend-side filters (status, department). Only sort on client.
+    return [...rows].sort((a, b) => a.employeeId.localeCompare(b.employeeId));
+  }, [rows]);
 
   function openCreate() {
     setEdit({
@@ -163,6 +158,23 @@ export default function StaffProfilesPage() {
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || "Lưu hồ sơ nhân viên thất bại");
+      }
+      // Sau khi lưu hồ sơ, nếu có chọn vai trò thì gán roles cho user theo email công việc
+      if ((selectedRoles || []).length > 0 && (edit.workEmail || payload.workEmail)) {
+        try {
+          const email = (edit.workEmail || payload.workEmail) as string
+          const assignRes = await fetch('/api/system/users/roles', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userEmail: email, roles: selectedRoles })
+          })
+          if (!assignRes.ok) {
+            const err = await assignRes.json().catch(() => ({}))
+            throw new Error(err.error || 'Gán vai trò thất bại')
+          }
+        } catch (e: any) {
+          setFlash({ type: 'error', text: e?.message || 'Gán vai trò thất bại' })
+        }
       }
       setEditOpen(false);
       setFlash({ type: "success", text: edit.id ? "Đã cập nhật hồ sơ nhân viên." : "Đã tạo hồ sơ nhân viên mới." });
@@ -911,6 +923,31 @@ export default function StaffProfilesPage() {
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
+          </div>
+
+          {/* Nhóm: Gán vai trò (Multi-roles) */}
+          <div className="space-y-3 rounded-lg border border-gray-200 bg-gray-50/40 px-3 py-3">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-semibold text-gray-800">Gán vai trò (Multi-roles)</span>
+              <span className="text-xs text-gray-500">{selectedRoles.length} vai trò</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {(roles || []).filter(r => r.isActive !== false).map((r) => (
+                <label key={r.code} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    checked={selectedRoles.includes(r.code)}
+                    onChange={(e) => {
+                      setSelectedRoles((prev) => e.target.checked ? [...prev, r.code] : prev.filter(x => x !== r.code))
+                    }}
+                  />
+                  <span className="font-medium text-gray-800">{r.name}</span>
+                  <span className="text-xs text-gray-500">({r.code})</span>
+                </label>
+              ))}
+            </div>
+            <div className="text-xs text-gray-500">Chọn một hoặc nhiều vai trò để gán cho nhân viên (dựa trên email công việc).</div>
           </div>
         </div>
       </Modal>

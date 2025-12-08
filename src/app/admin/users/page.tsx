@@ -169,24 +169,14 @@ function UsersInner() {
   }, [query, sortKey, sortOrder, page, size, router]);
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const list = q
-      ? rows.filter(
-          (u) =>
-            u.email.toLowerCase().includes(q) ||
-            (u.fullName || '').toLowerCase().includes(q) ||
-            (u.role || '').toLowerCase().includes(q) ||
-            (u.phoneNumber || '').toLowerCase().includes(q)
-        )
-      : rows;
-    const ordered = [...list].sort((a, b) => {
+    const ordered = [...rows].sort((a, b) => {
       const dir = sortOrder === "asc" ? 1 : -1;
       if (sortKey === "id") return ((a.id || 0) - (b.id || 0)) * dir;
       if (sortKey === "name") return (a.fullName || '').localeCompare(b.fullName || '') * dir;
       return a.email.localeCompare(b.email) * dir;
     });
     return ordered;
-  }, [rows, query, sortKey, sortOrder]);
+  }, [rows, sortKey, sortOrder]);
 
   async function deactivate(id?: number) {
     if (!id) {

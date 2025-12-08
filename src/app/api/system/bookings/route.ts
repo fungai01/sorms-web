@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiClient } from '@/lib/api-client'
-import { verifyToken } from '@/lib/auth-utils'
+import { verifyToken, getAuthorizationHeader, decodeJWTPayload } from '@/lib/auth-utils'
 
 // GET - Fetch all bookings, specific booking by ID, or filtered bookings
 export async function GET(req: NextRequest) {
@@ -10,8 +10,8 @@ export async function GET(req: NextRequest) {
     const userId = searchParams.get('userId');
     const status = searchParams.get('status');
 
-    // Forward Authorization header to apiClient (ensures backend auth)
-    const authHeader = req.headers.get('authorization');
+    // Get Authorization header from request (checks headers, cookies, etc.)
+    const authHeader = getAuthorizationHeader(req);
     const options: RequestInit = authHeader ? { headers: { Authorization: authHeader } } : {};
 
     // Get specific booking by ID
@@ -119,6 +119,11 @@ export async function POST(req: NextRequest) {
 
     // Handle approve action
     if (action === 'approve' && id) {
+      // Admin only
+      const { isAdmin } = await import('@/lib/auth-utils')
+      if (!await isAdmin(req)) {
+        return NextResponse.json({ error: 'Unauthorized - Admin access required' }, { status: 403 })
+      }
       const bookingId = parseInt(id);
       if (isNaN(bookingId)) {
         return NextResponse.json({ error: 'Invalid booking ID' }, { status: 400 });
@@ -163,27 +168,108 @@ export async function POST(req: NextRequest) {
     }
 
     // Create new booking (default)
-    const body = await req.json()
+    // Check if request has body
+    const contentType = req.headers.get('content-type');
+    if (!contentType || !contentType.includes('application/json')) {
+      return NextResponse.json({ error: 'Content-Type must be application/json' }, { status: 400 });
+    }
+
+    // Try to parse body with error handling
+    let body;
+    try {
+      body = await req.json();
+    } catch (parseError: any) {
+      console.error('POST /api/system/bookings - JSON parse error:', parseError);
+      // Check if error is due to empty body
+      if (parseError.message && parseError.message.includes('Unexpected end of JSON input')) {
+        return NextResponse.json({ error: 'Request body is required and must be valid JSON' }, { status: 400 });
+      }
+      return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 });
+    }
+
+    if (!body || typeof body !== 'object') {
+      return NextResponse.json({ error: 'Request body must be a valid JSON object' }, { status: 400 });
+    }
     
     // Try to get userId from token if not provided
+    let authHeader = req.headers.get('authorization') || ''
+    // Attach userId from token if missing
     if (!body.userId && !body.user_id) {
       try {
         const userInfo = await verifyToken(req)
         if (userInfo?.id) {
-          // Use user ID from token if available
           body.userId = userInfo.id
         }
-        // If we have user email, we might need to look up userId
-        // For now, we'll let the backend handle it or use a default
-        // TODO: Query user by email to get userId if needed
       } catch (error) {
-        console.error('Error getting user info from token:', error)
+        console.warn('verifyToken failed, trying decodeJWT:', error)
+      }
+      // Fallback: decode JWT from Authorization header
+      if (!body.userId && authHeader?.toLowerCase().startsWith('bearer ')) {
+        const token = authHeader.slice(7)
+        const payload = decodeJWTPayload(token)
+        if (payload?.userId) {
+          body.userId = payload.userId
+        }
       }
     }
+    // Ensure numGuests at least 1
+    if (!body.numGuests) body.numGuests = 1
+
+    // Validate required fields
+    if (!body.roomId) {
+      return NextResponse.json({ error: 'roomId is required' }, { status: 400 });
+    }
+    if (!body.checkinDate) {
+      return NextResponse.json({ error: 'checkinDate is required' }, { status: 400 });
+    }
+    if (!body.checkoutDate) {
+      return NextResponse.json({ error: 'checkoutDate is required' }, { status: 400 });
+    }
+
+    // Format data theo backend CreateBookingRequest: { code: String, userId: String, roomId: Long, checkinDate: LocalDateTime, checkoutDate: LocalDateTime, numGuests: Integer, note: String }
+    // Backend LocalDateTime mong đợi format ISO 8601: "2025-12-08T12:00:00" (không có timezone)
+    // Giữ nguyên thời gian local để backend nhận đúng giờ VN (12:00 check-in, 10:00 check-out)
+    const formatDateTimeForBackend = (dateTimeStr: string) => {
+      if (!dateTimeStr) return dateTimeStr
+      // Nếu có timezone offset (+07:00 hoặc -XX:XX), bỏ timezone để giữ nguyên thời gian local
+      if (dateTimeStr.includes('+') || (dateTimeStr.includes('-') && dateTimeStr.length > 19 && dateTimeStr[dateTimeStr.length - 6] === ':')) {
+        // Bỏ phần timezone, giữ lại phần datetime: "2025-12-08T12:00:00+07:00" -> "2025-12-08T12:00:00"
+        const plusIndex = dateTimeStr.lastIndexOf('+')
+        const minusIndex = dateTimeStr.lastIndexOf('-')
+        const timezoneIndex = plusIndex !== -1 ? plusIndex : (minusIndex !== -1 && minusIndex > 10 ? minusIndex : -1)
+        if (timezoneIndex > 0 && dateTimeStr[timezoneIndex - 1] !== 'T') {
+          return dateTimeStr.substring(0, timezoneIndex)
+        }
+      }
+      // Nếu có Z (UTC), bỏ Z và giữ nguyên thời gian
+      if (dateTimeStr.endsWith('Z')) {
+        return dateTimeStr.slice(0, -1)
+      }
+      // Nếu đã là format không có timezone, giữ nguyên
+      return dateTimeStr
+    }
     
-    const response = await apiClient.createBooking(body)
+    const formattedBody = {
+      code: body.code || '',
+      userId: body.userId || '',
+      roomId: Number(body.roomId), // Long
+      checkinDate: formatDateTimeForBackend(body.checkinDate), // LocalDateTime (ISO string với Z)
+      checkoutDate: formatDateTimeForBackend(body.checkoutDate), // LocalDateTime (ISO string với Z)
+      numGuests: Number(body.numGuests || 1), // Integer
+      note: body.note || '',
+    }
+    
+    console.log('📤 Formatted booking data for backend:', formattedBody)
+
+    // Forward auth header to backend if present
+    const options: RequestInit = authHeader
+      ? { headers: { Authorization: authHeader } }
+      : {}
+    
+    const response = await apiClient.createBooking(formattedBody, options)
     
     if (!response.success) {
+      console.error('Create booking failed:', response.error, response.data)
       return NextResponse.json(
         { error: response.error || 'Failed to create booking' }, 
         { status: 500 }

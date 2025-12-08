@@ -21,7 +21,8 @@ export default function NotificationsPage() {
         if (previousPage.startsWith('/admin')) role = 'admin';
         else if (previousPage.startsWith('/office')) role = 'office';
         else if (previousPage.startsWith('/staff')) role = 'staff';
-        else if (previousPage.startsWith('/user')) role = sessionStorage.getItem('userRole') || 'user';
+        else if (previousPage.startsWith('/security')) role = 'security';
+        else if (previousPage.startsWith('/user')) role = 'user';
       }
       
       sessionStorage.setItem('userRole', role);
@@ -34,17 +35,25 @@ export default function NotificationsPage() {
   useEffect(() => {
     const getUserRole = () => {
       if (typeof window !== 'undefined') {
+        // Prefer detecting from path if available
+        const path = window.location.pathname;
+        if (path.startsWith('/admin')) return 'admin';
+        if (path.startsWith('/office')) return 'office';
+        if (path.startsWith('/staff')) return 'staff';
+        if (path.startsWith('/security')) return 'security';
+        if (path.startsWith('/user')) return 'user';
         return sessionStorage.getItem('userRole');
       }
       return null;
     };
-    
-    const userRole = getUserRole() as 'admin' | 'office' | 'staff' | 'user' || 'user';
-    setNotifications(getNotificationsByRole(userRole));
+
+    const initialRole = getUserRole() as 'admin' | 'office' | 'staff' | 'security' | 'user' | null;
+    setNotifications(getNotificationsByRole((initialRole ?? 'office')));
 
     // Listen for notification updates
     const handleNotificationUpdate = (event: CustomEvent) => {
-      setNotifications(getNotificationsByRole(userRole));
+      const currentRole = getUserRole() as 'admin' | 'office' | 'staff' | 'security' | 'user' | null;
+      setNotifications(getNotificationsByRole((currentRole ?? 'office')));
     };
 
     if (typeof window !== 'undefined') {
@@ -65,7 +74,9 @@ export default function NotificationsPage() {
     .filter(notif => filter === 'all' || notif.unread)
     .sort((a, b) => {
       if (sortBy === 'time') {
-        return new Date(b.time).getTime() - new Date(a.time).getTime();
+        const aTime = (a as any).createdAt ?? (Date.parse(a.time) || 0);
+        const bTime = (b as any).createdAt ?? (Date.parse(b.time) || 0);
+        return bTime - aTime;
       }
       return (a.type || '').localeCompare(b.type || '');
     });

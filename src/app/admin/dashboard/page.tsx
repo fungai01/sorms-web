@@ -2,8 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import Badge from '@/components/ui/Badge'
+
 import { authService } from '@/lib/auth-service'
+import { useBookings, useRooms, useUsers } from '@/hooks/useApi'
 
 // ===== Types =====
 type DateRange = { fromDate: string; toDate: string };
@@ -27,7 +28,7 @@ const fmtDate = (iso: string) => new Date(iso).toLocaleDateString("vi-VN", {
 const getDefaultDateRange = (): DateRange => {
   const today = new Date();
   const fromDate = new Date(today);
-  fromDate.setDate(today.getDate() - 14); // Default to 14 days
+  fromDate.setDate(today.getDate() - 1); // Default to yesterday
   
   return {
     fromDate: fromDate.toISOString().split('T')[0],
@@ -418,6 +419,90 @@ function Skeleton({ className = "h-24" }: { className?: string }) {
   );
 }
 
+function Stacked({ tasks }: { tasks: TasksResp }) {
+  const total = tasks.todo + tasks.in_progress + tasks.done + tasks.cancelled;
+  const segments = [
+    { label: 'Chờ xử lý', value: tasks.todo, color: '#ef4444', percentage: total > 0 ? (tasks.todo / total) * 100 : 0 },
+    { label: 'Đang thực hiện', value: tasks.in_progress, color: '#eab308', percentage: total > 0 ? (tasks.in_progress / total) * 100 : 0 },
+    { label: 'Hoàn thành', value: tasks.done, color: '#22c55e', percentage: total > 0 ? (tasks.done / total) * 100 : 0 },
+    { label: 'Đã hủy', value: tasks.cancelled, color: '#9ca3af', percentage: total > 0 ? (tasks.cancelled / total) * 100 : 0 },
+  ];
+
+  return (
+    <div className="space-y-3">
+      <div className="flex h-8 w-full overflow-hidden rounded-full bg-gray-100 shadow-sm">
+        {segments.map((segment, index) => (
+          segment.percentage > 0 && (
+            <div
+              key={index}
+              style={{
+                width: `${segment.percentage}%`,
+                backgroundColor: segment.color,
+              }}
+              className="transition-all duration-300 hover:opacity-80"
+              title={`${segment.label}: ${segment.value}`}
+            />
+          )
+        ))}
+      </div>
+      <div className="text-center text-sm font-semibold text-gray-700">
+        Tổng cộng: {total} công việc
+      </div>
+    </div>
+  );
+}
+
+function ExportCSV({ filename, rows }: { filename: string; rows: any[] }) {
+  const handleExport = () => {
+    if (!rows || rows.length === 0) {
+      alert('Không có dữ liệu để xuất');
+      return;
+    }
+
+    // Get headers from first row
+    const headers = Object.keys(rows[0]);
+    
+    // Create CSV content
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(row => 
+        headers.map(header => {
+          const value = row[header];
+          // Escape quotes and wrap in quotes if contains comma
+          const stringValue = String(value || '');
+          return stringValue.includes(',') ? `"${stringValue.replace(/"/g, '""')}"` : stringValue;
+        }).join(',')
+      )
+    ].join('\n');
+
+    // Create blob and download
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    
+    link.setAttribute('href', url);
+    link.setAttribute('download', filename);
+    link.style.visibility = 'hidden';
+    
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  return (
+    <button
+      onClick={handleExport}
+      className="group relative px-4 py-2 text-sm font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-all duration-200 flex items-center gap-2 border border-gray-300 hover:border-gray-400"
+      title={`Xuất ${filename}`}
+    >
+      <svg className="w-4 h-4 group-hover:scale-110 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+      </svg>
+      Xuất CSV
+    </button>
+  );
+}
+
 // ===== Main Component =====
 
 export default function AdminHome() {
@@ -426,6 +511,9 @@ export default function AdminHome() {
   const [error, setError] = useState<string | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
+  const { data: bookingsData } = useBookings('PENDING');
+  const { data: roomsData } = useRooms();
+  const { data: usersData } = useUsers();
 
   const [kpis, setKpis] = useState({ totalRooms: 0, occupiedRooms: 0, pendingBookings: 0, paymentsToday: 0, revenueToday: 0, tasksTodo: 0 });
   const [bookingsSeries, setBookingsSeries] = useState<{ date: string; count: number }[]>([]);
@@ -485,12 +573,12 @@ export default function AdminHome() {
         });
           
           const [occRes, bRes, cRes, pRes, soRes, tRes] = await Promise.all([
-            fetch("/api/dashboard/occupancy", fetchOptions),
-            fetch(`/api/dashboard/bookings?days=${daysRange}`, fetchOptions),
-            fetch(`/api/dashboard/checkins?days=${daysRange}`, fetchOptions),
-            fetch(`/api/dashboard/payments?days=${daysRange}`, fetchOptions),
-            fetch("/api/dashboard/service-orders", fetchOptions),
-            fetch("/api/dashboard/tasks", fetchOptions),
+            fetch(`/api/dashboard/occupancy?fromDate=${dateRange.fromDate}&toDate=${dateRange.toDate}`, fetchOptions),
+            fetch(`/api/dashboard/bookings?fromDate=${dateRange.fromDate}&toDate=${dateRange.toDate}`, fetchOptions),
+            fetch(`/api/dashboard/checkins?fromDate=${dateRange.fromDate}&toDate=${dateRange.toDate}`, fetchOptions),
+            fetch(`/api/dashboard/payments?fromDate=${dateRange.fromDate}&toDate=${dateRange.toDate}`, fetchOptions),
+            fetch(`/api/dashboard/service-orders?fromDate=${dateRange.fromDate}&toDate=${dateRange.toDate}`, fetchOptions),
+            fetch(`/api/dashboard/tasks?fromDate=${dateRange.fromDate}&toDate=${dateRange.toDate}`, fetchOptions),
           ]);
 
           // Check if aborted during fetch
@@ -587,6 +675,28 @@ export default function AdminHome() {
     const diffPct = Math.round(((last - prevAvg) / prevAvg) * 100);
     return { value: Math.abs(diffPct), isPositive: diffPct >= 0 } as { value: number; isPositive: boolean };
   }, [paymentsSeries]);
+
+  // Normalize bookings, rooms, and users data
+  const rawBookings = Array.isArray(bookingsData)
+    ? bookingsData
+    : Array.isArray((bookingsData as any)?.items)
+      ? (bookingsData as any).items
+      : Array.isArray((bookingsData as any)?.data?.content)
+        ? (bookingsData as any).data.content
+        : Array.isArray((bookingsData as any)?.content)
+          ? (bookingsData as any).content
+          : Array.isArray((bookingsData as any)?.data)
+            ? (bookingsData as any).data
+            : [];
+  
+  const rooms = Array.isArray(roomsData) ? roomsData : [];
+  const users = Array.isArray(usersData) 
+    ? usersData 
+    : Array.isArray((usersData as any)?.items) 
+      ? (usersData as any).items 
+      : Array.isArray((usersData as any)?.data?.content)
+        ? (usersData as any).data.content
+        : [];
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100" suppressHydrationWarning>
@@ -869,74 +979,4 @@ export default function AdminHome() {
   );
 }
 
-// ===== Extra: Stacked bar kept from your version (with axes) =====
-function Stacked({ tasks }: { tasks: TasksResp }) {
-  const total = tasks.todo + tasks.in_progress + tasks.done + tasks.cancelled;
-  if (!total) return <Empty />;
-  const w = 560, h = 200, pad = 28;
-  const barH = h - 2 * pad;
-  const width = (v: number) => ((w - 2 * pad) * v) / total;
-  
-  return (
-    <div className="space-y-4">
-      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-56">
-        <Axis w={w} h={h} pad={pad} />
-        <rect x={pad} y={pad} width={width(tasks.todo)} height={barH} fill="#ef4444" rx={6} />
-        <rect x={pad + width(tasks.todo)} y={pad} width={width(tasks.in_progress)} height={barH} fill="#f59e0b" rx={6} />
-        <rect x={pad + width(tasks.todo + tasks.in_progress)} y={pad} width={width(tasks.done)} height={barH} fill="#22c55e" rx={6} />
-        <rect x={pad + width(tasks.todo + tasks.in_progress + tasks.done)} y={pad} width={width(tasks.cancelled)} height={barH} fill="#6b7280" rx={6} />
-        <text x={w / 2} y={pad + barH / 2} dominantBaseline="middle" textAnchor="middle" className="fill-white text-lg font-bold">
-          {total}
-        </text>
-      </svg>
-      
-      {/* Legend */}
-      <div className="grid grid-cols-2 gap-4 text-sm">
-        <div className="flex items-center">
-          <div className="w-4 h-4 bg-red-500 rounded mr-2"></div>
-          <span>Chờ ({tasks.todo})</span>
-        </div>
-        <div className="flex items-center">
-          <div className="w-4 h-4 bg-yellow-500 rounded mr-2"></div>
-          <span>Đang làm ({tasks.in_progress})</span>
-        </div>
-        <div className="flex items-center">
-          <div className="w-4 h-4 bg-green-500 rounded mr-2"></div>
-          <span>Hoàn thành ({tasks.done})</span>
-        </div>
-        <div className="flex items-center">
-          <div className="w-4 h-4 bg-gray-500 rounded mr-2"></div>
-          <span>Hủy ({tasks.cancelled})</span>
-        </div>
-      </div>
-    </div>
-  );
-}
 
-// ===== CSV Export utility =====
-function ExportCSV({ filename, rows }: { filename: string; rows: Record<string, string | number>[] }) {
-  const download = () => {
-    if (!rows?.length) return;
-    const headers = Object.keys(rows[0]);
-    const escape = (v: any) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const csv = [headers.join(","), ...rows.map((r) => headers.map((h) => escape(r[h])).join(","))].join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-  return (
-    <button 
-      onClick={download} 
-      className="flex items-center gap-2 h-9 rounded-xl border border-gray-300 bg-white/80 backdrop-blur-sm px-4 text-xs font-semibold text-gray-700 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50 hover:shadow-lg transition-all duration-200 transform hover:-translate-y-0.5"
-    >
-      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-      </svg>
-      Xuất Excel
-    </button>
-  );
-}

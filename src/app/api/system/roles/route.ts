@@ -18,13 +18,21 @@ export async function GET(req: NextRequest) {
     }
 
     // Lấy danh sách roles với search params
-    const name = searchParams.get('name') || undefined
-    const code = searchParams.get('code') || undefined
-    const description = searchParams.get('description') || undefined
+    const q = searchParams.get('q') || undefined
+    let name = searchParams.get('name') || undefined
+    let code = searchParams.get('code') || undefined
+    let description = searchParams.get('description') || undefined
     const isActiveParam = searchParams.get('isActive')
     const isActive = isActiveParam ? isActiveParam === 'true' : undefined
     const page = parseInt(searchParams.get('page') || '0')
     const size = parseInt(searchParams.get('size') || '10')
+
+    // Map q to name/code/description if provided (backend-style filtering)
+    if (q) {
+      if (!name) name = q
+      if (!code) code = q
+      if (!description) description = q
+    }
 
     const response = await apiClient.getRoles({
       name,

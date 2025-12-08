@@ -46,19 +46,16 @@ class ApiClient {
         }
       }
 
-      // Extract headers from options first (priority)
       const incomingHeaders = options.headers as Record<string, string> | Headers | undefined
       let authHeaderFromOptions: string | null = null
       
       if (incomingHeaders) {
         if (incomingHeaders instanceof Headers) {
-          // Headers instance - check both lowercase and capitalized
           authHeaderFromOptions = incomingHeaders.get('authorization') || 
                                   incomingHeaders.get('Authorization') ||
                                   incomingHeaders.get('AUTHORIZATION') ||
                                   null
         } else if (typeof incomingHeaders === 'object') {
-          // Record<string, string> - check all possible key variations
           authHeaderFromOptions = incomingHeaders['authorization'] || 
                                   incomingHeaders['Authorization'] || 
                                   incomingHeaders['AUTHORIZATION'] ||
@@ -66,33 +63,22 @@ class ApiClient {
         }
       }
       
-      // Thêm Authorization header nếu có token
-      // Priority: options.headers > accountInfo > authService > cookies
       let token: string | null = null
       
-      // 1. First priority: Use token from options.headers (from Next.js API route)
       if (authHeaderFromOptions && authHeaderFromOptions.startsWith('Bearer ')) {
         token = authHeaderFromOptions.substring(7)
-        console.log('[API Client] Token extracted from incoming request headers (options)')
       } else {
-        // 2. Second priority: Get token from accountInfo (userInfo)
         try {
           const userInfo = authService.getUserInfo()
           if (userInfo && (userInfo as any).token) {
             token = (userInfo as any).token
-            console.log('[API Client] Token from accountInfo (userInfo)')
           }
         } catch {}
         
-        // 3. Third priority: Get token from authService (client-side)
         if (!token) {
           token = authService.getAccessToken()
-          if (token) {
-            console.log('[API Client] Token from authService')
-          }
         }
         
-        // 4. Fourth priority: Try get token from server cookies (Next.js API route fallback)
         if (!token) {
           try {
             const mod: any = await import('next/headers')
@@ -101,22 +87,19 @@ class ApiClient {
               const cookieStore =
                 typeof maybePromise?.then === 'function' ? await maybePromise : maybePromise
               
-              // Try multiple cookie names for compatibility
               const cookieToken = cookieStore?.get?.('access_token')?.value || 
                                  cookieStore?.get?.('auth_access_token')?.value
               
               if (cookieToken) {
                 token = cookieToken
-                console.log('[API Client] Token found in server cookies')
               }
             }
           } catch (e) {
-            // ignore (client-side or not in Next.js environment)
+            // ignore
           }
         }
       }
       
-      // List of public endpoints that don't require authentication
       const publicEndpoints = [
         '/auth/outbound/authentication',
         '/auth/mobile/outbound/authentication',
@@ -127,65 +110,29 @@ class ApiClient {
       const isPublicEndpoint = publicEndpoints.some(publicPath => endpoint.includes(publicPath))
       
       if (!token && !isPublicEndpoint) {
-        console.warn('[API Client] ⚠️ No access token available for request:', endpoint)
-      } else if (isPublicEndpoint) {
-        console.log('[API Client] Public endpoint, skipping token check:', endpoint)
+        console.warn('[API Client] No access token available for request:', endpoint)
       }
       
-      // Merge headers: options.headers first, then add Authorization if we have token
-      // RequestInit.headers can be Headers, Record<string, string>, or string[][]
       let mergedHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
       }
       
-      // Merge headers from options
       if (options.headers) {
         if (options.headers instanceof Headers) {
           mergedHeaders = { ...mergedHeaders, ...Object.fromEntries(options.headers.entries()) }
         } else if (Array.isArray(options.headers)) {
-          // Handle string[][] format
           mergedHeaders = { ...mergedHeaders, ...Object.fromEntries(options.headers) }
         } else if (typeof options.headers === 'object') {
-          // Handle Record<string, string>
           mergedHeaders = { ...mergedHeaders, ...(options.headers as Record<string, string>) }
         }
       }
       
-      // Add Authorization header if we have token (will overwrite if already exists from options)
       if (token) {
         mergedHeaders['Authorization'] = `Bearer ${token}`
       }
       
       const headers = mergedHeaders
 
-      // Log request details for debugging
-      let bodyContent = null
-      if (options.body && typeof options.body === 'string') {
-        try {
-          bodyContent = JSON.parse(options.body)
-        } catch {
-          bodyContent = options.body.substring(0, 200)
-        }
-      }
-      
-      console.log(`[API Client] 🚀 Request:`, {
-        url,
-        method: options.method || 'GET',
-        baseURL: this.baseURL,
-        endpoint,
-        hasBody: !!options.body,
-        body: bodyContent,
-        headers: Object.keys(headers),
-        hasAuthorization: !!headers['Authorization'],
-        authorizationPrefix: headers['Authorization']?.substring(0, 30) || 'none',
-        authorizationLength: headers['Authorization']?.length || 0,
-        tokenSource: token ? (authHeaderFromOptions ? 'options.headers' : (authService.getAccessToken() ? 'authService' : 'cookies')) : 'none',
-        tokenLength: token?.length || 0,
-        timestamp: new Date().toISOString()
-      })
-
-      // Merge options carefully: headers should come from our merged headers, not from options
-      // Create new options object without headers property to avoid overwriting
       const restOptions: RequestInit = {}
       if (options.method) restOptions.method = options.method
       if (options.body) restOptions.body = options.body
@@ -199,108 +146,61 @@ class ApiClient {
       if (options.integrity) restOptions.integrity = options.integrity
       if (options.keepalive !== undefined) restOptions.keepalive = options.keepalive
       
-      // Pass headers as Record<string, string> to authFetch
-      // authFetch will convert to Headers instance properly
       const response = await authFetch(url, {
         ...restOptions,
-        headers: headers, // Pass as Record<string, string>
-      })
-
-      // Log response details for debugging
-      console.log(`[API Client] ${endpoint} - Response status:`, response.status, response.statusText)
-      console.log(`[API Client] ${endpoint} - Response headers:`, {
-        contentType: response.headers.get('content-type'),
-        hasBody: response.body !== null
+        headers: headers,
       })
       
       if (!response.ok) {
-        // Auto refresh token on 401 (client-side only) and retry once
         const alreadyRetried = (options as any)?._retried === true
         if (response.status === 401 && typeof window !== 'undefined' && !alreadyRetried) {
           try {
-            console.warn('[API Client] 401 received, attempting refresh token...')
             await authService.refreshAccessToken()
-            // Retry the request once with the same options
             const retryOptions: RequestInit & { _retried?: boolean } = { ...(options || {}), _retried: true }
             return await this.request<T>(endpoint, retryOptions)
           } catch (refreshErr) {
             console.error('[API Client] Refresh token failed:', refreshErr)
-            // fallthrough to parse original error
           }
         }
 
-        // Try to get error message from response body
         let errorMessage = `HTTP error! status: ${response.status}`
         let errorData: any = null
         let rawResponseText: string = ''
         try {
-          // Clone response để có thể đọc text nhiều lần
           const responseClone = response.clone()
           rawResponseText = await responseClone.text()
-          console.log(`[API Client] ${endpoint} - Error response status: ${response.status} ${response.statusText}`)
-          console.log(`[API Client] ${endpoint} - Error response text (full):`, rawResponseText)
-          console.log(`[API Client] ${endpoint} - Error response headers:`, {
-            contentType: response.headers.get('content-type'),
-            contentLength: response.headers.get('content-length')
-          })
           try {
             errorData = JSON.parse(rawResponseText)
-            console.log(`[API Client] ${endpoint} - Error response body (parsed):`, JSON.stringify(errorData, null, 2))
           } catch (parseErr) {
-            console.log(`[API Client] ${endpoint} - Error response is not JSON, raw text:`, rawResponseText)
             errorMessage = rawResponseText || errorMessage
           }
           
-          // Try to map error code if present
           if (errorData) {
-            console.log(`[API Client] ${endpoint} - Error data structure:`, {
-              hasResponseCode: !!errorData.responseCode,
-              responseCode: errorData.responseCode,
-              hasMessage: !!errorData.message,
-              message: errorData.message,
-              hasError: !!errorData.error,
-              error: errorData.error,
-              keys: Object.keys(errorData)
-            })
-            
             if (errorData.responseCode) {
-              const mappedMessage = getErrorMessage(
+              errorMessage = getErrorMessage(
                 String(errorData.responseCode),
                 errorData.message || errorData.error || ''
               )
-              console.log(`[API Client] ${endpoint} - Mapped error message:`, mappedMessage)
-              errorMessage = mappedMessage
             } else if (errorData.message) {
               errorMessage = errorData.message
             } else if (errorData.error) {
-              // Check if error is a code that can be mapped
               const mappedError = getErrorMessage(String(errorData.error), '')
-              if (mappedError !== 'Có lỗi xảy ra. Vui lòng thử lại.') {
-                errorMessage = mappedError
-              } else {
-                errorMessage = errorData.error
-              }
+              errorMessage = mappedError !== 'Có lỗi xảy ra. Vui lòng thử lại.' ? mappedError : errorData.error
             }
           }
         } catch (parseError) {
-          // If we can't parse the error response, use the status text
           console.error(`[API Client] ${endpoint} - Failed to parse error response:`, parseError)
-          console.error(`[API Client] ${endpoint} - Raw response text:`, rawResponseText)
           errorMessage = response.statusText || errorMessage
         }
         
-        console.error(`[API Client] ${endpoint} - Final error message:`, errorMessage)
-        
         return {
           success: false,
-          error: String(errorMessage), // Ensure error is always a string
+          error: String(errorMessage),
         }
       }
 
       const data = await response.json()
-      console.log(`[API Client] ${endpoint} - Success response body:`, JSON.stringify(data, null, 2))
       
-      // Handle backend response format: {responseCode, message, data}
       if (data.responseCode) {
         if (data.responseCode === 'S0000') {
           return {
@@ -308,21 +208,18 @@ class ApiClient {
             data: data.data,
           }
         } else {
-          // Map common error codes to user-friendly messages
           const errorMessage = getErrorMessage(
             String(data.responseCode),
             data.message || data.error || ''
           )
           return {
             success: false,
-            error: String(errorMessage), // Ensure error is always a string
+            error: String(errorMessage),
           }
         }
       }
       
-      // Check if response has error field (even with HTTP 200)
       if (data.error) {
-        // Try to map error code if it looks like one
         const mappedError = getErrorMessage(String(data.error), data.message || '')
         if (mappedError !== 'Có lỗi xảy ra. Vui lòng thử lại.') {
           return {
@@ -336,27 +233,17 @@ class ApiClient {
         }
       }
       
-      // Fallback for other response formats
       return {
         success: true,
         data,
       }
     } catch (error) {
-      console.error(`[API Client] ❌ Request failed for ${endpoint}:`, {
-        error,
-        errorMessage: error instanceof Error ? error.message : String(error),
-        errorType: error instanceof Error ? error.constructor.name : typeof error,
-        baseURL: this.baseURL,
-        endpoint,
-        timestamp: new Date().toISOString()
-      })
+      console.error(`[API Client] Request failed for ${endpoint}:`, error)
 
-      // Handle network errors and other exceptions
       let errorMessage = 'Unknown error occurred'
 
       if (error instanceof TypeError) {
         if (error.message.includes('fetch') || error.message.includes('Failed to fetch')) {
-          // CORS or network error
           errorMessage = 'Không thể kết nối đến server. Nguyên nhân có thể:\n' +
             '- Backend không cho phép CORS từ domain này\n' +
             '- Server backend đang offline\n' +
@@ -371,16 +258,9 @@ class ApiClient {
         errorMessage = error.message
       }
       
-      console.error(`[API Client] ❌ Network/CORS error for ${endpoint}:`, {
-        error,
-        errorMessage,
-        url: `${this.baseURL}${endpoint}`,
-        baseURL: this.baseURL,
-      })
-      
       return {
         success: false,
-        error: String(errorMessage), // Ensure error is always a string
+        error: String(errorMessage),
       }
     }
   }
@@ -459,11 +339,6 @@ class ApiClient {
     return this.delete(`/rooms/${id}`, options)
   }
 
-  // Additional room methods for filtering
-  async getRoomsByStatus(status: string, options?: RequestInit) {
-    return this.get(`/rooms/by-status/${status}`, options)
-  }
-
   async getRoomsByRoomType(roomTypeId: number, options?: RequestInit) {
     return this.get(`/rooms/by-room-type/${roomTypeId}`, options)
   }
@@ -501,6 +376,19 @@ class ApiClient {
 
   async getRoomTypes(options?: RequestInit) {
     return this.get('/room-types', options)
+  }
+
+  async getRoomsByStatus(
+    status: 'AVAILABLE' | 'OCCUPIED' | 'MAINTENANCE' | 'CLEANING' | 'OUT_OF_SERVICE',
+    startTime?: string,
+    endTime?: string,
+    options?: RequestInit
+  ) {
+    const params = new URLSearchParams()
+    if (startTime) params.set('startTime', startTime)
+    if (endTime) params.set('endTime', endTime)
+    const qs = params.toString()
+    return this.get(`/rooms/by-status/${status}${qs ? `?${qs}` : ''}`, options)
   }
 
   async getRoomType(id: number, options?: RequestInit) {
@@ -542,21 +430,28 @@ class ApiClient {
     return this.get(`/bookings/${id}`, options)
   }
 
-  async createBooking(bookingData: any) {
-    // Ensure data matches API format - handle both camelCase and snake_case, and common variations
+  async createBooking(bookingData: any, options?: RequestInit) {
+    // Backend format: CreateBookingRequest { code: String, userId: String, roomId: Long, checkinDate: LocalDateTime, checkoutDate: LocalDateTime, numGuests: Integer, note: String }
     const rawUserId = bookingData.userId || bookingData.user_id || null
-    const formattedData = {
+    const rawRoomId = bookingData.roomId || bookingData.room_id
+    const rawNumGuests = bookingData.numGuests || bookingData.num_guests || bookingData.guests || 1
+    
+    const formattedData: any = {
       code: bookingData.code || generateBookingCode(),
       // Backend yêu cầu userId dạng string
       userId: rawUserId != null ? String(rawUserId) : null,
-      roomId: bookingData.roomId || bookingData.room_id,
+      // Backend yêu cầu roomId dạng Long (number)
+      roomId: rawRoomId != null ? Number(rawRoomId) : null,
+      // Backend yêu cầu checkinDate dạng LocalDateTime (ISO datetime string)
       checkinDate: bookingData.checkinDate || bookingData.checkin_date || bookingData.checkIn,
+      // Backend yêu cầu checkoutDate dạng LocalDateTime (ISO datetime string)
       checkoutDate: bookingData.checkoutDate || bookingData.checkout_date || bookingData.checkOut,
-      numGuests: bookingData.numGuests || bookingData.num_guests || bookingData.guests || 1,
+      // Backend yêu cầu numGuests dạng Integer (number)
+      numGuests: rawNumGuests != null ? Number(rawNumGuests) : 1,
       note: bookingData.note || bookingData.purpose || '',
-      status: bookingData.status || 'PENDING'
     }
-    return this.post('/bookings', formattedData)
+    // Không gửi status vì backend không có trong CreateBookingRequest
+    return this.post('/bookings', formattedData, options)
   }
 
   async updateBooking(id: number, bookingData: any) {
@@ -583,8 +478,8 @@ class ApiClient {
   }
 
   // Additional booking methods for filtering and actions
-  async getBookingsByUser(userId: number, options?: RequestInit) {
-    return this.get(`/bookings/by-user/${userId}`, options)
+  async getBookingsByUser(userId: string | number, options?: RequestInit) {
+    return this.get(`/bookings/by-user/${encodeURIComponent(String(userId))}`, options)
   }
 
   async getBookingsByStatus(status: string, options?: RequestInit) {

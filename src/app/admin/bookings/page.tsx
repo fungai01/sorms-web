@@ -1,15 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import Input from "@/components/ui/Input";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import Modal from "@/components/ui/Modal";
-
 import { type Booking, type BookingStatus } from '@/lib/types'
 import { useBookings, useRooms } from '@/hooks/useApi'
 import { authService } from '@/lib/auth-service'
+import { createBookingNotification } from '@/lib/notifications'
 
 const statusOptions: BookingStatus[] = ['PENDING','APPROVED','REJECTED','CANCELLED','CHECKED_IN','CHECKED_OUT']
 
@@ -19,6 +19,10 @@ export default function BookingsPage() {
   const [rows, setRows] = useState<Booking[]>([])
   const [rooms, setRooms] = useState<any[]>([])
   const [flash, setFlash] = useState<{ type: 'success' | 'error', text: string } | null>(null)
+  
+  // Track seen bookings to avoid duplicate notifications
+  const seenBookingIds = useRef<Set<number>>(new Set());
+  const lastBookingCheck = useRef<number>(Date.now());
 
   const [query, setQuery] = useState("")
   const [dateFrom, setDateFrom] = useState("")
@@ -70,25 +74,88 @@ export default function BookingsPage() {
   const [fieldErrors, setFieldErrors] = useState<{ [key: string]: string }>({})
   const [confirmOpen, setConfirmOpen] = useState<{ open: boolean, id?: number, type?: 'delete' }>({ open: false })
 
+  const handleCloseEdit = useCallback(() => {
+    setEditOpen(false)
+    // Reset về giá trị mặc định khi đóng modal
+    setEdit({ code: '', userId: undefined, roomId: 1, checkinDate: '', checkoutDate: '', numGuests: 1, status: 'PENDING', note: '' })
+    setFieldErrors({})
+  }, [])
+
   useEffect(() => { if (!flash) return; const t = setTimeout(() => setFlash(null), 3000); return () => clearTimeout(t) }, [flash])
 
-  // Keyboard shortcuts for edit modal
+  // Check for new bookings and add to notification system
+  useEffect(() => {
+    // Initialize seen bookings on first load
+    if (rows.length > 0 && seenBookingIds.current.size === 0) {
+      rows.forEach(b => {
+        if (b.status === 'PENDING') {
+          seenBookingIds.current.add(b.id);
+        }
+      });
+      lastBookingCheck.current = Date.now();
+      return;
+    }
+
+    // Check for new PENDING bookings
+    const newPendingBookings = rows.filter(b => 
+      b.status === 'PENDING' && 
+      !seenBookingIds.current.has(b.id) &&
+      new Date((b as any).created_at || (b as any).createdAt || '').getTime() > lastBookingCheck.current
+    );
+
+    if (newPendingBookings.length > 0) {
+      newPendingBookings.forEach(booking => {
+        seenBookingIds.current.add(booking.id);
+        
+        // Add notification to the notification system (will appear in Header dropdown)
+        const guestName = booking.userName || `User #${booking.userId}`;
+        const roomInfo = getRoomName(booking.roomId);
+        
+        createBookingNotification(
+          booking.id,
+          guestName,
+          roomInfo,
+          'PENDING'
+        );
+      });
+      
+      lastBookingCheck.current = Date.now();
+    }
+  }, [rows, rooms]);
+
+  // Keyboard shortcuts for edit modal: Enter = Save, Esc = Close (avoid Enter in textarea)
   useEffect(() => {
     if (!editOpen) return
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      const tag = (e.target as HTMLElement | null)?.tagName?.toLowerCase()
+      const isTextarea = tag === 'textarea'
+      if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !isTextarea) {
         e.preventDefault()
         save()
       } else if (e.key === 'Escape') {
         e.preventDefault()
-        setEditOpen(false)
+        handleCloseEdit()
       }
     }
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [editOpen, edit])
+
+  // Global Escape handler: ESC closes any open modal on this page
+  useEffect(() => {
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        if (editOpen) handleCloseEdit()
+        setDetailOpen(false)
+        setConfirmOpen({ open: false })
+      }
+    }
+    document.addEventListener('keydown', onEsc)
+    return () => document.removeEventListener('keydown', onEsc)
+  }, [editOpen, handleCloseEdit])
 
   // Sync dữ liệu từ API (không cố gọi /users/{id} nữa để tránh lỗi "User not found")
   useEffect(() => {
@@ -106,16 +173,43 @@ export default function BookingsPage() {
     if (bookingsData) {
       // API route trả về format: { items: [...] }
       const data: any = bookingsData
-      const list = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : [])
+      const rawList = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : [])
+      
+      // Normalize dữ liệu - chuyển snake_case sang camelCase nếu cần
+      const normalizedList = rawList.map((item: any) => ({
+        id: item.id,
+        code: item.code || '',
+        userId: item.userId || item.user_id,
+        userName: item.userName || item.user_name,
+        userEmail: item.userEmail || item.user_email || item.email || '',
+        phoneNumber: item.phoneNumber || item.phone_number || item.phone || '',
+        roomId: item.roomId || item.room_id,
+        roomCode: item.roomCode || item.room_code,
+        roomTypeName: item.roomTypeName || item.room_type_name || item.roomType || '',
+        building: item.building || item.building_name || '',
+        checkinDate: item.checkinDate || item.checkin_date || item.checkInDate || '',
+        checkoutDate: item.checkoutDate || item.checkout_date || item.checkOutDate || '',
+        numGuests: item.numGuests || item.num_guests || 1,
+        purpose: item.purpose || item.booking_purpose || '',
+        note: item.note || '',
+        status: item.status || 'PENDING',
+        totalPrice: item.totalPrice || item.total_price || item.amount || null,
+        paymentStatus: item.paymentStatus || item.payment_status || '',
+        isActive: item.isActive !== undefined ? item.isActive : (item.is_active !== undefined ? item.is_active : true),
+        created_at: item.created_at || item.createdAt || '',
+        updated_at: item.updated_at || item.updatedAt || ''
+      }))
+      
       console.log('[BookingsPage] Syncing bookings data:', {
         hasData: !!bookingsData,
         dataType: typeof bookingsData,
         hasItems: !!data?.items,
-        itemsLength: Array.isArray(data?.items) ? data.items.length : 0,
+        itemsLength: rawList.length,
         isArray: Array.isArray(data),
-        dataKeys: data ? Object.keys(data) : []
+        sampleItem: rawList[0],
+        normalizedSample: normalizedList[0]
       })
-      setRows(list as Booking[])
+      setRows(normalizedList as Booking[])
     } else if (bookingsError) {
       console.error('[BookingsPage] Bookings error:', bookingsError)
       setRows([])
@@ -127,43 +221,76 @@ export default function BookingsPage() {
   }, [bookingsData, roomsData, bookingsError, roomsError, bookingsLoading, roomsLoading])
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    let list = rows.filter(r =>
-      r.code.toLowerCase().includes(q) ||
-      (r.userName || "").toLowerCase().includes(q) ||
-      (r.roomCode || "").toLowerCase().includes(q) ||
-      (r.note || "").toLowerCase().includes(q)
-    )
-    if (filterStatus !== 'ALL') list = list.filter(r => r.status === filterStatus)
-    if (dateFrom) list = list.filter(r => r.checkinDate >= dateFrom)
-    if (dateTo) list = list.filter(r => r.checkoutDate <= dateTo)
+    // Backend-side filter by status is applied via useBookings(filterStatus)
     const dir = sortOrder === 'asc' ? 1 : -1
-    return [...list].sort((a, b) => {
+    return [...rows].sort((a, b) => {
       if (sortKey === 'id') return (a.id - b.id) * dir
       if (sortKey === 'code') return a.code.localeCompare(b.code) * dir
       if (sortKey === 'checkin') return a.checkinDate.localeCompare(b.checkinDate) * dir
       return a.checkoutDate.localeCompare(b.checkoutDate) * dir
     })
-  }, [rows, query, filterStatus, dateFrom, dateTo, sortKey, sortOrder])
+  }, [rows, sortKey, sortOrder])
 
   function openCreate() {
-    setEdit({ code: '', roomId: 1, checkinDate: '', checkoutDate: '', numGuests: 1, status: 'PENDING', note: '' })
+    setFieldErrors({})
+    setEdit({ code: '', userId: undefined, roomId: 1, checkinDate: '', checkoutDate: '', numGuests: 1, status: 'PENDING', note: '' })
     setEditOpen(true)
   }
 
-  function openEdit(r: Booking) {
-    setEdit({ 
-      id: r.id, 
-      code: r.code, 
-      userId: r.userId,
-      roomId: r.roomId, 
-      checkinDate: r.checkinDate, 
-      checkoutDate: r.checkoutDate, 
-      numGuests: r.numGuests, 
-      status: r.status, 
-      note: r.note || '' 
-    })
-    setEditOpen(true)
+  function openEdit(r: Booking | any) {
+    // Reset errors trước
+    setFieldErrors({})
+    // Đóng modal trước (nếu đang mở) để reset
+    setEditOpen(false)
+    
+    // Normalize dữ liệu - xử lý cả camelCase và snake_case
+    const raw = r as any
+    const checkinDate = raw.checkinDate || raw.checkin_date || raw.checkInDate || ''
+    const checkoutDate = raw.checkoutDate || raw.checkout_date || raw.checkOutDate || ''
+    const numGuests = raw.numGuests || raw.num_guests || raw.numGuests || 1
+    const roomId = raw.roomId || raw.room_id || 1
+    const code = raw.code || ''
+    const status = raw.status || 'PENDING'
+    const note = raw.note || ''
+    const userId = raw.userId || raw.user_id
+    
+    // Format dates nếu cần (chuyển từ ISO string sang YYYY-MM-DD cho input type="date")
+    let formattedCheckinDate = checkinDate
+    let formattedCheckoutDate = checkoutDate
+    
+    if (checkinDate && checkinDate.includes('T')) {
+      formattedCheckinDate = checkinDate.split('T')[0]
+    } else if (checkinDate && checkinDate.includes(' ')) {
+      formattedCheckinDate = checkinDate.split(' ')[0]
+    }
+    
+    if (checkoutDate && checkoutDate.includes('T')) {
+      formattedCheckoutDate = checkoutDate.split('T')[0]
+    } else if (checkoutDate && checkoutDate.includes(' ')) {
+      formattedCheckoutDate = checkoutDate.split(' ')[0]
+    }
+    
+    // Set dữ liệu của booking được chọn - đảm bảo dữ liệu đầy đủ
+    const editData = { 
+      id: raw.id, 
+      code: code, 
+      userId: userId,
+      roomId: roomId, 
+      checkinDate: formattedCheckinDate, 
+      checkoutDate: formattedCheckoutDate, 
+      numGuests: numGuests, 
+      status: status, 
+      note: note
+    }
+    
+    console.log('[BookingsPage] openEdit - Raw data:', raw)
+    console.log('[BookingsPage] openEdit - Normalized data:', editData)
+    
+    setEdit(editData)
+    // Mở modal sau khi đã set dữ liệu
+    setTimeout(() => {
+      setEditOpen(true)
+    }, 10)
   }
 
   async function save() {
@@ -209,36 +336,38 @@ export default function BookingsPage() {
         const isCheckin = edit.status === 'CHECKED_IN'
         const isCheckout = edit.status === 'CHECKED_OUT'
 
-        // Nếu status là APPROVED, chỉ gọi POST /bookings/{id}/approve (không gọi PUT)
-        if (isApprove) {
-          const token = authService.getAccessToken()
-          const headers: HeadersInit = { 'Content-Type': 'application/json' }
-          if (token) {
-            headers['Authorization'] = `Bearer ${token}`
-          }
+          // Nếu status là APPROVED, chỉ gọi POST /bookings/{id}/approve (không gọi PUT)
+          if (isApprove) {
+            const token = authService.getAccessToken()
+            const headers: HeadersInit = { 'Content-Type': 'application/json' }
+            if (token) {
+              headers['Authorization'] = `Bearer ${token}`
+            }
 
-          // Lấy user info để lấy approverId
-          const userInfo = authService.getUserInfo()
-          const approverId = userInfo?.id || 'SYSTEM'
+            // Lấy user info để lấy approverId
+            const userInfo = authService.getUserInfo()
+            const approverId = userInfo?.id || 'SYSTEM'
 
-          // POST /bookings/{id}/approve với body: { bookingId, approverId, decision, reason }
-          const approvePayload = {
-            bookingId: edit.id,
-            approverId: String(approverId),
-            decision: 'APPROVED',
-            reason: ''
-          }
+            // POST /bookings/{id}/approve với body: { bookingId, approverId, decision, reason }
+            const approvePayload = {
+              bookingId: edit.id,
+              approverId: String(approverId),
+              decision: 'APPROVED',
+              reason: ''
+            }
 
-          const approveRes = await fetch(`/api/system/bookings?action=approve&id=${edit.id}`, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(approvePayload)
-          })
+            const approveRes = await fetch(`/api/system/bookings?action=approve&id=${edit.id}`, {
+              method: 'POST',
+              headers,
+              body: JSON.stringify(approvePayload)
+            })
 
-          if (!approveRes.ok) {
-            const approveError = await approveRes.json().catch(() => ({}))
-            throw new Error(approveError.error || 'Failed to approve booking')
-          }
+            if (!approveRes.ok) {
+              const approveError = await approveRes.json().catch(() => ({}))
+              const errorMsg = approveError.error || 'Failed to approve booking'
+              setFieldErrors({ general: errorMsg })
+              return
+            }
 
           // Cập nhật state ngay lập tức để hiển thị thay đổi ngay, không cần đợi refetch
           setRows(prevRows => prevRows.map(booking => 
@@ -247,10 +376,11 @@ export default function BookingsPage() {
               : booking
           ))
 
-          // Gọi refetch ở background để đồng bộ dữ liệu (không đợi)
-          refetchBookings().catch(err => console.error('Background refetch error:', err))
+          // Không gọi refetch ngay để tránh làm chậm UI - sẽ tự động sync khi user filter/search
+          // refetchBookings().catch(err => console.error('Background refetch error:', err))
 
           setFlash({ type: 'success', text: 'Đã duyệt đặt phòng thành công.' })
+          handleCloseEdit()
         } else {
           // Nếu status khác APPROVED, gọi PUT để cập nhật thông tin và status
           // PUT /bookings/{id} - Body format: { id, roomId, checkinDate, checkoutDate, numGuests, note, status }
@@ -272,7 +402,9 @@ export default function BookingsPage() {
           })
           if (!response.ok) {
             const error = await response.json()
-            throw new Error(error.error || 'Failed to update booking')
+            const errorMsg = error.error || 'Failed to update booking'
+            setFieldErrors({ general: errorMsg })
+            return
           }
 
           // Cập nhật state ngay lập tức để hiển thị thay đổi ngay, không cần đợi refetch
@@ -290,15 +422,35 @@ export default function BookingsPage() {
               : booking
           ))
 
-          // Gọi refetch ở background để đồng bộ dữ liệu (không đợi)
-          refetchBookings().catch(err => console.error('Background refetch error:', err))
+          // Nếu checkout thành công, tự động cập nhật trạng thái phòng thành AVAILABLE
+          if (isCheckout && edit.roomId) {
+            try {
+              const roomUpdateResponse = await fetch('/api/system/rooms', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  id: edit.roomId,
+                  status: 'AVAILABLE'
+                })
+              })
+              if (!roomUpdateResponse.ok) {
+                console.warn('Failed to update room status to AVAILABLE after checkout')
+              }
+            } catch (error) {
+              console.error('Error updating room status after checkout:', error)
+            }
+          }
+
+          // Không gọi refetch ngay để tránh làm chậm UI - sẽ tự động sync khi user filter/search
+          // refetchBookings().catch(err => console.error('Background refetch error:', err))
 
           let successMessage = 'Đã cập nhật đặt phòng.'
           if (isReject) successMessage = 'Đã từ chối đặt phòng.'
           else if (isCancel) successMessage = 'Đã hủy đặt phòng.'
           else if (isCheckin) successMessage = 'Đã check-in đặt phòng.'
-          else if (isCheckout) successMessage = 'Đã check-out đặt phòng.'
+          else if (isCheckout) successMessage = 'Đã check-out đặt phòng. Phòng đã được đặt về trạng thái trống.'
           setFlash({ type: 'success', text: successMessage })
+          handleCloseEdit()
         }
       } else {
         // POST /bookings - Create new booking
@@ -319,7 +471,9 @@ export default function BookingsPage() {
         })
         if (!response.ok) {
           const error = await response.json()
-          throw new Error(error.error || 'Failed to create booking')
+          const errorMsg = error.error || 'Failed to create booking'
+          setFieldErrors({ general: errorMsg })
+          return
         }
 
         // Parse response để lấy booking mới
@@ -344,14 +498,15 @@ export default function BookingsPage() {
         // Thêm booking mới vào state ngay lập tức
         setRows(prevRows => [...prevRows, newBooking])
 
-        // Gọi refetch ở background để đồng bộ dữ liệu (không đợi)
-        refetchBookings().catch(err => console.error('Background refetch error:', err))
+        // Không gọi refetch ngay để tránh làm chậm UI - sẽ tự động sync khi user filter/search
+        // refetchBookings().catch(err => console.error('Background refetch error:', err))
 
         setFlash({ type: 'success', text: 'Đã tạo đặt phòng mới.' })
       }
-      setEditOpen(false)
+      handleCloseEdit()
     } catch (error: any) {
-      setFlash({ type: 'error', text: error.message || 'Có lỗi xảy ra' })
+      // Hiển thị lỗi trong form thay vì flash message
+      setFieldErrors({ general: error.message || 'Có lỗi xảy ra' })
     }
   }
 
@@ -375,10 +530,10 @@ export default function BookingsPage() {
         // Xóa booking khỏi state ngay lập tức
         setRows(prevRows => prevRows.filter(booking => booking.id !== id))
 
-        // Gọi refetch ở background để đồng bộ dữ liệu (không đợi)
-        refetchBookings().catch(err => console.error('Background refetch error:', err))
+        // Không gọi refetch ngay để tránh làm chậm UI - sẽ tự động sync khi user filter/search
+        // refetchBookings().catch(err => console.error('Background refetch error:', err))
 
-        setFlash({ type: 'success', text: 'Đã vô hiệu hóa đặt phòng.' })
+        setFlash({ type: 'success', text: 'Đã xóa đặt phòng.' })
       }
     } catch (error: any) {
       setFlash({ type: 'error', text: error.message || 'Có lỗi xảy ra' })
@@ -388,27 +543,7 @@ export default function BookingsPage() {
   }
 
   async function activateBooking(id: number) {
-    try {
-      const response = await fetch(`/api/system/bookings/${id}/activate`, { method: 'PUT' })
-      if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.error || 'Failed to activate booking')
-      }
-
-      // Cập nhật state ngay lập tức để hiển thị thay đổi ngay
-      setRows(prevRows => prevRows.map(booking => 
-        booking.id === id 
-          ? { ...booking, isActive: true }
-          : booking
-      ))
-
-      // Gọi refetch ở background để đồng bộ dữ liệu (không đợi)
-      refetchBookings().catch(err => console.error('Background refetch error:', err))
-
-      setFlash({ type: 'success', text: 'Đã kích hoạt đặt phòng.' })
-    } catch (error: any) {
-      setFlash({ type: 'error', text: error.message || 'Có lỗi xảy ra' })
-    }
+    setFlash({ type: 'error', text: 'Chức năng kích hoạt đặt phòng chưa được backend hỗ trợ' })
   }
 
   function renderStatusChip(s: BookingStatus) {
@@ -422,7 +557,8 @@ export default function BookingsPage() {
 
   const getRoomName = (roomId: number) => {
     const room = rooms.find(r => r.id === roomId)
-    return room ? `${room.code} - ${room.name || ''}` : `Room ${roomId}`
+    if (!room) return `Room ${roomId}`
+    return room.name || room.code || `Room ${roomId}`
   }
 
   return (
@@ -460,13 +596,9 @@ export default function BookingsPage() {
       {/* Content */}
       <div className="w-full px-4 py-3">
         <div className="space-y-3">
-          {/* Flash Messages */}
-          {flash && (
-            <div className={`rounded-md border p-2 sm:p-3 text-xs sm:text-sm shadow-sm ${
-              flash.type === 'success' 
-                ? 'bg-green-50 border-green-200 text-green-800' 
-                : 'bg-red-50 border-red-200 text-red-800'
-            }`}>
+          {/* Success Messages */}
+          {flash && flash.type === 'success' && (
+            <div className={`rounded-md border p-2 sm:p-3 text-xs sm:text-sm shadow-sm bg-green-50 border-green-200 text-green-800`}>
               {flash.text}
             </div>
           )}
@@ -547,18 +679,6 @@ export default function BookingsPage() {
               {/* Hàng 3: Sắp xếp và Thứ tự */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Sắp xếp</label>
-                  <select
-                    value={sortKey}
-                    onChange={(e) => setSortKey(e.target.value as 'id' | 'code' | 'checkin' | 'checkout')}
-                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="code">Theo Code</option>
-                    <option value="checkin">Theo Check-in</option>
-                    <option value="checkout">Theo Check-out</option>
-                  </select>
-                </div>
-                <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">Thứ tự</label>
                   <select
                     value={sortOrder}
@@ -629,18 +749,6 @@ export default function BookingsPage() {
                 />
               </div>
               
-              {/* Sắp xếp */}
-              <div className="w-36 flex-shrink-0">
-                <select
-                  value={sortKey}
-                  onChange={(e) => setSortKey(e.target.value as 'id' | 'code' | 'checkin' | 'checkout')}
-                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="code">Theo Code</option>
-                  <option value="checkin">Theo Check-in</option>
-                  <option value="checkout">Theo Check-out</option>
-                </select>
-              </div>
               
               {/* Thứ tự */}
               <div className="w-28 flex-shrink-0">
@@ -690,14 +798,14 @@ export default function BookingsPage() {
                   <div className="hidden lg:block overflow-x-auto">
                     <table className="w-full text-sm">
                   <colgroup>
-                        <col className="w-[8%]" />
+                        <col className="w-[10%]" />
                         <col className="w-[12%]" />
                         <col className="w-[12%]" />
-                    <col className="w-[10%]" />
-                    <col className="w-[10%]" />
-                        <col className="w-[8%]" />
-                        <col className="w-[12%]" />
-                        <col className="w-[18%]" />
+                        <col className="w-[15%]" />
+                       <col className="w-[15%]" />
+                        <col className="w-[10%]" />
+                        <col className="w-[10%]" />
+                        <col className="w-[20%]" />
                   </colgroup>
                   <thead>
                         <tr className="bg-gray-50 text-gray-700">
@@ -708,7 +816,6 @@ export default function BookingsPage() {
                           <th className="px-4 py-3 text-center font-semibold">Check-out</th>
                           <th className="px-4 py-3 text-center font-semibold">Số khách</th>
                           <th className="px-4 py-3 text-center font-semibold">Trạng thái</th>
-                          <th className="px-4 py-3 text-center font-semibold">Kích hoạt</th>
                           <th className="px-4 py-3 text-center font-semibold">Thao tác</th>
                     </tr>
                   </thead>
@@ -716,23 +823,12 @@ export default function BookingsPage() {
                     {filtered.slice((page - 1) * size, page * size).map((row) => (
                           <tr key={row.id} className="hover:bg-gray-50 border-b border-gray-100">
                             <td className="px-4 py-3 text-center font-medium text-gray-900">{row.code}</td>
-                            <td className="px-4 py-3 text-center text-gray-700">{row.userName || `User ${row.userId}`}</td>
+                            <td className="px-4 py-3 text-center text-gray-700">{row.userId} - {row.userName || `User`}</td>
                             <td className="px-4 py-3 text-center text-gray-700">{getRoomName(row.roomId)}</td>
                             <td className="px-4 py-3 text-center text-gray-700">{row.checkinDate}</td>
                             <td className="px-4 py-3 text-center text-gray-700">{row.checkoutDate}</td>
                             <td className="px-4 py-3 text-center text-gray-700">{row.numGuests}</td>
                             <td className="px-4 py-3 text-center">{renderStatusChip(row.status)}</td>
-                            <td className="px-4 py-3 text-center">
-                              {row.isActive !== false ? (
-                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                  Hoạt động
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-                                  Vô hiệu
-                                </span>
-                              )}
-                            </td>
                             <td className="px-4 py-3 text-center">
                               <div className="flex gap-2 justify-center">
                                 <Button
@@ -751,20 +847,13 @@ export default function BookingsPage() {
                                 >
                                   Sửa
                                 </Button>
-                                {row.isActive !== false ? (
+                                {row.isActive !== false && (
                                   <Button
                                     variant="danger"
                                     className="h-8 px-3 text-xs"
                                     onClick={() => confirmAction(row.id, 'delete')}
                                   >
-                                    Vô hiệu
-                                  </Button>
-                                ) : (
-                                  <Button
-                                    className="h-8 px-3 text-xs bg-green-600 hover:bg-green-700"
-                                    onClick={() => activateBooking(row.id)}
-                                  >
-                                    Kích hoạt
+                                    Xóa
                                   </Button>
                                 )}
                               </div>
@@ -794,7 +883,7 @@ export default function BookingsPage() {
                                 </div>
                                 <div>
                                   <h3 className="font-bold text-gray-900 text-base">{row.code}</h3>
-                                  <p className="text-sm text-gray-600">{row.userName || `User ${row.userId}`}</p>
+                                  <p className="text-sm text-gray-600">{row.userId} - {row.userName || `User`}</p>
                                 </div>
                               </div>
                               <div className="flex-shrink-0">
@@ -844,7 +933,7 @@ export default function BookingsPage() {
                             {row.note && (
                               <div className="mb-4 p-3 bg-gray-50 rounded-lg">
                                 <p className="text-xs text-gray-500 mb-1">Ghi chú</p>
-                                <p className="text-sm text-gray-700">{row.note}</p>
+                                <p className="text-sm text-gray-700 whitespace-pre-line">{row.note}</p>
                               </div>
                             )}
                           </div>
@@ -886,7 +975,7 @@ export default function BookingsPage() {
                                   <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
                                   </svg>
-                                  Vô hiệu
+                                  Xóa
                                 </Button>
                               ) : (
                                 <Button
@@ -998,7 +1087,7 @@ export default function BookingsPage() {
       </div>
 
       {/* Detail Modal - Compact */}
-      <Modal open={detailOpen} onClose={() => setDetailOpen(false)} title="Chi tiết đặt phòng">
+      <Modal open={detailOpen} onClose={() => setDetailOpen(false)} title="Chi tiết đặt phòng" size="xl">
         <div className="p-3 sm:p-4">
           {selected && (
             <div className="space-y-4">
@@ -1016,7 +1105,7 @@ export default function BookingsPage() {
               </div>
                       <div className="flex-1 min-w-0">
                         <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold text-gray-900">Đặt phòng {selected.code}</h2>
-                        <p className="text-base sm:text-lg lg:text-xl text-gray-600 truncate">{selected.userName || `User ${selected.userId}`}</p>
+                        <p className="text-base sm:text-lg lg:text-xl text-gray-600 truncate">{selected.userId} - {selected.userName || `User`}</p>
               </div>
               </div>
               </div>
@@ -1044,7 +1133,46 @@ export default function BookingsPage() {
                     </div>
                   </div>
 
-                  {/* Phòng và ngày */}
+                  {/* Thông tin khách hàng */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
+                    {(selected as any).userEmail && (
+                      <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
+                        <div className="flex items-center gap-2 mb-1">
+                          <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                          </svg>
+                          <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Khách hàng</span>
+                        </div>
+                        <p className="text-sm sm:text-base font-bold text-blue-900">{(selected as any).userEmail}</p>
+                      </div>
+                    )}
+                    {(selected as any).phoneNumber && (
+                      <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
+                        <div className="flex items-center gap-2 mb-1">
+                          <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                          </svg>
+                          <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">SĐT</span>
+                        </div>
+                        <p className="text-sm sm:text-base font-bold text-blue-900">{(selected as any).phoneNumber || 'N/A'}</p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Email */}
+                  {(selected as any).userEmail && (
+                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
+                      <div className="flex items-center gap-2 mb-1">
+                        <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                        </svg>
+                        <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Email</span>
+                      </div>
+                      <p className="text-sm sm:text-base font-bold text-blue-900">{(selected as any).userEmail}</p>
+                    </div>
+                  )}
+
+                  {/* Phòng và Tòa */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
                     <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
                       <div className="flex items-center gap-2 mb-1">
@@ -1053,21 +1181,62 @@ export default function BookingsPage() {
                         </svg>
                         <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Phòng</span>
                       </div>
-                      <p className="text-sm sm:text-base font-bold text-blue-900">{getRoomName(selected.roomId)}</p>
+                      <p className="text-sm sm:text-base font-bold text-blue-900">
+                        {(selected as any).roomTypeName ? `${(selected as any).roomTypeName}` : getRoomName(selected.roomId)}
+                        {(selected as any).roomCode ? ` - ${(selected as any).roomCode}` : ''}
+                      </p>
                     </div>
+                    {(selected as any).building && (
+                      <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
+                        <div className="flex items-center gap-2 mb-1">
+                          <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                          </svg>
+                          <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Tòa</span>
+                        </div>
+                        <p className="text-sm sm:text-base font-bold text-blue-900">{(selected as any).building}</p>
+                      </div>
+                    )}
+                  </div>
 
+                  {/* Check-in và Check-out */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
                     <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
                       <div className="flex items-center gap-2 mb-1">
                         <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                         </svg>
-                        <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Ngày</span>
+                        <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Check-in</span>
                       </div>
                       <p className="text-sm sm:text-base font-bold text-blue-900">
-                        {selected.checkinDate} - {selected.checkoutDate}
+                        {selected.checkinDate ? new Date(selected.checkinDate).toLocaleString('vi-VN') : selected.checkinDate}
+                      </p>
+                    </div>
+                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
+                      <div className="flex items-center gap-2 mb-1">
+                        <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                        <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Check-out</span>
+                      </div>
+                      <p className="text-sm sm:text-base font-bold text-blue-900">
+                        {selected.checkoutDate ? new Date(selected.checkoutDate).toLocaleString('vi-VN') : selected.checkoutDate}
                       </p>
                     </div>
                   </div>
+
+                  {/* Mục đích */}
+                  {(selected as any).purpose && (
+                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
+                      <div className="flex items-center gap-2 mb-1">
+                        <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                        <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Mục đích</span>
+                      </div>
+                      <p className="text-sm sm:text-base font-bold text-blue-900">{(selected as any).purpose}</p>
+                    </div>
+                  )}
 
                   {/* Trạng thái và ghi chú */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
@@ -1089,28 +1258,34 @@ export default function BookingsPage() {
                           </svg>
                           <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Ghi chú</span>
                         </div>
-                        <p className="text-sm sm:text-base font-bold text-blue-900">{selected.note}</p>
+                        <p className="text-sm sm:text-base font-bold text-blue-900 whitespace-pre-line break-words">{selected.note}</p>
                       </div>
                     )}
                   </div>
 
-                  {(selectedMeta.totalPrice !== null || selectedMeta.paymentStatus || selected.created_at || selected.updated_at) && (
+                  {/* Tổng tiền và Thanh toán */}
+                  {(((selected as any).totalPrice !== null && (selected as any).totalPrice !== undefined) || (selected as any).paymentStatus || selectedMeta.totalPrice !== null || selectedMeta.paymentStatus || selected.created_at || selected.updated_at) && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
-                      {selectedMeta.totalPrice !== null && (
-                        <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
-                          <div className="flex items-center gap-2 mb-1">
-                            <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
-                            </svg>
-                            <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Tổng tiền</span>
-                          </div>
-                          <p className="text-sm sm:text-base font-bold text-blue-900">
-                            {selectedMeta.totalPrice.toLocaleString('vi-VN')} VND
-                          </p>
+                      <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
+                        <div className="flex items-center gap-2 mb-1">
+                          <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
+                          </svg>
+                          <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Tổng tiền</span>
                         </div>
-                      )}
+                        <p className="text-sm sm:text-base font-bold text-blue-900">
+                          {(() => {
+                            const totalPrice = (selected as any).totalPrice !== null && (selected as any).totalPrice !== undefined 
+                              ? (selected as any).totalPrice 
+                              : selectedMeta.totalPrice;
+                            return totalPrice !== null && totalPrice !== undefined 
+                              ? Number(totalPrice).toLocaleString('vi-VN') + ' VND'
+                              : 'Miễn phí';
+                          })()}
+                        </p>
+                      </div>
 
-                      {selectedMeta.paymentStatus && (
+                      {((selected as any).paymentStatus || selectedMeta.paymentStatus) && (
                         <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
                           <div className="flex items-center gap-2 mb-1">
                             <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1118,7 +1293,7 @@ export default function BookingsPage() {
                             </svg>
                             <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Thanh toán</span>
                           </div>
-                          <p className="text-sm sm:text-base font-bold text-blue-900">{selectedMeta.paymentStatus}</p>
+                          <p className="text-sm sm:text-base font-bold text-blue-900">{(selected as any).paymentStatus || selectedMeta.paymentStatus}</p>
                         </div>
                       )}
 
@@ -1128,10 +1303,17 @@ export default function BookingsPage() {
                             <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                             </svg>
-                            <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Ngày tạo</span>
+                            <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Đặt lúc</span>
                           </div>
                           <p className="text-sm sm:text-base font-bold text-blue-900">
-                            {new Date(selected.created_at).toLocaleString('vi-VN')}
+                            {new Date(selected.created_at).toLocaleString('vi-VN', { 
+                              hour: '2-digit', 
+                              minute: '2-digit', 
+                              second: '2-digit',
+                              day: 'numeric',
+                              month: 'numeric',
+                              year: 'numeric'
+                            })}
                           </p>
                         </div>
                       )}
@@ -1159,16 +1341,24 @@ export default function BookingsPage() {
       </Modal>
 
       {/* Edit Modal - Mobile Optimized */}
-      <Modal open={editOpen} onClose={() => setEditOpen(false)} title={edit.id ? 'Sửa đặt phòng' : 'Thêm đặt phòng mới'}>
+      <Modal open={editOpen} onClose={handleCloseEdit} title={edit.id ? 'Sửa đặt phòng' : 'Thêm đặt phòng mới'}>
         <div className="p-4 sm:p-6">
-          <div className="space-y-4">
+          <div className="space-y-4" key={edit.id || 'new'}>
             {/* Form */}
             <div className="space-y-4">
+              {/* General Error Message */}
+              {fieldErrors.general && (
+                <div className="rounded-md border p-3 text-sm shadow-sm bg-red-50 border-red-200 text-red-800">
+                  {fieldErrors.general}
+                </div>
+              )}
+              
               {/* Code và Số khách */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Code *</label>
                   <Input
+                    key={`code-${edit.id || 'new'}-${edit.code}`}
                     value={edit.code}
                     onChange={(e) => {
                       setEdit({ ...edit, code: e.target.value })
@@ -1188,6 +1378,7 @@ export default function BookingsPage() {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Số khách *</label>
                   <Input
+                    key={`numGuests-${edit.id || 'new'}-${edit.numGuests}`}
                     type="number"
                     min="1"
                     max="10"
@@ -1214,6 +1405,7 @@ export default function BookingsPage() {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Phòng *</label>
                   <select
+                    key={`roomId-${edit.id || 'new'}-${edit.roomId}`}
                     value={edit.roomId}
                     onChange={(e) => {
                       setEdit({ ...edit, roomId: Number(e.target.value) })
@@ -1237,6 +1429,7 @@ export default function BookingsPage() {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Trạng thái</label>
                   <select
+                    key={`status-${edit.id || 'new'}-${edit.status}`}
                     value={edit.status}
                     onChange={(e) => setEdit({ ...edit, status: e.target.value as BookingStatus })}
                     className="w-full px-4 py-3 text-base border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
@@ -1256,6 +1449,7 @@ export default function BookingsPage() {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Ngày check-in *</label>
                   <Input
+                    key={`checkinDate-${edit.id || 'new'}-${edit.checkinDate}`}
                     type="date"
                     value={edit.checkinDate}
                     onChange={(e) => {
@@ -1276,6 +1470,7 @@ export default function BookingsPage() {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Ngày check-out *</label>
                   <Input
+                    key={`checkoutDate-${edit.id || 'new'}-${edit.checkoutDate}`}
                     type="date"
                     value={edit.checkoutDate}
                     onChange={(e) => {
@@ -1299,6 +1494,7 @@ export default function BookingsPage() {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Ghi chú</label>
                 <textarea
+                  key={`note-${edit.id || 'new'}-${edit.note}`}
                   value={edit.note}
                   onChange={(e) => setEdit({ ...edit, note: e.target.value })}
                   placeholder="Nhập ghi chú (tùy chọn)"
@@ -1312,7 +1508,7 @@ export default function BookingsPage() {
             <div className="flex gap-3 pt-4 border-t border-gray-200">
               <Button 
                 variant="secondary" 
-                onClick={() => setEditOpen(false)}
+                onClick={handleCloseEdit}
                 className="flex-1 h-12 text-base font-medium"
               >
                 Hủy
@@ -1329,11 +1525,10 @@ export default function BookingsPage() {
       </Modal>
 
       {/* Confirmation Modal */}
-      <Modal open={confirmOpen.open} onClose={() => setConfirmOpen({ open: false })} title="Xác nhận vô hiệu hóa">
+      <Modal open={confirmOpen.open} onClose={() => setConfirmOpen({ open: false })} title="Xác nhận xóa đặt phòng">
         <div className="p-6">
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Xác nhận vô hiệu hóa</h2>
           <p className="text-gray-600 mb-6">
-            Bạn có chắc chắn muốn vô hiệu hóa đặt phòng này không? Hành động này không thể hoàn tác, nhưng bạn có thể kích hoạt lại sau.
+            Bạn có chắc chắn muốn xóa đặt phòng này không?
           </p>
           <div className="flex justify-end gap-3">
             <Button variant="secondary" onClick={() => setConfirmOpen({ open: false })}>
@@ -1343,7 +1538,7 @@ export default function BookingsPage() {
               variant="danger" 
               onClick={doAction}
             >
-              Vô hiệu hóa
+              Xóa
             </Button>
           </div>
         </div>

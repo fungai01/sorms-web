@@ -30,12 +30,15 @@ export default function ServicesPage() {
 
   useEffect(() => { if (!flash) return; const t = setTimeout(() => setFlash(null), 3000); return () => clearTimeout(t) }, [flash])
 
-  // Keyboard shortcuts for edit modal
+  // Keyboard shortcuts for edit modal: Enter = Save, Esc = Close (avoid Enter in textarea)
   useEffect(() => {
     if (!editOpen) return
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      const tag = (e.target as HTMLElement | null)?.tagName?.toLowerCase()
+      const isTextarea = tag === 'textarea'
+
+      if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !isTextarea) {
         e.preventDefault()
         save()
       } else if (e.key === 'Escape') {
@@ -47,6 +50,20 @@ export default function ServicesPage() {
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [editOpen, edit])
+
+  // Global Escape handler: ESC closes any open modal on this page
+  useEffect(() => {
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setEditOpen(false)
+        setDetailOpen(false)
+        setConfirmOpen({ open: false })
+      }
+    }
+    document.addEventListener('keydown', onEsc)
+    return () => document.removeEventListener('keydown', onEsc)
+  }, [])
 
   // Sync with hooks data
   useEffect(() => {
@@ -244,8 +261,16 @@ export default function ServicesPage() {
 
   async function activateService(id: number) {
     try {
-      const resp = await fetch(`/api/system/services/${id}/activate`, { method: 'PUT' })
-      if (!resp.ok) throw new Error('Kích hoạt dịch vụ thất bại')
+      // Activate by setting isActive=true via PUT
+      const resp = await fetch('/api/system/services', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, isActive: true })
+      })
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}))
+        throw new Error(err.error || 'Kích hoạt dịch vụ thất bại')
+      }
       setFlash({ type: 'success', text: 'Đã kích hoạt dịch vụ thành công.' })
       await refetchServices()
     } catch (e) {

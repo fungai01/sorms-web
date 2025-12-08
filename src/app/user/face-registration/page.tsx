@@ -166,12 +166,15 @@ function FaceRegistrationContent() {
         setBookingData(qr.bookingData);
       }
       
-      // Generate QR code với token (base64) từ API
-      // Token này đã chứa đầy đủ thông tin booking được encode
-      if (qr.token) {
+      // Ưu tiên sử dụng qrImageUrl từ backend (Cloudinary), không generate từ token
+      if (qr.qrImageUrl) {
+        // Sử dụng URL từ Cloudinary
+        setQrDataUrl(qr.qrImageUrl);
+      } else if (qr.token) {
+        // Fallback: Generate QR code từ token nếu không có qrImageUrl
         generateQRCode(qr.token);
       } else {
-        setError("Không có token để tạo mã QR");
+        setError("Không có mã QR. Vui lòng liên hệ quản trị viên.");
       }
     } catch (e) {
       setError(
@@ -249,12 +252,15 @@ function FaceRegistrationContent() {
           setBookingData(qr.bookingData);
         }
         
-        // Generate QR code với token (base64) từ API
-        // Token này đã chứa đầy đủ thông tin booking được encode
-        if (qr.token) {
+        // Ưu tiên sử dụng qrImageUrl từ backend (Cloudinary), không generate từ token
+        if (qr.qrImageUrl) {
+          // Sử dụng URL từ Cloudinary
+          setQrDataUrl(qr.qrImageUrl);
+        } else if (qr.token) {
+          // Fallback: Generate QR code từ token nếu không có qrImageUrl
           generateQRCode(qr.token);
         } else {
-          setError("Không có token để tạo mã QR");
+          setError("Không có mã QR. Vui lòng liên hệ quản trị viên.");
         }
       }
     } catch (e) {
@@ -421,12 +427,32 @@ function FaceRegistrationContent() {
                       {/* Action Buttons */}
                       <div className="flex flex-col sm:flex-row gap-3 justify-center">
                         <Button
-                          onClick={() => {
+                          onClick={async () => {
                             if (qrDataUrl) {
-                              const link = document.createElement("a");
-                              link.href = qrDataUrl;
-                              link.download = `check-in-qr-${bookingId}.png`;
-                              link.click();
+                              try {
+                                // Nếu là URL Cloudinary (http/https), download từ URL
+                                if (qrDataUrl.startsWith('http')) {
+                                  const response = await fetch(qrDataUrl);
+                                  const blob = await response.blob();
+                                  const url = window.URL.createObjectURL(blob);
+                                  const link = document.createElement("a");
+                                  link.href = url;
+                                  link.download = `check-in-qr-${bookingId}.png`;
+                                  document.body.appendChild(link);
+                                  link.click();
+                                  document.body.removeChild(link);
+                                  window.URL.revokeObjectURL(url);
+                                } else {
+                                  // Nếu là data URL (base64), download trực tiếp
+                                  const link = document.createElement("a");
+                                  link.href = qrDataUrl;
+                                  link.download = `check-in-qr-${bookingId}.png`;
+                                  link.click();
+                                }
+                              } catch (error) {
+                                console.error('Error downloading QR:', error);
+                                setError('Không thể tải mã QR');
+                              }
                             }
                           }}
                           className="bg-green-600 hover:bg-green-700 text-white"

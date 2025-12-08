@@ -76,6 +76,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({
         payload,
         token: base64,
+        qrImageUrl: booking.qrImageUrl || null, // Trả về qrImageUrl từ backend nếu có
         bookingData: {
           userName: booking.userName,
           userEmail: booking.userEmail,
@@ -107,8 +108,17 @@ export async function GET(req: NextRequest) {
       return NextResponse.json(booking)
     }
 
-    // Nếu không có bookingId, trả về danh sách bookings
-    const response = await apiClient.getBookings()
+    // Nếu không có bookingId, trả về danh sách bookings của user hiện tại
+    // Sử dụng getBookingsByUser để đảm bảo backend filter theo userId
+    const userId = userInfo.id
+    if (!userId) {
+      return NextResponse.json(
+        { error: 'Invalid user ID' },
+        { status: 400 }
+      )
+    }
+
+    const response = await apiClient.getBookingsByUser(userId)
 
     if (!response.success) {
       return NextResponse.json(
@@ -117,9 +127,7 @@ export async function GET(req: NextRequest) {
       )
     }
 
-    const all = (response.data || []) as any[]
-    const userIdStr = String(userInfo.id)
-    let data = all.filter(b => String(b.userId) === userIdStr)
+    let data = (response.data || []) as any[]
 
     if (status) {
       data = data.filter(b => String(b.status) === status)

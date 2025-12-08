@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
 import Modal from "@/components/ui/Modal";
 import { Table, THead, TBody } from "@/components/ui/Table";
 import { createBookingNotification } from "@/lib/notifications";
-import { useBookings } from "@/hooks/useApi";
+import { useBookings, useRooms, useUsers } from "@/hooks/useApi";
 import { apiClient } from "@/lib/api-client";
 import { authService } from "@/lib/auth-service";
 import { useRouter } from "next/navigation";
@@ -16,9 +16,10 @@ type BookingRequest = {
   id: number;
   code: string;
   userId: number;
-  userName?: string;
+  userName?: string;  
   roomId: number;
   roomCode?: string;
+  roomName?: string;
   checkinDate: string;
   checkoutDate: string;
   numGuests: number;
@@ -39,12 +40,78 @@ export default function OfficeBookingsPage() {
 
   // Use API hooks for data fetching (gửi status lên API nếu khác ALL)
   const { data: bookingsData, loading: bookingsLoading, error: bookingsError, refetch: refetchBookings } = useBookings(filterStatus);
-  // Transform API data
-  const bookings: BookingRequest[] = (bookingsData as any) || [];
+  const { data: roomsData } = useRooms();
+  const { data: usersData } = useUsers();
+  
+  // Transform API data - ensure array and normalize field names
+  const rawBookings = Array.isArray(bookingsData)
+    ? bookingsData
+    : Array.isArray((bookingsData as any)?.items)
+      ? (bookingsData as any).items
+      : Array.isArray((bookingsData as any)?.data?.content)
+        ? (bookingsData as any).data.content
+        : Array.isArray((bookingsData as any)?.content)
+          ? (bookingsData as any).content
+          : Array.isArray((bookingsData as any)?.data)
+            ? (bookingsData as any).data
+            : [];
+  
+  // Normalize rooms and users data
+  const rooms = Array.isArray(roomsData) ? roomsData : [];
+  const users = Array.isArray(usersData) 
+    ? usersData 
+    : Array.isArray((usersData as any)?.items) 
+      ? (usersData as any).items 
+      : Array.isArray((usersData as any)?.data?.content)
+        ? (usersData as any).data.content
+        : [];
+  
+  // Normalize dữ liệu - chuyển snake_case sang camelCase và map user/room info
+  const bookings: BookingRequest[] = rawBookings.map((item: any) => {
+    const userId = item.userId || item.user_id;
+    const roomId = item.roomId || item.room_id;
+    
+    // Tìm room từ rooms data - thử nhiều cách match
+    const room = rooms.find((r: any) => {
+      const rId = r.id || r.roomId;
+      return rId === roomId || 
+             String(rId) === String(roomId) ||
+             Number(rId) === Number(roomId);
+    });
+    
+    // Tìm user từ users data
+    const user = users.find((u: any) => 
+      (u.id === userId) || 
+      (u.userId === userId) ||
+      (String(u.id) === String(userId)) ||
+      (String(u.userId) === String(userId))
+    );
+    
+    return {
+      id: item.id,
+      code: item.code || '',
+      userId: userId,
+      userName: item.userName || item.user_name || item.user?.name || item.user?.firstName || item.user?.email || item.user?.username || user?.name || user?.firstName || user?.email || user?.username || null,
+      roomId: roomId,
+      roomCode: item.roomCode || item.room_code || item.room?.code || room?.code || room?.roomCode || room?.roomNumber || null,
+      roomName: item.roomName || item.room_name || item.room?.name || room?.name || room?.roomName || null,
+      checkinDate: item.checkinDate || item.checkin_date || item.checkInDate || '',
+      checkoutDate: item.checkoutDate || item.checkout_date || item.checkOutDate || '',
+      numGuests: item.numGuests || item.num_guests || 1,
+      note: item.note || '',
+      status: item.status || 'PENDING',
+      created_at: item.created_at || item.createdAt || '',
+      updated_at: item.updated_at || item.updatedAt || ''
+    };
+  });
   const [searchQuery, setSearchQuery] = useState('');
   const [compact, setCompact] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [flash, setFlash] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  
+  // Track seen bookings to avoid duplicate notifications
+  const seenBookingIds = useRef<Set<number>>(new Set());
+  const lastBookingCheck = useRef<number>(Date.now());
 
   // Advanced filters
   const [checkinFrom, setCheckinFrom] = useState('');
@@ -63,12 +130,49 @@ export default function OfficeBookingsPage() {
     return () => clearTimeout(timer);
   }, [flash]);
 
+  // Check for new bookings and add to notification system
+  useEffect(() => {
+    // Initialize seen bookings on first load
+    if (bookings.length > 0 && seenBookingIds.current.size === 0) {
+      bookings.forEach(b => {
+        if (b.status === 'PENDING') {
+          seenBookingIds.current.add(b.id);
+        }
+      });
+      lastBookingCheck.current = Date.now();
+      return;
+    }
+
+    // Check for new PENDING bookings
+    const newPendingBookings = bookings.filter(b => 
+      b.status === 'PENDING' && 
+      !seenBookingIds.current.has(b.id) &&
+      new Date(b.created_at).getTime() > lastBookingCheck.current
+    );
+
+    if (newPendingBookings.length > 0) {
+      newPendingBookings.forEach(booking => {
+        seenBookingIds.current.add(booking.id);
+        
+        // Add notification to the notification system (will appear in Header dropdown)
+        const guestName = booking.userName || `User #${booking.userId}`;
+        const roomInfo = booking.roomName || booking.roomCode || `Room #${booking.roomId}`;
+        
+        createBookingNotification(
+          booking.id,
+          guestName,
+          roomInfo,
+          'PENDING'
+        );
+      });
+      
+      lastBookingCheck.current = Date.now();
+    }
+  }, [bookings]);
+
   const filteredBookings = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return bookings.filter(booking => {
-      // Status filter
-      const statusMatch = filterStatus === 'ALL' || booking.status === filterStatus;
-
       // Search filter
       let searchMatch = true;
       if (q) {
@@ -92,9 +196,9 @@ export default function OfficeBookingsPage() {
       if (userIdFilter && booking.userId !== parseInt(userIdFilter)) advancedMatch = false;
       if (roomIdFilter && booking.roomId !== parseInt(roomIdFilter)) advancedMatch = false;
 
-      return statusMatch && searchMatch && advancedMatch;
+      return searchMatch && advancedMatch;
     });
-  }, [bookings, filterStatus, searchQuery, checkinFrom, checkinTo, checkoutFrom, checkoutTo, guestsMin, guestsMax, userIdFilter, roomIdFilter]);
+  }, [bookings, searchQuery, checkinFrom, checkinTo, checkoutFrom, checkoutTo, guestsMin, guestsMax, userIdFilter, roomIdFilter]);
 
   const handleApprove = async (booking: BookingRequest) => {
     try {
@@ -248,13 +352,6 @@ export default function OfficeBookingsPage() {
     setRoomIdFilter('');
   };
 
-  // Calculate KPIs
-  const totalBookings = bookings.length;
-  const pendingBookings = bookings.filter(b => b.status === 'PENDING').length;
-  const approvedBookings = bookings.filter(b => b.status === 'APPROVED').length;
-  const today = new Date().toISOString().split('T')[0];
-  const todayCheckins = bookings.filter(b => b.checkinDate === today).length;
-
   return (
     <>
       {/* Header */}
@@ -283,107 +380,11 @@ export default function OfficeBookingsPage() {
             </div>
           )}
 
-          {/* KPI Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <Card>
-              <CardBody>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-gray-600">Tổng đặt phòng</p>
-                    <p className="text-2xl font-bold text-blue-600">{totalBookings}</p>
-                  </div>
-                  <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
-                    <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                    </svg>
-                  </div>
-                </div>
-              </CardBody>
-            </Card>
-
-            <Card>
-              <CardBody>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-gray-600">Chờ duyệt</p>
-                    <p className="text-2xl font-bold text-orange-600">{pendingBookings}</p>
-                  </div>
-                  <div className="w-12 h-12 bg-orange-100 rounded-full flex items-center justify-center">
-                    <svg className="w-6 h-6 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                  </div>
-                </div>
-              </CardBody>
-            </Card>
-
-            <Card>
-              <CardBody>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-gray-600">Đã duyệt</p>
-                    <p className="text-2xl font-bold text-green-600">{approvedBookings}</p>
-                  </div>
-                  <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
-                    <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
-                  </div>
-                </div>
-              </CardBody>
-            </Card>
-
-            <Card>
-              <CardBody>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-gray-600">Check-in hôm nay</p>
-                    <p className="text-2xl font-bold text-purple-600">{todayCheckins}</p>
-                  </div>
-                  <div className="w-12 h-12 bg-purple-100 rounded-full flex items-center justify-center">
-                    <svg className="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                    </svg>
-                  </div>
-                </div>
-              </CardBody>
-            </Card>
-          </div>
-
           {/* Toolbar */}
           <Card>
             <CardBody>
               <div className="space-y-4">
-                {/* Status Filter and Search */}
-                <div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    {([
-                      { key: 'ALL', label: `Tất cả (${bookings.length})` },
-                      { key: 'PENDING', label: `Chờ duyệt (${bookings.filter(b => b.status === 'PENDING').length})` },
-                      { key: 'APPROVED', label: `Đã duyệt (${bookings.filter(b => b.status === 'APPROVED').length})` },
-                      { key: 'REJECTED', label: `Từ chối (${bookings.filter(b => b.status === 'REJECTED').length})` },
-                      { key: 'CHECKED_IN', label: `Đã nhận (${bookings.filter(b => b.status === 'CHECKED_IN').length})` },
-                      { key: 'CHECKED_OUT', label: `Đã trả (${bookings.filter(b => b.status === 'CHECKED_OUT').length})` },
-                      { key: 'CANCELLED', label: `Đã hủy (${bookings.filter(b => b.status === 'CANCELLED').length})` },
-                    ] as const).map(({ key, label }) => (
-                      <button
-                        key={key}
-                        onClick={() => setFilterStatus(key as any)}
-                        className={
-                          "px-3 py-1.5 rounded-full text-sm border transition-colors " +
-                          (filterStatus === key
-                            ? "bg-blue-50 text-blue-700 border-blue-200"
-                            : "bg-white text-gray-700 border-gray-200 hover:bg-gray-50")
-                        }
-                        aria-pressed={filterStatus === key}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Search and View Toggle */}
+                {/* Search, Status Filter and View Toggle */}
                 <div className="flex flex-col sm:flex-row gap-3">
                   <div className="flex-1">
                     <input
@@ -396,10 +397,24 @@ export default function OfficeBookingsPage() {
                     />
                   </div>
                   <div className="flex gap-2">
+                    <select
+                      value={filterStatus}
+                      onChange={(e) => setFilterStatus(e.target.value as any)}
+                      className="px-2 sm:px-3 py-2 h-10 border border-gray-300 rounded-md text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white flex-1 sm:flex-none min-w-[100px]"
+                      aria-label="Lọc theo trạng thái"
+                    >
+                      <option value="ALL">Tất cả</option>
+                      <option value="PENDING">Chờ duyệt</option>
+                      <option value="APPROVED">Đã duyệt</option>
+                      <option value="REJECTED">Từ chối</option>
+                      <option value="CHECKED_IN">Đã nhận</option>
+                      <option value="CHECKED_OUT">Đã trả</option>
+                      <option value="CANCELLED">Đã hủy</option>
+                    </select>
                     <Button
                       variant={showAdvanced ? "primary" : "secondary"}
                       onClick={() => setShowAdvanced(!showAdvanced)}
-                      className="whitespace-nowrap"
+                      className="whitespace-nowrap text-xs sm:text-sm px-3 sm:px-4"
                     >
                        Bộ lọc
                     </Button>
@@ -532,113 +547,216 @@ export default function OfficeBookingsPage() {
                   </div>
                 </div>
               ) : (
-                <div className="overflow-x-auto">
-                <div className="sm:min-w-[1000px]">
-                <Table>
-                  <THead>
-                    <tr>
-                      <th className="px-4 sm:px-6 py-3 bg-gray-50 sticky top-0 z-10 text-center whitespace-nowrap">Mã đặt phòng</th>
-                      <th className="px-4 sm:px-6 py-3 bg-gray-50 sticky top-0 z-10 text-center whitespace-nowrap">Người đặt</th>
-                      <th className="px-4 sm:px-6 py-3 bg-gray-50 sticky top-0 z-10 text-center whitespace-nowrap hidden sm:table-cell">Phòng</th>
-                      <th className="px-4 sm:px-6 py-3 bg-gray-50 sticky top-0 z-10 text-center whitespace-nowrap">Thời gian</th>
-                      <th className="px-4 sm:px-6 py-3 bg-gray-50 sticky top-0 z-10 text-center whitespace-nowrap hidden sm:table-cell">Số khách</th>
-                      <th className="px-4 sm:px-6 py-3 bg-gray-50 sticky top-0 z-10 text-center whitespace-nowrap">Trạng thái</th>
-                      <th className="px-4 sm:px-6 py-3 bg-gray-50 sticky top-0 z-10 text-center whitespace-nowrap">Hành động</th>
-                    </tr>
-                  </THead>
-                  <TBody>
+                <>
+                  {/* Mobile Card View */}
+                  <div className="block md:hidden space-y-3">
                     {filteredBookings.map((booking) => (
-                      <tr key={booking.id} className="odd:bg-white even:bg-gray-50 hover:bg-gray-100">
-                        <td className="px-4 sm:px-6 py-3 sm:py-4 align-middle whitespace-nowrap">
-                          <div className="font-medium text-gray-900">{booking.code}</div>
-                        </td>
-                        <td className="px-4 sm:px-6 py-3 sm:py-4 align-middle whitespace-nowrap">
-                          <div>
-                            <div className="font-medium text-gray-900">{booking.userName || `User #${booking.userId}`}</div>
-                            <div className="text-sm text-gray-500">ID: {booking.userId}</div>
-                          </div>
-                        </td>
-                        <td className="px-4 sm:px-6 py-3 sm:py-4 align-middle whitespace-nowrap hidden sm:table-cell">
-                          <div>
-                            <div className="font-medium text-gray-900">{booking.roomCode || `Room #${booking.roomId}`}</div>
-                            <div className="text-sm text-gray-500">ID: {booking.roomId}</div>
-                          </div>
-                        </td>
-                        <td className="px-4 sm:px-6 py-3 sm:py-4 align-middle">
-                          <div>
-                            <div className="text-xs sm:text-sm text-gray-900">CI: {booking.checkinDate}</div>
-                            <div className="text-xs sm:text-sm text-gray-900">CO: {booking.checkoutDate}</div>
-                            <div className="hidden sm:block text-xs text-gray-500">Đặt lúc: {new Date(booking.created_at).toLocaleString('vi-VN')}</div>
-                          </div>
-                        </td>
-                        <td className="px-4 sm:px-6 py-3 sm:py-4 align-middle whitespace-nowrap hidden sm:table-cell">
-                          <div className="text-sm text-gray-900">{booking.numGuests} khách</div>
-                        </td>
-                        <td className="px-4 sm:px-6 py-3 sm:py-4 align-middle whitespace-nowrap">
-                          {getStatusBadge(booking.status)}
-                        </td>
-                        <td className="px-4 sm:px-6 py-3 sm:py-4 align-middle whitespace-nowrap">
-                          <div className="flex flex-col gap-2">
-                            {booking.status === 'PENDING' && (
-                              <div className="flex space-x-2">
-                                <Button
-                                  onClick={() => {
-                                    setSelectedBooking(booking);
-                                    setApprovalModalOpen(true);
-                                  }}
-                                  variant="primary"
-                                  className="text-xs"
-                                >
-                                  Duyệt
-                                </Button>
-                                <Button
-                                  onClick={() => {
-                                    setSelectedBooking(booking);
-                                    setApprovalModalOpen(true);
-                                  }}
-                                  variant="danger"
-                                  className="text-xs"
-                                >
-                                  Từ chối
-                                </Button>
+                      <Card key={booking.id}>
+                        <CardBody>
+                          <div className="space-y-3">
+                            <div className="flex items-start justify-between">
+                              <div className="flex-1 min-w-0">
+                                <div className="font-semibold text-gray-900 mb-1">{booking.code}</div>
+                                <div className="text-sm text-gray-600">
+                                  {booking.userName || `User #${booking.userId}`}
+                                </div>
+                                <div className="text-sm text-gray-600 mt-1">
+                                  {booking.roomName || booking.roomCode || `Room #${booking.roomId}`}
+                                </div>
                               </div>
-                            )}
-                            {booking.status === 'APPROVED' && (
+                              <div className="ml-2">
+                                {getStatusBadge(booking.status)}
+                              </div>
+                            </div>
+                            
+                            <div className="grid grid-cols-2 gap-2 text-sm">
+                              <div>
+                                <span className="text-gray-500">CI:</span> {booking.checkinDate}
+                              </div>
+                              <div>
+                                <span className="text-gray-500">CO:</span> {booking.checkoutDate}
+                              </div>
+                              <div>
+                                <span className="text-gray-500">Khách:</span> {booking.numGuests}
+                              </div>
+                            </div>
+                            
+                            <div className="flex flex-wrap gap-2 pt-2 border-t">
+                              {booking.status === 'PENDING' && (
+                                <>
+                                  <Button
+                                    onClick={() => {
+                                      setSelectedBooking(booking);
+                                      setApprovalModalOpen(true);
+                                    }}
+                                    variant="primary"
+                                    className="text-xs flex-1 min-w-[80px]"
+                                  >
+                                    Duyệt
+                                  </Button>
+                                  <Button
+                                    onClick={() => {
+                                      setSelectedBooking(booking);
+                                      setApprovalModalOpen(true);
+                                    }}
+                                    variant="danger"
+                                    className="text-xs flex-1 min-w-[80px]"
+                                  >
+                                    Từ chối
+                                  </Button>
+                                </>
+                              )}
+                              {booking.status === 'APPROVED' && (
+                                <Button
+                                  onClick={() => handleCheckin(booking)}
+                                  variant="secondary"
+                                  className="text-xs flex-1"
+                                >
+                                  Check-in
+                                </Button>
+                              )}
+                              {booking.status === 'CHECKED_IN' && (
+                                <Button
+                                  onClick={() => handleCheckout(booking)}
+                                  variant="secondary"
+                                  className="text-xs flex-1"
+                                >
+                                  Check-out
+                                </Button>
+                              )}
                               <Button
-                                onClick={() => handleCheckin(booking)}
+                                onClick={() => {
+                                  setSelectedBooking(booking);
+                                  setDetailModalOpen(true);
+                                }}
                                 variant="secondary"
-                                className="text-xs"
+                                className="text-xs flex-1"
                               >
-                                Check-in
+                                Chi tiết
                               </Button>
-                            )}
-                            {booking.status === 'CHECKED_IN' && (
-                              <Button
-                                onClick={() => handleCheckout(booking)}
-                                variant="secondary"
-                                className="text-xs"
-                              >
-                                Check-out
-                              </Button>
-                            )}
-                            <Button
-                              onClick={() => {
-                                setSelectedBooking(booking);
-                                setDetailModalOpen(true);
-                              }}
-                              variant="secondary"
-                              className="text-xs"
-                            >
-                              Xem chi tiết
-                            </Button>
+                            </div>
                           </div>
-                        </td>
-                      </tr>
+                        </CardBody>
+                      </Card>
                     ))}
-                  </TBody>
-                </Table>
-                </div>
-                </div>
+                  </div>
+
+                  {/* Desktop Table View */}
+                  <div className="hidden md:block overflow-x-auto">
+                    <div className="min-w-[800px]">
+                      <Table>
+                        <THead>
+                          <tr>
+                            <th className="px-3 lg:px-4 py-3 bg-gray-50 sticky top-0 z-10 text-center whitespace-nowrap text-xs lg:text-sm">Mã đặt phòng</th>
+                            <th className="px-2 lg:px-3 py-3 bg-gray-50 sticky top-0 z-10 text-center max-w-[120px] text-xs lg:text-sm">Người đặt</th>
+                            <th className="px-3 lg:px-4 py-3 bg-gray-50 sticky top-0 z-10 text-center whitespace-nowrap text-xs lg:text-sm">Phòng</th>
+                            <th className="px-3 lg:px-4 py-3 bg-gray-50 sticky top-0 z-10 text-center whitespace-nowrap text-xs lg:text-sm">Thời gian</th>
+                            <th className="px-3 lg:px-4 py-3 bg-gray-50 sticky top-0 z-10 text-center whitespace-nowrap text-xs lg:text-sm">Số khách</th>
+                            <th className="px-3 lg:px-4 py-3 bg-gray-50 sticky top-0 z-10 text-center whitespace-nowrap text-xs lg:text-sm">Trạng thái</th>
+                            <th className="px-3 lg:px-4 py-3 bg-gray-50 sticky top-0 z-10 text-center whitespace-nowrap text-xs lg:text-sm">Hành động</th>
+                          </tr>
+                        </THead>
+                        <TBody>
+                          {filteredBookings.map((booking) => (
+                            <tr key={booking.id} className="odd:bg-white even:bg-gray-50 hover:bg-gray-100">
+                              <td className="px-3 lg:px-4 py-3 align-middle whitespace-nowrap">
+                                <div className="font-medium text-gray-900 text-xs lg:text-sm">{booking.code}</div>
+                              </td>
+                              <td className="px-2 lg:px-3 py-3 align-middle max-w-[120px]">
+                                <div className="font-medium text-gray-900 text-xs lg:text-sm break-words">
+                                  {booking.userName || `User #${booking.userId}`}
+                                </div>
+                              </td>
+                              <td className="px-3 lg:px-4 py-3 align-middle whitespace-nowrap">
+                                <div className="font-medium text-gray-900 text-xs lg:text-sm">
+                                  {booking.roomName || booking.roomCode || `Room #${booking.roomId}`}
+                                </div>
+                              </td>
+                              <td className="px-3 lg:px-4 py-3 align-middle">
+                                <div className="text-xs lg:text-sm">
+                                  <div className="text-gray-900">CI: {booking.checkinDate}</div>
+                                  <div className="text-gray-900">CO: {booking.checkoutDate}</div>
+                                  <div className="text-gray-500 text-xs mt-1">
+                                    Đặt lúc: {booking.created_at 
+                                      ? (() => {
+                                          const date = new Date(booking.created_at);
+                                          return isNaN(date.getTime()) 
+                                            ? booking.created_at 
+                                            : date.toLocaleString('vi-VN');
+                                        })()
+                                      : 'N/A'}
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="px-3 lg:px-4 py-3 align-middle whitespace-nowrap">
+                                <div className="text-xs lg:text-sm text-gray-900">{booking.numGuests} khách</div>
+                              </td>
+                              <td className="px-3 lg:px-4 py-3 align-middle whitespace-nowrap">
+                                {getStatusBadge(booking.status)}
+                              </td>
+                              <td className="px-3 lg:px-4 py-3 align-middle whitespace-nowrap">
+                                <div className="flex flex-col gap-1.5">
+                                  {booking.status === 'PENDING' && (
+                                    <div className="flex gap-1.5">
+                                      <Button
+                                        onClick={() => {
+                                          setSelectedBooking(booking);
+                                          setApprovalModalOpen(true);
+                                        }}
+                                        variant="primary"
+                                        className="text-xs px-2 py-1"
+                                      >
+                                        Duyệt
+                                      </Button>
+                                      <Button
+                                        onClick={() => {
+                                          setSelectedBooking(booking);
+                                          setApprovalModalOpen(true);
+                                        }}
+                                        variant="danger"
+                                        className="text-xs px-2 py-1"
+                                      >
+                                        Từ chối
+                                      </Button>
+                                    </div>
+                                  )}
+                                  {booking.status === 'APPROVED' && (
+                                    <Button
+                                      onClick={() => handleCheckin(booking)}
+                                      variant="secondary"
+                                      className="text-xs px-2 py-1"
+                                    >
+                                      Check-in
+                                    </Button>
+                                  )}
+                                  {booking.status === 'CHECKED_IN' && (
+                                    <Button
+                                      onClick={() => handleCheckout(booking)}
+                                      variant="secondary"
+                                      className="text-xs px-2 py-1"
+                                    >
+                                      Check-out
+                                    </Button>
+                                  )}
+                                  <Button
+                                    onClick={() => {
+                                      setSelectedBooking(booking);
+                                      setDetailModalOpen(true);
+                                    }}
+                                    variant="secondary"
+                                    className="text-xs px-2 py-1"
+                                  >
+                                    Chi tiết
+                                  </Button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </TBody>
+                      </Table>
+                    </div>
+                  </div>
+                </>
               )}
             </CardBody>
           </Card>
@@ -683,12 +801,10 @@ export default function OfficeBookingsPage() {
                 <div className="flex flex-col">
                   <span className="text-gray-600 text-xs">Người đặt</span>
                   <span className="font-medium text-gray-900">{selectedBooking.userName || `User #${selectedBooking.userId}`}</span>
-                  <span className="text-xs text-gray-500">ID: {selectedBooking.userId}</span>
                 </div>
                 <div className="flex flex-col">
                   <span className="text-gray-600 text-xs">Phòng</span>
-                  <span className="font-medium text-gray-900">{selectedBooking.roomCode || `Room #${selectedBooking.roomId}`}</span>
-                  <span className="text-xs text-gray-500">ID: {selectedBooking.roomId}</span>
+                  <span className="font-medium text-gray-900">{selectedBooking.roomCode || selectedBooking.roomName || `Room #${selectedBooking.roomId}`}</span>
                 </div>
                 <div className="flex flex-col">
                   <span className="text-gray-600 text-xs">Check-in</span>
@@ -704,11 +820,29 @@ export default function OfficeBookingsPage() {
                 </div>
                 <div className="flex flex-col">
                   <span className="text-gray-600 text-xs">Ngày tạo</span>
-                  <span className="font-medium text-gray-900">{new Date(selectedBooking.created_at).toLocaleString('vi-VN')}</span>
+                  <span className="font-medium text-gray-900">
+                    {selectedBooking.created_at 
+                      ? (() => {
+                          const date = new Date(selectedBooking.created_at);
+                          return isNaN(date.getTime()) 
+                            ? selectedBooking.created_at 
+                            : date.toLocaleString('vi-VN');
+                        })()
+                      : 'N/A'}
+                  </span>
                 </div>
                 <div className="flex flex-col">
                   <span className="text-gray-600 text-xs">Ngày cập nhật</span>
-                  <span className="font-medium text-gray-900">{new Date(selectedBooking.updated_at).toLocaleString('vi-VN')}</span>
+                  <span className="font-medium text-gray-900">
+                    {selectedBooking.updated_at 
+                      ? (() => {
+                          const date = new Date(selectedBooking.updated_at);
+                          return isNaN(date.getTime()) 
+                            ? selectedBooking.updated_at 
+                            : date.toLocaleString('vi-VN');
+                        })()
+                      : 'N/A'}
+                  </span>
                 </div>
                 {selectedBooking.note && (
                   <div className="flex flex-col sm:col-span-2">
@@ -768,7 +902,7 @@ export default function OfficeBookingsPage() {
               <div className="grid grid-cols-2 gap-2 text-sm">
                 <div><span className="font-medium">Mã đặt phòng:</span> {selectedBooking.code}</div>
                 <div><span className="font-medium">Người đặt:</span> {selectedBooking.userName || `User #${selectedBooking.userId}`}</div>
-                <div><span className="font-medium">Phòng:</span> {selectedBooking.roomCode || `Room #${selectedBooking.roomId}`}</div>
+                <div><span className="font-medium">Phòng:</span> {selectedBooking.roomCode || selectedBooking.roomName || `Room #${selectedBooking.roomId}`}</div>
                 <div><span className="font-medium">Số khách:</span> {selectedBooking.numGuests}</div>
                 <div><span className="font-medium">Check-in:</span> {selectedBooking.checkinDate}</div>
                 <div><span className="font-medium">Check-out:</span> {selectedBooking.checkoutDate}</div>

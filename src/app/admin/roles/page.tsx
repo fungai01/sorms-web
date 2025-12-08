@@ -18,13 +18,15 @@ type Role = {
 };
 
 function RolesInner() {
+  // query state declared above
   const router = useRouter();
   const searchParams = useSearchParams();
   const [rows, setRows] = useState<Role[]>([]);
   const [loading, setLoading] = useState(false);
+  const [query, setQuery] = useState("");
 
   // Hook-based roles loading
-  const { data: rolesData, loading: rolesLoading, error, refetch } = useRoles({ page: 0, size: 100 })
+  const { data: rolesData, loading: rolesLoading, error, refetch } = useRoles({ q: query || undefined, page: 0, size: 100 })
   useEffect(() => {
     setLoading(!!rolesLoading)
     if (!rolesData) return
@@ -72,7 +74,6 @@ function RolesInner() {
   useEffect(() => {
     refetch()
   }, [])
-  const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [openDeleteModal, setOpenDeleteModal] = useState(false);
   const [editing, setEditing] = useState<Role | null>(null);
@@ -93,21 +94,11 @@ function RolesInner() {
   const [formError, setFormError] = useState<string | null>(null);
 
   // Filter and sort roles based on query and sort
-  const filtered = rows
-    .filter((r) => {
-      const q = query.trim().toLowerCase();
-      if (!q) return true;
-      return (
-        r.code.toLowerCase().includes(q) ||
-        r.name.toLowerCase().includes(q) ||
-        (r.description || "").toLowerCase().includes(q)
-      );
-    })
-    .sort((a, b) => {
-      const dir = sortOrder === "asc" ? 1 : -1;
-      if (sortKey === "code") return a.code.localeCompare(b.code) * dir;
-      return a.name.localeCompare(b.name) * dir;
-    });
+  const filtered = [...rows].sort((a, b) => {
+    const dir = sortOrder === "asc" ? 1 : -1;
+    if (sortKey === "code") return a.code.localeCompare(b.code) * dir;
+    return a.name.localeCompare(b.name) * dir;
+  });
 
   // Open modal to create a new role
   function openCreate() {
@@ -155,7 +146,7 @@ function RolesInner() {
         if (prevActive !== nextActive && editing.id != null) {
           const action = nextActive ? 'activate' : 'deactivate';
           const toggleResp = await fetch(`/api/system/roles?action=${action}&id=${encodeURIComponent(String(editing.id))}`, {
-            method: 'POST',
+            method: 'PUT',
           });
           if (!toggleResp.ok) {
             const toggleError = await toggleResp.json().catch(() => ({}));
@@ -230,7 +221,7 @@ function RolesInner() {
         params.set('code', role.code)
       }
       params.set('action', 'activate')
-      const resp = await fetch(`/api/system/roles?${params.toString()}`, { method: 'POST' })
+      const resp = await fetch(`/api/system/roles?${params.toString()}`, { method: 'PUT' })
       if (!resp.ok) {
         const errorData = await resp.json().catch(() => ({}))
         throw new Error(errorData.error || 'Kích hoạt vai trò thất bại')

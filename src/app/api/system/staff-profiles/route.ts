@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiClient } from '@/lib/api-client'
+import { isAdmin } from '@/lib/auth-utils'
 
 // GET - list / detail / filter by status or department
 export async function GET(request: NextRequest) {
@@ -46,6 +47,9 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  if (!await isAdmin(request)) {
+    return NextResponse.json({ error: 'Unauthorized - Admin access required' }, { status: 403 })
+  }
   try {
     const body = await request.json().catch(() => ({}))
     const resp = await apiClient.createStaffProfile(body)
@@ -57,6 +61,9 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PUT(request: NextRequest) {
+  if (!await isAdmin(request)) {
+    return NextResponse.json({ error: 'Unauthorized - Admin access required' }, { status: 403 })
+  }
   try {
     const body = await request.json().catch(() => ({}))
     const id = Number(body.id)
@@ -73,6 +80,9 @@ export async function PUT(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
+  if (!await isAdmin(request)) {
+    return NextResponse.json({ error: 'Unauthorized - Admin access required' }, { status: 403 })
+  }
   try {
     const { searchParams } = new URL(request.url)
     const idStr = searchParams.get('id')

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import Input from "@/components/ui/Input";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
@@ -8,7 +8,7 @@ import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import Modal from "@/components/ui/Modal";
 
 import { type Room, type RoomStatus } from '@/lib/types'
-import { useRooms, useRoomTypes } from '@/hooks/useApi'
+import { useRoomsFiltered, useRoomTypes } from '@/hooks/useApi'
 
 const statusOptions: RoomStatus[] = ["AVAILABLE", "OCCUPIED", "MAINTENANCE", "CLEANING", "OUT_OF_SERVICE"]
 
@@ -23,13 +23,12 @@ const statusLabels: Record<RoomStatus, string> = {
 
 export default function RoomsPage() {
   const [rows, setRows] = useState<Room[]>([])
-  const { data: roomsData, refetch: refetchRooms } = useRooms()
+  const [query, setQuery] = useState("")
+  const [filterStatus, setFilterStatus] = useState<"ALL" | RoomStatus>("ALL")
+  const { data: roomsData, refetch: refetchRooms } = useRoomsFiltered(filterStatus !== 'ALL' ? filterStatus : undefined)
   const { data: roomTypesData, refetch: refetchRoomTypes } = useRoomTypes()
   const [roomTypes, setRoomTypes] = useState<any[]>([])
   const [flash, setFlash] = useState<{ type: 'success' | 'error', text: string } | null>(null)
-
-  const [query, setQuery] = useState("")
-  const [filterStatus, setFilterStatus] = useState<"ALL" | RoomStatus>("ALL")
   const [sortKey, setSortKey] = useState<"code" | "roomTypeId">("code")
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc")
   const [page, setPage] = useState(1)
@@ -41,6 +40,14 @@ export default function RoomsPage() {
   const [editOpen, setEditOpen] = useState(false)
   const [edit, setEdit] = useState<{ id?: number, code: string, name: string, roomTypeId: number, floor: number, status: RoomStatus, description: string }>({ code: "", name: "", roomTypeId: 1, floor: 1, status: "AVAILABLE", description: "" })
   const [confirmOpen, setConfirmOpen] = useState<{ open: boolean, id?: number }>({ open: false })
+  const [codeError, setCodeError] = useState<string | null>(null)
+
+  const handleCloseEdit = useCallback(() => {
+    setEditOpen(false)
+    // Reset về giá trị mặc định khi đóng modal
+    setEdit({ code: "", name: "", roomTypeId: 1, floor: 1, status: "AVAILABLE", description: "" })
+    setCodeError(null)
+  }, [])
 
   useEffect(() => {
     if (!flash) return
@@ -48,69 +55,136 @@ export default function RoomsPage() {
     return () => clearTimeout(t)
   }, [flash])
 
-  // Keyboard shortcuts for edit modal
+  // Keyboard shortcuts for edit modal: Enter = Save, Esc = Close (avoid Enter in textarea)
   useEffect(() => {
     if (!editOpen) return
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      const tag = (e.target as HTMLElement | null)?.tagName?.toLowerCase()
+      const isTextarea = tag === 'textarea'
+      const isInput = tag === 'input'
+
+      if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !isTextarea && !isInput) {
         e.preventDefault()
         save()
       } else if (e.key === 'Escape') {
         e.preventDefault()
-        setEditOpen(false)
+        handleCloseEdit()
       }
     }
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [editOpen, edit])
+  }, [editOpen, handleCloseEdit])
+
+  // Global Escape handler: ESC closes any open modal on this page
+  useEffect(() => {
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        if (editOpen) handleCloseEdit()
+        setDetailOpen(false)
+        setConfirmOpen({ open: false })
+      }
+    }
+    document.addEventListener('keydown', onEsc)
+    return () => document.removeEventListener('keydown', onEsc)
+  }, [editOpen, handleCloseEdit])
+
 
   // Sync with hooks data
   useEffect(() => {
-    if (roomsData) setRows(roomsData as Room[])
+    if (Array.isArray(roomsData)) {
+      setRows(roomsData as Room[])
+    } else if (roomsData && Array.isArray((roomsData as any).data)) {
+      // fallback if API returns { data: [...] }
+      setRows((roomsData as any).data)
+    } else if (roomsData == null) {
+      setRows([])
+    }
   }, [roomsData])
 
   useEffect(() => {
-    if (roomTypesData) setRoomTypes(roomTypesData as any[])
+    if (Array.isArray(roomTypesData)) {
+      setRoomTypes(roomTypesData as any[])
+    } else if (roomTypesData && Array.isArray((roomTypesData as any).data)) {
+      setRoomTypes((roomTypesData as any).data)
+    } else if (roomTypesData == null) {
+      setRoomTypes([])
+    }
   }, [roomTypesData])
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    let list = rows.filter(r =>
-      r.code.toLowerCase().includes(q) ||
-      (r.name || "").toLowerCase().includes(q) ||
-      (r.description || "").toLowerCase().includes(q)
-    )
-    if (filterStatus !== "ALL") list = list.filter(r => r.status === filterStatus)
     const dir = sortOrder === 'asc' ? 1 : -1
-    return [...list].sort((a, b) => {
+    const list = Array.isArray(rows) ? rows : []
+    // client-side search by code or name
+    const q = (query || '').trim().toLowerCase()
+    const searched = q
+      ? list.filter(r => r.code.toLowerCase().includes(q) || (r.name || '').toLowerCase().includes(q))
+      : list
+    return [...searched].sort((a, b) => {
       if (sortKey === 'code') return a.code.localeCompare(b.code) * dir
       return (a.roomTypeId - b.roomTypeId) * dir
     })
-  }, [rows, query, filterStatus, sortKey, sortOrder])
+  }, [rows, sortKey, sortOrder, query])
 
-  function openCreate() {
-    setEdit({ code: "", name: "", roomTypeId: 1, floor: 1, status: "AVAILABLE", description: "" })
-    setEditOpen(true)
+  async function openCreate() {
+    // Lấy danh sách phòng mới nhất để sinh code tiếp theo
+    try {
+      const res = await fetch('/api/system/rooms', { credentials: 'include' })
+      const data = await res.json()
+      const items: any[] = Array.isArray(data?.items)
+        ? data.items
+        : Array.isArray(data?.data?.content)
+          ? data.data.content
+          : Array.isArray(data?.content)
+            ? data.content
+            : Array.isArray(data)
+              ? data
+              : []
+      const numbers = items.map((r: any) => {
+        const n = parseInt(String(r.code ?? ''), 10)
+        return Number.isNaN(n) ? Number(r.id ?? 0) : n
+      })
+      const next = String((numbers.length ? Math.max(...numbers) : 0) + 1)
+      setEdit({ code: next, name: "", roomTypeId: 1, floor: 1, status: "AVAILABLE", description: "" })
+    } catch {
+      // fallback nếu lỗi
+      setEdit({ code: "", name: "", roomTypeId: 1, floor: 1, status: "AVAILABLE", description: "" })
+    } finally {
+      setCodeError(null)
+      setFlash(null)
+      setEditOpen(true)
+    }
   }
 
   function openEdit(r: Room) {
-    setEdit({ 
+    // Reset state trước khi set dữ liệu mới
+    setCodeError(null)
+    setFlash(null)
+    // Đảm bảo dữ liệu được set đúng - sử dụng giá trị thực từ r, không dùng giá trị mặc định
+    const editData = { 
       id: r.id, 
-      code: r.code, 
+      code: r.code || "", 
       name: r.name || "", 
-      roomTypeId: r.roomTypeId, 
+      roomTypeId: r.roomTypeId || 1, 
       floor: r.floor || 1, 
-      status: r.status, 
+      status: r.status || "AVAILABLE", 
       description: r.description || "" 
-    })
-    setEditOpen(true)
+    }
+    // Đóng modal trước (nếu đang mở) để reset
+    setEditOpen(false)
+    // Set dữ liệu của phòng được chọn
+    setEdit(editData)
+    // Mở modal sau khi đã set dữ liệu - sử dụng setTimeout để đảm bảo state được cập nhật
+    setTimeout(() => {
+      setEditOpen(true)
+    }, 10)
   }
 
   async function save() {
     if (!edit.code.trim()) {
-      setFlash({ type: 'error', text: 'Vui lòng nhập Code.' })
+      setCodeError('Vui lòng nhập Code.')
       return
     }
     const payload = {
@@ -121,24 +195,74 @@ export default function RoomsPage() {
       status: edit.status,
       description: edit.description.trim() || "",
     }
+
+    const suggestNextCode = async () => {
+      try {
+        const res = await fetch('/api/system/rooms', { credentials: 'include' })
+        const data = await res.json()
+        const items: any[] = Array.isArray(data?.items)
+          ? data.items
+          : Array.isArray(data?.data?.content)
+            ? data.data.content
+            : Array.isArray(data?.content)
+              ? data.content
+              : Array.isArray(data)
+                ? data
+                : []
+        const numbers = items.map((r: any) => {
+          const n = parseInt(String(r.code ?? ''), 10)
+          return Number.isNaN(n) ? Number(r.id ?? 0) : n
+        })
+        const maxNum = numbers.length ? Math.max(...numbers) : 0
+        return String(maxNum + 1)
+      } catch {
+        const numbers = rows.map(r => {
+          const n = parseInt(r.code, 10)
+          return Number.isNaN(n) ? r.id : n
+        })
+        const maxNum = numbers.length ? Math.max(...numbers) : 0
+        return String(maxNum + 1)
+      }
+    }
+
     if (edit.id) {
-      await fetch('/api/system/rooms', {
+      const res = await fetch('/api/system/rooms', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: edit.id, ...payload })
       })
-      await refetchRooms()
-      setFlash({ type: 'success', text: 'Đã cập nhật phòng.' })
+      if (res.ok) {
+        await refetchRooms()
+        setFlash({ type: 'success', text: 'Đã cập nhật phòng.' })
+        handleCloseEdit()
+      } else {
+        const err = await res.json().catch(() => ({}))
+        const msg = (err && (err.error || err.message)) || 'Có lỗi xảy ra khi cập nhật.'
+        setCodeError(msg)
+      }
     } else {
-      await fetch('/api/system/rooms', {
+      const res = await fetch('/api/system/rooms', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       })
-      await refetchRooms()
-      setFlash({ type: 'success', text: 'Đã tạo phòng mới.' })
+      if (res.ok) {
+        await refetchRooms()
+        setFlash({ type: 'success', text: 'Đã tạo phòng mới.' })
+        handleCloseEdit()
+      } else {
+        const status = res.status
+        const err = await res.json().catch(() => ({}))
+        const rawMsg = (err && (err.error || err.message)) || ''
+        if (status === 409 || /(exist|duplicate|already|đã tồn tại|trùng)/i.test(rawMsg)) {
+          const next = await suggestNextCode()
+          setEdit(prev => ({ ...prev, code: next }))
+          setCodeError(`Mã (code) đã tồn tại. Đã tự động đặt thành ${next}.`)
+        } else {
+          setCodeError(rawMsg || 'Có lỗi xảy ra khi tạo phòng.')
+        }
+      }
     }
-    setEditOpen(false)
   }
 
   function confirmDelete(id: number) {
@@ -154,14 +278,7 @@ export default function RoomsPage() {
   }
 
   async function activateRoom(id: number) {
-    try {
-      const resp = await fetch(`/api/system/rooms/${id}/activate`, { method: 'PUT' })
-      if (!resp.ok) throw new Error('Kích hoạt phòng thất bại')
-      setFlash({ type: 'success', text: 'Đã kích hoạt phòng thành công.' })
-      await refetchRooms()
-    } catch (e) {
-      setFlash({ type: 'error', text: e instanceof Error ? e.message : 'Có lỗi xảy ra' })
-    }
+    setFlash({ type: 'error', text: 'Chức năng kích hoạt phòng hiện chưa được backend hỗ trợ' })
   }
 
   function renderStatusChip(s: RoomStatus) {
@@ -173,8 +290,12 @@ export default function RoomsPage() {
   }
 
   const getRoomTypeName = (roomTypeId: number) => {
-    const roomType = roomTypes.find(rt => rt.id === roomTypeId)
-    return roomType ? roomType.name : `Type ${roomTypeId}`
+    if (!roomTypeId) return 'Chưa xác định'
+    const roomType = roomTypes.find(rt => Number(rt.id) === Number(roomTypeId))
+    if (roomType && roomType.name && roomType.name.trim() !== '') {
+      return roomType.name
+    }
+    return `Type ${roomTypeId}`
   }
 
   return (
@@ -205,9 +326,9 @@ export default function RoomsPage() {
         </div>
       </div>
 
-      {/* Flash message */}
-      {flash && (
-        <div className={`px-3 sm:px-4 lg:px-6 py-2 ${flash.type === 'success' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'}`}>
+      {/* Success Messages */}
+      {flash && flash.type === 'success' && (
+        <div className={`px-3 sm:px-4 lg:px-6 py-2 bg-green-50 text-green-800`}>
           {flash.text}
         </div>
       )}
@@ -243,7 +364,7 @@ export default function RoomsPage() {
                 className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                 >
                 <option value="code">Theo Code</option>
-                <option value="roomTypeId">Theo Loại phòng</option>
+                <option value="roomTypeId">Theo Dãy Tòa</option>
                 </select>
               </div>
           </div>
@@ -305,7 +426,7 @@ export default function RoomsPage() {
               className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
             >
               <option value="code">Theo Code</option>
-              <option value="roomTypeId">Theo Loại phòng</option>
+              <option value="roomTypeId">Theo Dãy Tòa</option>
             </select>
           </div>
           
@@ -364,7 +485,7 @@ export default function RoomsPage() {
                   <tr className="bg-gray-50 text-gray-700">
                     <th className="px-4 py-3 text-center font-semibold">Code</th>
                     <th className="px-4 py-3 text-center font-semibold">Tên phòng</th>
-                    <th className="px-4 py-3 text-center font-semibold">Loại phòng</th>
+                    <th className="px-4 py-3 text-center font-semibold">Dãy Tòa</th>
                     <th className="px-4 py-3 text-center font-semibold">Tầng</th>
                     <th className="px-4 py-3 text-center font-semibold">Trạng thái phòng</th>
                     <th className="px-4 py-3 text-center font-semibold">Kích hoạt</th>
@@ -417,14 +538,11 @@ export default function RoomsPage() {
                               Vô hiệu
                             </Button>
                           ) : (
-                            <Button
-                              className="h-8 px-3 text-xs bg-green-600 hover:bg-green-700"
-                              onClick={() => activateRoom(row.id)}
-                            >
-                              Kích hoạt
-                            </Button>
+                            null
                           )}
-                        </div>
+
+                          </div>
+
                       </td>
                     </tr>
                   ))}
@@ -624,13 +742,13 @@ export default function RoomsPage() {
                     </div>
                   </div>
 
-                  {/* Loại phòng */}
+                  {/* Dãy Tòa */}
                   <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-blue-200">
                     <div className="flex items-center gap-2 mb-2">
                       <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
                       </svg>
-                      <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Loại phòng</span>
+                      <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Dãy Tòa</span>
                     </div>
                     <p className="text-base sm:text-lg font-bold text-blue-900 break-words leading-relaxed">{getRoomTypeName(selected.roomTypeId)}</p>
                   </div>
@@ -670,9 +788,9 @@ export default function RoomsPage() {
       </Modal>
 
       {/* Edit Modal */}
-      <Modal open={editOpen} onClose={() => setEditOpen(false)} title={edit.id ? 'Sửa phòng' : 'Thêm phòng mới'}>
+      <Modal open={editOpen} onClose={handleCloseEdit} title={edit.id ? 'Sửa phòng' : 'Thêm phòng mới'}>
         <div className="p-4 sm:p-6">
-          <div className="space-y-4">
+          <div className="space-y-4" key={edit.id || 'new'}>
             {/* Form */}
             <div className="space-y-3">
               {/* Code và Tên phòng */}
@@ -680,15 +798,20 @@ export default function RoomsPage() {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Code *</label>
                   <Input
+                    key={`code-${edit.id || 'new'}`}
                     value={edit.code}
-                    onChange={(e) => setEdit({ ...edit, code: e.target.value })}
+                    onChange={(e) => { setEdit({ ...edit, code: e.target.value }); setCodeError(null); }}
                     placeholder="Nhập code phòng"
-                    className="w-full"
+                    className={`w-full ${codeError ? 'border-red-500 focus:ring-red-500' : ''}`}
                   />
+                  {codeError && (
+                    <div className="mt-1 text-xs text-red-600">{codeError}</div>
+                  )}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Tên phòng</label>
                   <Input
+                    key={`name-${edit.id || 'new'}`}
                     value={edit.name}
                     onChange={(e) => setEdit({ ...edit, name: e.target.value })}
                     placeholder="Nhập tên phòng"
@@ -697,11 +820,12 @@ export default function RoomsPage() {
                 </div>
               </div>
 
-              {/* Loại phòng và Tầng */}
+              {/* Dãy Tòa và Tầng */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Loại phòng *</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Dãy Tòa *</label>
                   <select
+                    key={`roomTypeId-${edit.id || 'new'}`}
                     value={edit.roomTypeId}
                     onChange={(e) => setEdit({ ...edit, roomTypeId: Number(e.target.value) })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -714,6 +838,7 @@ export default function RoomsPage() {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Tầng *</label>
                   <Input
+                    key={`floor-${edit.id || 'new'}`}
                     type="number"
                     min="1"
                     max="50"
@@ -729,6 +854,7 @@ export default function RoomsPage() {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Trạng thái *</label>
                 <select
+                  key={`status-${edit.id || 'new'}`}
                   value={edit.status}
                   onChange={(e) => setEdit({ ...edit, status: e.target.value as RoomStatus })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -743,6 +869,7 @@ export default function RoomsPage() {
               <div className="hidden sm:block">
                 <label className="block text-sm font-medium text-gray-700 mb-1">Mô tả</label>
                 <textarea
+                  key={`description-${edit.id || 'new'}`}
                   value={edit.description}
                   onChange={(e) => setEdit({ ...edit, description: e.target.value })}
                   placeholder="Nhập mô tả phòng"
@@ -756,7 +883,7 @@ export default function RoomsPage() {
             <div className="flex flex-row gap-3 pt-3 border-t border-gray-200">
               <Button 
                 variant="secondary" 
-                onClick={() => setEditOpen(false)}
+                onClick={handleCloseEdit}
                 className="flex-1"
               >
                 Hủy bỏ
@@ -773,18 +900,17 @@ export default function RoomsPage() {
       </Modal>
 
       {/* Delete Confirmation Modal */}
-      <Modal open={confirmOpen.open} onClose={() => setConfirmOpen({ open: false })} title="Xác nhận vô hiệu hóa">
+      <Modal open={confirmOpen.open} onClose={() => setConfirmOpen({ open: false })} title="Xác nhận xóa">
         <div className="p-6">
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Xác nhận vô hiệu hóa</h2>
           <p className="text-gray-600 mb-6">
-            Bạn có chắc muốn vô hiệu hóa phòng này? Phòng sẽ không bị xóa hoàn toàn và có thể được kích hoạt lại sau.
+            Bạn có chắc muốn xóa phòng này? Phòng sẽ bị xóa vĩnh viễn khỏi hệ thống.
           </p>
           <div className="flex justify-end gap-3">
             <Button variant="secondary" onClick={() => setConfirmOpen({ open: false })}>
               Hủy
             </Button>
             <Button variant="danger" onClick={doDelete}>
-              Vô hiệu hóa
+              Xóa
             </Button>
           </div>
         </div>

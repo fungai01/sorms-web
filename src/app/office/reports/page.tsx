@@ -98,7 +98,7 @@ export default function OfficeReportsPage() {
         'ID': room.id,
         'Mã phòng': room.code,
         'Tên phòng': room.name || '',
-        'ID loại phòng': room.roomTypeId,
+        'ID Dãy Tòa': room.roomTypeId,
         'Tầng': room.floor || '',
         'Trạng thái': room.status,
         'Mô tả': room.description || ''

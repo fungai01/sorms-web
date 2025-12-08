@@ -48,17 +48,24 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
   useEffect(() => {
     const getUserRole = () => {
       if (typeof window !== 'undefined') {
-        return sessionStorage.getItem('userRole') || 'user';
+        if (isAdmin) return 'admin';
+        if (isOffice) return 'office';
+        if (isStaff) return 'staff';
+        if (isSecurity) return 'security';
+        if (isUser) return 'user';
+        return (sessionStorage.getItem('userRole') as string) || 'user';
       }
       return 'user';
     };
     
-    const userRole = getUserRole() as 'admin' | 'office' | 'staff' | 'user';
+    const userRole = getUserRole() as 'admin' | 'office' | 'staff' | 'security' | 'user';
     setNotifications(getNotificationsByRole(userRole));
 
     // Listen for notification updates
     const handleNotificationUpdate = (event: CustomEvent) => {
-      setNotifications(getNotificationsByRole(userRole));
+      // Re-evaluate role in case route changed
+      const currentRole = getUserRole() as 'admin' | 'office' | 'staff' | 'security' | 'user';
+      setNotifications(getNotificationsByRole(currentRole));
     };
 
     if (typeof window !== 'undefined') {
@@ -70,7 +77,7 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
         window.removeEventListener('notificationsUpdated', handleNotificationUpdate as EventListener);
       }
     };
-  }, []);
+  }, [isAdmin, isOffice, isStaff, isSecurity, isUser]);
 
   // Function to load user info including avatar
   const loadUserInfo = () => {
@@ -213,10 +220,10 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
     window.location.href = '/login';
   };
 
-  // Mark notification as read and navigate to notifications page
-  const handleNotificationClick = (id: number) => {
+  // Mark notification as read and navigate to appropriate page
+  const handleNotificationClick = (notification: Notification) => {
     // Mark as read using the notification system
-    markAsRead(id);
+    markAsRead(notification.id);
 
     // Close notification dropdown
     setNotificationMenuOpen(false);
@@ -226,8 +233,20 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
       sessionStorage.setItem('previousPage', window.location.pathname);
     }
     
-    // Navigate to notifications page
-    router.push('/notifications');
+    // Navigate based on notification category
+    if (notification.category === 'booking') {
+      // Navigate to bookings page based on role
+      if (isAdmin) {
+        router.push('/admin/bookings');
+      } else if (isOffice) {
+        router.push('/office/bookings');
+      } else {
+        router.push('/notifications');
+      }
+    } else {
+      // For other notification types, go to notifications page
+      router.push('/notifications');
+    }
   };
 
   const unreadCount = notifications.filter(n => n.unread).length;
@@ -295,7 +314,7 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
                     {notifications.map((notification) => (
                       <div
                         key={notification.id}
-                        onClick={() => handleNotificationClick(notification.id)}
+                        onClick={() => handleNotificationClick(notification)}
                         className={`p-4 border-b border-gray-100 hover:bg-gray-50 cursor-pointer transition-colors ${
                           notification.unread ? 'bg-blue-50 border-l-4 border-l-blue-500' : ''
                         }`}
