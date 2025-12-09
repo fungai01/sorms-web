@@ -182,23 +182,6 @@ export default function CreateServicePage() {
 
   return (
     <>
-      {/* Header */}
-      <div className="bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 text-white shadow-lg px-4 py-10">
-        <div className="max-w-4xl mx-auto">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center">
-              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-              </svg>
-            </div>
-            <div>
-              <h1 className="text-2xl lg:text-3xl font-bold text-white">Đặt dịch vụ</h1>
-              <p className="text-sm lg:text-base text-indigo-100 mt-1">Chọn nhân viên, dịch vụ và thời gian</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
       {/* Content */}
       <div className="max-w-4xl mx-auto px-4 py-6">
         <div className="space-y-6">

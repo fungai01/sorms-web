@@ -24,6 +24,20 @@ type StaffTask = {
   isActive?: boolean
 }
 
+function normalizeTask(t: any): StaffTask {
+  return {
+    id: Number(t.id) || 0,
+    title: String(t.title || t.name || ''),
+    assignee: t.assignee !== undefined ? String(t.assignee) : (t.assignedTo !== undefined ? String(t.assignedTo) : ''),
+    due_date: t.due_date || t.dueDate || '',
+    priority: (t.priority || 'MEDIUM').toUpperCase() as TaskPriority,
+    status: (t.status || 'TODO').toUpperCase() as TaskStatus,
+    description: t.description || t.note || '',
+    created_at: t.created_at || t.createdAt || '',
+    isActive: t.isActive !== undefined ? !!t.isActive : undefined,
+  }
+}
+
 // Remove mock; always use API
 
 export default function TasksPage() {
@@ -52,8 +66,8 @@ export default function TasksPage() {
   const { data: tasksData, loading: tasksLoading, error, refetch } = useStaffTasks()
   useEffect(() => {
     if (tasksData) {
-      if (Array.isArray((tasksData as any).items)) setRows(((tasksData as any).items) as StaffTask[])
-      else if (Array.isArray(tasksData as any)) setRows(tasksData as any)
+      if (Array.isArray((tasksData as any).items)) setRows(((tasksData as any).items).map(normalizeTask))
+      else if (Array.isArray(tasksData as any)) setRows((tasksData as any).map(normalizeTask))
       else setRows([])
     }
     // Sync local loading indicator
@@ -103,8 +117,8 @@ export default function TasksPage() {
     return [...list].sort((a, b) => {
       if (sortKey === 'id') return (a.id - b.id) * dir
       if (sortKey === 'due') return (a.due_date || '').localeCompare(b.due_date || '') * dir
-      if (sortKey === 'priority') return priorityWeight(a.priority) - priorityWeight(b.priority) * dir
-      return a.created_at.localeCompare(b.created_at) * dir
+      if (sortKey === 'priority') return (priorityWeight(a.priority) - priorityWeight(b.priority)) * dir
+      return (a.created_at || '').localeCompare(b.created_at || '') * dir
     })
   }, [rows, query, filterStatus, sortKey, sortOrder])
 
@@ -678,7 +692,7 @@ export default function TasksPage() {
                   </svg>
                   <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Ngày tạo</span>
                 </div>
-                <p className="text-sm sm:text-base font-bold text-blue-900">{selected.created_at.replace('T',' ')}</p>
+                <p className="text-sm sm:text-base font-bold text-blue-900">{selected.created_at ? selected.created_at.replace('T',' ') : '—'}</p>
               </div>
             </div>
 

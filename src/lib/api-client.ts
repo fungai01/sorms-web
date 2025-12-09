@@ -354,7 +354,9 @@ class ApiClient {
   }
 
   async getStaffProfilesByStatus(status: string) {
-    return this.get(`/staff-profiles/by-status?status=${encodeURIComponent(status)}`)
+    // Backend expects isActive boolean: ACTIVE -> true, INACTIVE -> false
+    const isActive = status === 'ACTIVE'
+    return this.get(`/staff-profiles/by-status?isActive=${isActive}`)
   }
 
   async getStaffProfilesByDepartment(department: string) {
