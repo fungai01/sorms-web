@@ -7,6 +7,8 @@ import Input from "@/components/ui/Input";
 import Modal from "@/components/ui/Modal";
 import dynamic from "next/dynamic";
 import { Html5Qrcode } from "html5-qrcode";
+import { cookieManager } from "@/lib/http";
+import { API_CONFIG } from "@/lib/config";
 
 // Dynamic import Webcam để tránh SSR issues
 const WebcamComponent = dynamic(
@@ -581,9 +583,36 @@ export default function SecurityDashboardPage() {
       setLoading(true);
       setFlash(null);
 
+      // Validate thời gian check-in trước khi gọi API
+      if (result.checkinDate && result.checkoutDate) {
+        const now = new Date();
+        const checkinDate = new Date(result.checkinDate);
+        const checkoutDate = new Date(result.checkoutDate);
+        
+        // Kiểm tra thời gian hiện tại có trong khoảng check-in đến check-out không
+        if (now < checkinDate) {
+          setFlash({ 
+            type: 'error', 
+            text: `Thời gian check-in chưa đến. Ngày check-in bắt đầu từ: ${checkinDate.toLocaleString('vi-VN')}` 
+          });
+          setLoading(false);
+          return;
+        }
+        
+        if (now > checkoutDate) {
+          setFlash({ 
+            type: 'error', 
+            text: `Thời gian check-in đã quá hạn. Ngày check-out là: ${checkoutDate.toLocaleString('vi-VN')}` 
+          });
+          setLoading(false);
+          return;
+        }
+      }
+
       const screenshot = webcamRef.current.getScreenshot();
       if (!screenshot) {
         setFlash({ type: 'error', text: 'Không thể chụp ảnh từ camera' });
+        setLoading(false);
         return;
       }
 
@@ -591,32 +620,102 @@ export default function SecurityDashboardPage() {
       const blob = await imgRes.blob();
       const file = new File([blob], `checkin-face-${Date.now()}.jpg`, { type: blob.type || 'image/jpeg' });
 
+      // Validate required fields
+      if (!result.bookingId || !result.userId) {
+        setFlash({ type: 'error', text: 'Thiếu thông tin booking hoặc user. Vui lòng quét lại mã QR.' });
+        setLoading(false);
+        return;
+      }
+
       const formData = new FormData();
       formData.append('bookingId', String(result.bookingId));
       formData.append('userId', String(result.userId));
       formData.append('faceImage', file);
-      formData.append('faceRef', 'true');
+      formData.append('faceRef', 'true'); // Backend expects boolean, Spring will convert string "true" to boolean
 
-      const res = await fetch(`/api/security/bookings/${result.bookingId}/checkin`, {
-        method: 'POST',
-        body: formData,
-        credentials: 'include',
-      });
-
-      const data = await res.json().catch(() => ({}));
-      
-      // Handle backend response structure: { responseCode, message, data }
-      if (!res.ok) {
-        const errorMessage = data?.message || data?.error || 'Không thể thực hiện check-in';
-        setFlash({ type: 'error', text: errorMessage });
-        return;
+      // Get token from cookie using cookieManager
+      let token: string | null = null
+      try {
+        token = cookieManager.getAccessToken()
+        if (!token) {
+          const userInfo = cookieManager.getUserInfo<any>()
+          if (userInfo?.token) {
+            token = userInfo.token
+          }
+        }
+      } catch (error) {
+        console.warn('[Check-in] Error getting token from cookie:', error)
       }
 
-      // Check responseCode if present (backend format)
-      if (data.responseCode && data.responseCode !== 'S0000' && data.responseCode !== 'string') {
-        const errorMessage = data?.message || data?.error || 'Không thể thực hiện check-in';
-        setFlash({ type: 'error', text: errorMessage });
-        return;
+      const headers: HeadersInit = {}
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`
+      } else {
+        console.warn('[Check-in] No token found, request may fail at backend')
+      }
+
+      // Build backend URL directly
+      const backendUrl = `${API_CONFIG.BASE_URL}/bookings/${result.bookingId}/checkin`
+      
+      console.log('[Check-in] Sending request to backend:', {
+        url: backendUrl,
+        bookingId: result.bookingId,
+        userId: result.userId,
+        hasToken: !!token,
+        fileSize: file.size,
+        fileName: file.name
+      })
+
+      const res = await fetch(backendUrl, {
+        method: 'POST',
+        headers,
+        body: formData,
+        credentials: 'include', // Include cookies for CORS
+      });
+
+      // Parse response
+      let data: any = {}
+      try {
+        const text = await res.text()
+        if (text) {
+          data = JSON.parse(text)
+        }
+      } catch (parseError) {
+        console.error('[Check-in] Failed to parse response:', parseError)
+        if (!res.ok) {
+          setFlash({ type: 'error', text: `Lỗi từ server: ${res.status} ${res.statusText}` })
+          setLoading(false)
+          return
+        }
+      }
+      
+      console.log('[Check-in] Response:', { status: res.status, data })
+      
+      // Handle error responses
+      if (!res.ok) {
+        const responseCode = data?.responseCode || data?.error
+        let errorMessage = data?.message || data?.error || `Lỗi ${res.status}: Không thể thực hiện check-in`
+        
+        setFlash({ type: 'error', text: errorMessage })
+        setLoading(false)
+        return
+      }
+
+      // Check responseCode in success response (backend format: { responseCode: 'S0000', data: {...} })
+      if (data.responseCode && data.responseCode !== 'S0000') {
+        let errorMessage = data?.message || data?.error || 'Không thể thực hiện check-in'
+        
+        // Handle non-success response codes
+        if (data.responseCode === 'S0004' || data.responseCode === 'INVALID_REQUEST') {
+          errorMessage = 'Thời gian check-in không hợp lệ.\n' +
+            'Vui lòng kiểm tra:\n' +
+            '• Thời gian hiện tại phải trong khoảng từ ngày check-in đến ngày check-out\n' +
+            '• Booking phải ở trạng thái APPROVED'
+        }
+        
+        setFlash({ type: 'error', text: errorMessage })
+        setLoading(false)
+        return
       }
 
       // Extract check-in data from response

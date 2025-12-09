@@ -436,20 +436,61 @@ class ApiClient {
     const rawRoomId = bookingData.roomId || bookingData.room_id
     const rawNumGuests = bookingData.numGuests || bookingData.num_guests || bookingData.guests || 1
     
+    // Format datetime strings to ensure they're in the correct format (YYYY-MM-DDTHH:mm:ss)
+    const formatDateTime = (dateTimeStr: string | undefined): string | undefined => {
+      if (!dateTimeStr) return dateTimeStr
+      
+      // Nếu đã là format đúng (YYYY-MM-DDTHH:mm:ss), giữ nguyên
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(dateTimeStr)) {
+        return dateTimeStr
+      }
+      
+      // Nếu thiếu seconds (YYYY-MM-DDTHH:mm), thêm :00
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(dateTimeStr)) {
+        return `${dateTimeStr}:00`
+      }
+      
+      // Nếu có timezone, bỏ timezone
+      if (dateTimeStr.includes('+') || dateTimeStr.endsWith('Z')) {
+        const withoutTz = dateTimeStr.replace(/[+-]\d{2}:\d{2}$/, '').replace(/Z$/, '')
+        if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(withoutTz)) {
+          return `${withoutTz}:00`
+        }
+        return withoutTz
+      }
+      
+      return dateTimeStr
+    }
+    
     const formattedData: any = {
       code: bookingData.code || generateBookingCode(),
       // Backend yêu cầu userId dạng string
       userId: rawUserId != null ? String(rawUserId) : null,
       // Backend yêu cầu roomId dạng Long (number)
       roomId: rawRoomId != null ? Number(rawRoomId) : null,
-      // Backend yêu cầu checkinDate dạng LocalDateTime (ISO datetime string)
-      checkinDate: bookingData.checkinDate || bookingData.checkin_date || bookingData.checkIn,
-      // Backend yêu cầu checkoutDate dạng LocalDateTime (ISO datetime string)
-      checkoutDate: bookingData.checkoutDate || bookingData.checkout_date || bookingData.checkOut,
+      // Backend yêu cầu checkinDate dạng LocalDateTime (ISO datetime string without timezone)
+      checkinDate: formatDateTime(bookingData.checkinDate || bookingData.checkin_date || bookingData.checkIn),
+      // Backend yêu cầu checkoutDate dạng LocalDateTime (ISO datetime string without timezone)
+      checkoutDate: formatDateTime(bookingData.checkoutDate || bookingData.checkout_date || bookingData.checkOut),
       // Backend yêu cầu numGuests dạng Integer (number)
       numGuests: rawNumGuests != null ? Number(rawNumGuests) : 1,
       note: bookingData.note || bookingData.purpose || '',
     }
+    
+    // Validate required fields
+    if (!formattedData.userId) {
+      console.warn('⚠️ createBooking: userId is missing')
+    }
+    if (!formattedData.roomId) {
+      console.warn('⚠️ createBooking: roomId is missing')
+    }
+    if (!formattedData.checkinDate) {
+      console.warn('⚠️ createBooking: checkinDate is missing')
+    }
+    if (!formattedData.checkoutDate) {
+      console.warn('⚠️ createBooking: checkoutDate is missing')
+    }
+    
     // Không gửi status vì backend không có trong CreateBookingRequest
     return this.post('/bookings', formattedData, options)
   }
@@ -488,6 +529,17 @@ class ApiClient {
 
   async checkinBooking(id: number) {
     return this.post(`/bookings/${id}/checkin`)
+  }
+
+  async checkoutBooking(id: number, userId?: string) {
+    // Backend format: CheckoutBookingRequest { bookingId: Long, userId: String }
+    const payload: any = {
+      bookingId: id,
+    }
+    if (userId) {
+      payload.userId = String(userId)
+    }
+    return this.post(`/bookings/${id}/checkout`, payload)
   }
 
   async approveBooking(id: number, approverId?: string, reason?: string) {

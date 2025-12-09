@@ -26,6 +26,8 @@ export default function ServicesPage() {
 
   const [editOpen, setEditOpen] = useState(false)
   const [edit, setEdit] = useState<{ id?: number, code: string, name: string, unitPrice: number, unitName: string, description: string, isActive: boolean }>({ code: '', name: '', unitPrice: 0, unitName: '', description: '', isActive: true })
+  const [editMessage, setEditMessage] = useState<{ type: 'info' | 'warning' | 'error', text: string } | null>(null)
+  const [fieldErrors, setFieldErrors] = useState<{ code?: string, name?: string, unitPrice?: string, unitName?: string }>({})
   const [confirmOpen, setConfirmOpen] = useState<{ open: boolean, id?: number }>({ open: false })
 
   useEffect(() => { if (!flash) return; const t = setTimeout(() => setFlash(null), 3000); return () => clearTimeout(t) }, [flash])
@@ -86,8 +88,42 @@ export default function ServicesPage() {
     })
   }, [rows, query, sortKey, sortOrder])
 
+  // Hàm tự động tạo code dịch vụ mới (SV001, SV002, ...)
+  function generateServiceCode(): string {
+    // Lấy tất cả các code hiện có
+    const existingCodes = rows
+      .map(s => s.code.toUpperCase())
+      .filter(code => /^SV\d+$/.test(code)) // Chỉ lấy code dạng SV001, SV002, ...
+    
+    if (existingCodes.length === 0) {
+      return 'SV001'
+    }
+    
+    // Tìm số lớn nhất
+    const numbers = existingCodes
+      .map(code => {
+        const match = code.match(/^SV(\d+)$/)
+        return match ? parseInt(match[1], 10) : 0
+      })
+      .filter(num => num > 0)
+    
+    if (numbers.length === 0) {
+      return 'SV001'
+    }
+    
+    const maxNumber = Math.max(...numbers)
+    const nextNumber = maxNumber + 1
+    
+    // Format với 3 chữ số (001, 002, ...)
+    return `SV${String(nextNumber).padStart(3, '0')}`
+  }
+
   function openCreate() {
-    setEdit({ code: '', name: '', unitPrice: 0, unitName: '', description: '', isActive: true })
+    // Tự động tạo code mới
+    const newCode = generateServiceCode()
+    setEdit({ code: newCode, name: '', unitPrice: 0, unitName: '', description: '', isActive: true })
+    setEditMessage(null) // Reset message khi mở form
+    setFieldErrors({}) // Reset field errors
     setEditOpen(true)
   }
 
@@ -101,29 +137,79 @@ export default function ServicesPage() {
       description: s.description || '', 
       isActive: s.isActive 
     })
+    setEditMessage(null) // Reset message khi mở form
+    setFieldErrors({}) // Reset field errors
     setEditOpen(true)
   }
 
   async function save() {
-    if (!edit.code.trim() || !edit.name.trim()) {
-      setFlash({ type: 'error', text: 'Vui lòng nhập Code và Tên dịch vụ.' })
-      return
+    // Reset field errors
+    const errors: { code?: string, name?: string, unitPrice?: string, unitName?: string } = {}
+    
+    // Validation
+    if (!edit.code.trim()) {
+      errors.code = 'Vui lòng nhập Code dịch vụ.'
+    }
+    if (!edit.name.trim()) {
+      errors.name = 'Vui lòng nhập Tên dịch vụ.'
     }
     if (!edit.unitName.trim()) {
-      setFlash({ type: 'error', text: 'Vui lòng nhập Đơn vị.' })
-      return
+      errors.unitName = 'Vui lòng nhập Đơn vị.'
     }
     if (edit.unitPrice === undefined || edit.unitPrice === null || isNaN(edit.unitPrice)) {
-      setFlash({ type: 'error', text: 'Vui lòng nhập giá dịch vụ.' })
+      errors.unitPrice = 'Vui lòng nhập giá dịch vụ.'
+    } else if (edit.unitPrice < 0) {
+      errors.unitPrice = 'Giá dịch vụ không được âm.'
+    }
+    
+    // Nếu có lỗi, hiển thị và dừng lại
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors)
       return
     }
-    if (edit.unitPrice < 0) {
-      setFlash({ type: 'error', text: 'Giá dịch vụ không được âm.' })
-      return
+    
+    // Clear errors nếu validation pass
+    setFieldErrors({})
+    
+    // Kiểm tra code trùng và tự động tạo code mới nếu cần
+    let finalCode = edit.code.trim().toUpperCase()
+    
+    if (!edit.id) {
+      // Khi tạo mới: nếu code trống, tự động tạo
+      if (!finalCode) {
+        finalCode = generateServiceCode()
+        setEdit({ ...edit, code: finalCode })
+        setEditMessage({ type: 'info', text: `Đã tự động tạo code: "${finalCode}"` })
+      } else {
+        // Kiểm tra trùng và tự động tạo code mới
+        const existingService = rows.find(s => s.code.toUpperCase() === finalCode)
+        if (existingService) {
+          // Nếu trùng, tự động tạo code mới
+          const oldCode = finalCode
+          finalCode = generateServiceCode()
+          // Cập nhật state để hiển thị code mới trong form
+          setEdit({ ...edit, code: finalCode })
+          // Thông báo trong form
+          setEditMessage({ type: 'warning', text: `Code "${oldCode}" đã tồn tại. Đã tự động đổi thành "${finalCode}".` })
+        } else {
+          // Code hợp lệ, xóa message
+          setEditMessage(null)
+        }
+      }
+    } else {
+      // Khi sửa: kiểm tra code trùng với dịch vụ khác (không phải chính nó)
+      const existingService = rows.find(s => s.id !== edit.id && s.code.toUpperCase() === finalCode)
+      if (existingService) {
+        setEditMessage({ type: 'error', text: `Code "${finalCode}" đã tồn tại. Vui lòng chọn code khác.` })
+        return
+      } else {
+        // Code hợp lệ, xóa message
+        setEditMessage(null)
+      }
     }
     // Giá 0 là hợp lệ (dịch vụ miễn phí)
     const payload = {
-      code: edit.code.trim(),
+      code: finalCode, // Sử dụng code đã được kiểm tra và tự động tạo nếu cần
       name: edit.name.trim(),
       unitPrice: edit.unitPrice ?? 0, // Đảm bảo giá luôn là số, mặc định 0 nếu undefined/null
       unitName: edit.unitName.trim(),
@@ -150,7 +236,7 @@ export default function ServicesPage() {
           const errorData = await response.json()
           console.log('PUT error data:', errorData)
           
-          // Hiển thị error message rõ ràng hơn
+          // Hiển thị error message trong form
           let errorMessage = errorData.error || 'Có lỗi xảy ra khi cập nhật dịch vụ.'
           
           // Nếu là lỗi hệ thống, thêm thông tin hữu ích
@@ -160,7 +246,7 @@ export default function ServicesPage() {
             errorMessage = `${errorMessage} Vui lòng kiểm tra kết nối với server hoặc thử lại sau.`
           }
           
-          setFlash({ type: 'error', text: errorMessage })
+          setEditMessage({ type: 'error', text: errorMessage })
           return
         }
         
@@ -168,7 +254,9 @@ export default function ServicesPage() {
         console.log('PUT success data:', responseData)
         
         await refetchServices()
-        setFlash({ type: 'success', text: 'Đã cập nhật dịch vụ.' })
+        setEditOpen(false)
+        setEditMessage(null)
+        setFlash({ type: 'success', text: 'Đã cập nhật dịch vụ thành công.' })
       } else {
         console.log('POST request payload:', payload)
         const response = await fetch('/api/system/services', {
@@ -184,7 +272,7 @@ export default function ServicesPage() {
           const errorData = await response.json()
           console.log('POST error data:', errorData)
           
-          // Hiển thị error message rõ ràng hơn
+          // Hiển thị error message trong form
           let errorMessage = errorData.error || 'Có lỗi xảy ra khi tạo dịch vụ mới.'
           
           // Nếu là lỗi hệ thống, thêm thông tin hữu ích
@@ -194,7 +282,7 @@ export default function ServicesPage() {
             errorMessage = `${errorMessage} Vui lòng kiểm tra kết nối với server hoặc thử lại sau.`
           }
           
-          setFlash({ type: 'error', text: errorMessage })
+          setEditMessage({ type: 'error', text: errorMessage })
           return
         }
 
@@ -202,12 +290,13 @@ export default function ServicesPage() {
         console.log('POST success data:', responseData)
 
         await refetchServices()
-        setFlash({ type: 'success', text: 'Đã tạo dịch vụ mới.' })
+        setEditOpen(false)
+        setEditMessage(null)
+        setFlash({ type: 'success', text: 'Đã tạo dịch vụ mới thành công.' })
       }
-      setEditOpen(false)
     } catch (error) {
       console.error('Error saving service:', error)
-      setFlash({ type: 'error', text: 'Có lỗi xảy ra khi lưu dịch vụ. Vui lòng thử lại.' })
+      setEditMessage({ type: 'error', text: 'Có lỗi xảy ra khi lưu dịch vụ. Vui lòng thử lại.' })
     }
   }
 
@@ -305,7 +394,7 @@ export default function ServicesPage() {
               </svg>
             </div>
             <div className="min-w-0 flex-1">
-              <h1 className="text-lg font-bold text-gray-900 truncate">Dịch vụ</h1>
+              <h1 className="text-lg font-bold text-gray-900 truncate">Quản lý dịch vụ</h1>
               <p className="text-xs text-gray-500">{filtered.length} dịch vụ</p>
             </div>
           </div>
@@ -316,7 +405,7 @@ export default function ServicesPage() {
             <svg className="w-4 h-4 sm:mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
             </svg>
-            <span className="hidden sm:inline">Thêm dịch vụ</span>
+            <span className="hidden sm:inline">Thêm dịch vụ</span>  
             <span className="sm:hidden">Thêm</span>
           </Button>
         </div>
@@ -893,9 +982,43 @@ export default function ServicesPage() {
         </div>
       </Modal>
       {/* Edit Modal */}
-      <Modal open={editOpen} onClose={() => setEditOpen(false)} title={edit.id ? 'Sửa dịch vụ' : 'Thêm dịch vụ mới'}>
+      <Modal open={editOpen} onClose={() => {
+        setEditOpen(false)
+        setEditMessage(null)
+        setFieldErrors({})
+      }} title={edit.id ? 'Sửa dịch vụ' : 'Thêm dịch vụ mới'}>
         <div className="p-4 sm:p-6">
           <div className="space-y-4">
+            {/* Message trong form */}
+            {editMessage && (
+              <div className={`rounded-md border p-3 text-sm ${
+                editMessage.type === 'info' 
+                  ? 'bg-blue-50 border-blue-200 text-blue-800'
+                  : editMessage.type === 'warning'
+                  ? 'bg-yellow-50 border-yellow-200 text-yellow-800'
+                  : 'bg-red-50 border-red-200 text-red-800'
+              }`}>
+                <div className="flex items-start gap-2">
+                  {editMessage.type === 'info' && (
+                    <svg className="w-5 h-5 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  )}
+                  {editMessage.type === 'warning' && (
+                    <svg className="w-5 h-5 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                  )}
+                  {editMessage.type === 'error' && (
+                    <svg className="w-5 h-5 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  )}
+                  <span>{editMessage.text}</span>
+                </div>
+              </div>
+            )}
+            
             {/* Form */}
             <div className="space-y-3">
               {/* Code và Tên dịch vụ */}
@@ -904,19 +1027,35 @@ export default function ServicesPage() {
                   <label className="block text-sm font-medium text-gray-700 mb-1">Code *</label>
                   <Input
                     value={edit.code}
-                    onChange={(e) => setEdit({ ...edit, code: e.target.value })}
-                    placeholder="Nhập code dịch vụ"
-                    className="w-full"
+                    onChange={(e) => {
+                      setEdit({ ...edit, code: e.target.value })
+                      if (fieldErrors.code) {
+                        setFieldErrors({ ...fieldErrors, code: undefined })
+                      }
+                    }}
+                    placeholder="Nhập code dịch vụ (hoặc để trống để tự động tạo)"
+                    className={`w-full ${fieldErrors.code ? 'border-red-500' : ''}`}
                   />
+                  {fieldErrors.code && (
+                    <p className="text-xs text-red-500 mt-1">{fieldErrors.code}</p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Tên dịch vụ *</label>
                   <Input
                     value={edit.name}
-                    onChange={(e) => setEdit({ ...edit, name: e.target.value })}
+                    onChange={(e) => {
+                      setEdit({ ...edit, name: e.target.value })
+                      if (fieldErrors.name) {
+                        setFieldErrors({ ...fieldErrors, name: undefined })
+                      }
+                    }}
                     placeholder="Nhập tên dịch vụ"
-                    className="w-full"
+                    className={`w-full ${fieldErrors.name ? 'border-red-500' : ''}`}
                   />
+                  {fieldErrors.name && (
+                    <p className="text-xs text-red-500 mt-1">{fieldErrors.name}</p>
+                  )}
                 </div>
               </div>
 
@@ -934,12 +1073,18 @@ export default function ServicesPage() {
                       // Nếu input trống, set về 0 để user có thể nhập lại
                       if (value === '' || value === null || value === undefined) {
                         setEdit({ ...edit, unitPrice: 0 })
+                        if (fieldErrors.unitPrice) {
+                          setFieldErrors({ ...fieldErrors, unitPrice: undefined })
+                        }
                         return
                       }
                       const newPrice = Number(value)
                       // Chỉ cập nhật nếu là số hợp lệ và >= 0 (cho phép cả 0)
                       if (!isNaN(newPrice) && newPrice >= 0) {
                         setEdit({ ...edit, unitPrice: newPrice })
+                        if (fieldErrors.unitPrice) {
+                          setFieldErrors({ ...fieldErrors, unitPrice: undefined })
+                        }
                       }
                     }}
                     onBlur={(e) => {
@@ -957,17 +1102,28 @@ export default function ServicesPage() {
                       }
                     }}
                     placeholder="Nhập giá dịch vụ (0 cho dịch vụ miễn phí)"
-                    className="w-full"
+                    className={`w-full ${fieldErrors.unitPrice ? 'border-red-500' : ''}`}
                   />
+                  {fieldErrors.unitPrice && (
+                    <p className="text-xs text-red-500 mt-1">{fieldErrors.unitPrice}</p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Đơn vị *</label>
                   <Input
                     value={edit.unitName}
-                    onChange={(e) => setEdit({ ...edit, unitName: e.target.value })}
+                    onChange={(e) => {
+                      setEdit({ ...edit, unitName: e.target.value })
+                      if (fieldErrors.unitName) {
+                        setFieldErrors({ ...fieldErrors, unitName: undefined })
+                      }
+                    }}
                     placeholder="Nhập đơn vị (lần, kg, giờ...)"
-                    className="w-full"
+                    className={`w-full ${fieldErrors.unitName ? 'border-red-500' : ''}`}
                   />
+                  {fieldErrors.unitName && (
+                    <p className="text-xs text-red-500 mt-1">{fieldErrors.unitName}</p>
+                  )}
                 </div>
               </div>
 

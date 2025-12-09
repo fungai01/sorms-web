@@ -12,28 +12,16 @@ export async function POST(
   try {
     console.log('[Security Check-in] Request received')
     
-    // AuthN + AuthZ (Security role only)
-    const userInfo = await verifyToken(req)
-    if (!userInfo?.id) {
-      console.error('[Security Check-in] Unauthorized: No user info')
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-    
-    console.log('[Security Check-in] User authenticated:', { id: userInfo.id, email: userInfo.email })
-
-    // Authorization: để backend quyết định phân quyền. Ở FE chỉ cần xác thực có token là đủ.
-    // Không chặn theo role ở đây để tránh sai lệch với backend.
-
     // IMPORTANT: Get token BEFORE reading FormData (FormData consumption may affect request)
+    // Try multiple sources for token: header first, then cookies
     let authHeader = getAuthorizationHeader(req)
+    let token: string | null = null
     
-    // Fallback: Try multiple sources for token
+    // If no token in header, try cookies
     if (!authHeader) {
       const accessTokenCookie = req.cookies.get('access_token')?.value
       const authAccessTokenCookie = req.cookies.get('auth_access_token')?.value
       const userInfoCookie = req.cookies.get('user_info')?.value
-      
-      let token: string | null = null
       
       if (accessTokenCookie) {
         token = accessTokenCookie
@@ -57,12 +45,37 @@ export async function POST(
       if (token) {
         authHeader = `Bearer ${token}`
       }
+    } else {
+      // Extract token from Bearer header if present
+      if (authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7)
+      } else {
+        token = authHeader
+        authHeader = `Bearer ${token}`
+      }
     }
     
-    if (!authHeader) {
-      console.error('[Security Check-in] CRITICAL: No token found - request will fail at backend')
+    // Try to verify token, but don't fail if verification fails - let backend handle it
+    let userInfo: any = null
+    if (token) {
+      try {
+        userInfo = await verifyToken(req)
+        if (userInfo?.id) {
+          console.log('[Security Check-in] User authenticated:', { id: userInfo.id, email: userInfo.email })
+        } else {
+          console.warn('[Security Check-in] Token verification returned no user info, but continuing with token')
+        }
+      } catch (verifyError) {
+        console.warn('[Security Check-in] Token verification failed, but continuing with token:', verifyError)
+        // Continue - backend will validate the token
+      }
+    }
+    
+    // If no token found at all, then fail
+    if (!authHeader || !token) {
+      console.error('[Security Check-in] CRITICAL: No token found in header or cookies')
       return NextResponse.json(
-        { error: 'Authentication token not found. Please login again.' },
+        { error: 'Unauthorized: No authentication token found. Please login again.' },
         { status: 401 }
       )
     }
@@ -108,7 +121,13 @@ export async function POST(
     const outgoing = new FormData()
     // Append fields in order: bookingId, userId, faceRef, then faceImage
     outgoing.append('bookingId', String(incomingBookingId || bookingId))
-    outgoing.append('userId', String(userId || userInfo.id))
+    // Use userId from form data, or from verified userInfo, or from token payload
+    const finalUserId = userId || (userInfo?.id) || null
+    if (finalUserId) {
+      outgoing.append('userId', String(finalUserId))
+    } else {
+      console.warn('[Security Check-in] No userId found, backend may reject request')
+    }
     
     // For boolean primitive binding in Spring @ModelAttribute with multipart/form-data:
     // Spring expects "true" or "false" as string for boolean primitive binding

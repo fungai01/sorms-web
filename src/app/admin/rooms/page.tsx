@@ -274,12 +274,9 @@ export default function RoomsPage() {
     await fetch(`/api/system/rooms?id=${confirmOpen.id}`, { method: 'DELETE' })
     await refetchRooms()
     setConfirmOpen({ open: false })
-    setFlash({ type: 'success', text: 'Đã vô hiệu hóa phòng.' })
+    setFlash({ type: 'success', text: 'Đã xóa phòng.' })
   }
 
-  async function activateRoom(id: number) {
-    setFlash({ type: 'error', text: 'Chức năng kích hoạt phòng hiện chưa được backend hỗ trợ' })
-  }
 
   function renderStatusChip(s: RoomStatus) {
     if (s === 'AVAILABLE') return <Badge tone="available">{statusLabels[s]}</Badge>
@@ -479,7 +476,6 @@ export default function RoomsPage() {
                   <col className="w-[10%]" />
                   <col className="w-[15%]" />
                   <col className="w-[15%]" />
-                  <col className="w-[15%]" />
                 </colgroup>
                 <thead>
                   <tr className="bg-gray-50 text-gray-700">
@@ -488,7 +484,6 @@ export default function RoomsPage() {
                     <th className="px-4 py-3 text-center font-semibold">Dãy Tòa</th>
                     <th className="px-4 py-3 text-center font-semibold">Tầng</th>
                     <th className="px-4 py-3 text-center font-semibold">Trạng thái phòng</th>
-                    <th className="px-4 py-3 text-center font-semibold">Kích hoạt</th>
                     <th className="px-4 py-3 text-center font-semibold">Thao tác</th>
                   </tr>
                 </thead>
@@ -500,17 +495,6 @@ export default function RoomsPage() {
                       <td className="px-4 py-3 text-center text-gray-700">{getRoomTypeName(row.roomTypeId)}</td>
                       <td className="px-4 py-3 text-center text-gray-700">{row.floor || '-'}</td>
                       <td className="px-4 py-3 text-center">{renderStatusChip(row.status)}</td>
-                      <td className="px-4 py-3 text-center">
-                        {row.isActive !== false ? (
-                          <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                            Hoạt động
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-                            Vô hiệu
-                          </span>
-                        )}
-                      </td>
                       <td className="px-4 py-3 text-center">
                         <div className="flex gap-2 justify-center">
                           <Button
@@ -529,17 +513,13 @@ export default function RoomsPage() {
                           >
                             Sửa
                           </Button>
-                          {row.isActive !== false ? (
-                            <Button
-                              variant="danger"
-                              className="h-8 px-3 text-xs"
-                              onClick={() => confirmDelete(row.id)}
-                            >
-                              Vô hiệu
-                            </Button>
-                          ) : (
-                            null
-                          )}
+                          <Button
+                            variant="danger"
+                            className="h-8 px-3 text-xs"
+                            onClick={() => confirmDelete(row.id)}
+                          >
+                            Xóa
+                          </Button>
 
                           </div>
 
@@ -581,15 +561,6 @@ export default function RoomsPage() {
                       </div>
                       <div className="flex items-center gap-3 mb-4">
                         {renderStatusChip(row.status)}
-                        {row.isActive !== false ? (
-                          <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                            Hoạt động
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-                            Vô hiệu
-                          </span>
-                        )}
                       </div>
                     </div>
                   </div>
@@ -617,28 +588,16 @@ export default function RoomsPage() {
                       </svg>
                       Sửa
                     </Button>
-                    {row.isActive !== false ? (
-                      <Button
-                        variant="danger"
-                        className="h-10 text-sm font-medium"
-                        onClick={() => confirmDelete(row.id)}
-                      >
-                        <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
-                        </svg>
-                        Vô hiệu
-                      </Button>
-                    ) : (
-                      <Button
-                        className="h-10 text-sm font-medium bg-green-600 hover:bg-green-700"
-                        onClick={() => activateRoom(row.id)}
-                      >
-                        <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                        Kích hoạt
-                      </Button>
-                    )}
+                    <Button
+                      variant="danger"
+                      className="h-10 text-sm font-medium"
+                      onClick={() => confirmDelete(row.id)}
+                    >
+                      <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                      Xóa
+                    </Button>
                   </div>
                 </div>
               ))}

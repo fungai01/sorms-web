@@ -198,7 +198,8 @@ export async function POST(req: NextRequest) {
       try {
         const userInfo = await verifyToken(req)
         if (userInfo?.id) {
-          body.userId = userInfo.id
+          body.userId = String(userInfo.id)
+          console.log('✅ Extracted userId from verifyToken:', body.userId)
         }
       } catch (error) {
         console.warn('verifyToken failed, trying decodeJWT:', error)
@@ -208,8 +209,19 @@ export async function POST(req: NextRequest) {
         const token = authHeader.slice(7)
         const payload = decodeJWTPayload(token)
         if (payload?.userId) {
-          body.userId = payload.userId
+          body.userId = String(payload.userId)
+          console.log('✅ Extracted userId from JWT payload:', body.userId)
+        } else if (payload?.sub) {
+          // Some tokens use 'sub' as userId
+          body.userId = String(payload.sub)
+          console.log('✅ Extracted userId from JWT sub:', body.userId)
         }
+      }
+      
+      // Final check: if still no userId, return error
+      if (!body.userId) {
+        console.error('❌ Could not extract userId from token')
+        return NextResponse.json({ error: 'Không thể xác định người dùng. Vui lòng đăng nhập lại.' }, { status: 401 })
       }
     }
     // Ensure numGuests at least 1
@@ -230,7 +242,21 @@ export async function POST(req: NextRequest) {
     // Backend LocalDateTime mong đợi format ISO 8601: "2025-12-08T12:00:00" (không có timezone)
     // Giữ nguyên thời gian local để backend nhận đúng giờ VN (12:00 check-in, 10:00 check-out)
     const formatDateTimeForBackend = (dateTimeStr: string) => {
-      if (!dateTimeStr) return dateTimeStr
+      if (!dateTimeStr) {
+        console.warn('⚠️ Empty dateTimeStr provided')
+        return dateTimeStr
+      }
+      
+      // Nếu đã là format đúng (YYYY-MM-DDTHH:mm:ss), giữ nguyên
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(dateTimeStr)) {
+        return dateTimeStr
+      }
+      
+      // Nếu thiếu seconds (YYYY-MM-DDTHH:mm), thêm :00
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(dateTimeStr)) {
+        return `${dateTimeStr}:00`
+      }
+      
       // Nếu có timezone offset (+07:00 hoặc -XX:XX), bỏ timezone để giữ nguyên thời gian local
       if (dateTimeStr.includes('+') || (dateTimeStr.includes('-') && dateTimeStr.length > 19 && dateTimeStr[dateTimeStr.length - 6] === ':')) {
         // Bỏ phần timezone, giữ lại phần datetime: "2025-12-08T12:00:00+07:00" -> "2025-12-08T12:00:00"
@@ -238,14 +264,30 @@ export async function POST(req: NextRequest) {
         const minusIndex = dateTimeStr.lastIndexOf('-')
         const timezoneIndex = plusIndex !== -1 ? plusIndex : (minusIndex !== -1 && minusIndex > 10 ? minusIndex : -1)
         if (timezoneIndex > 0 && dateTimeStr[timezoneIndex - 1] !== 'T') {
-          return dateTimeStr.substring(0, timezoneIndex)
+          const withoutTz = dateTimeStr.substring(0, timezoneIndex)
+          // Đảm bảo có seconds
+          if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(withoutTz)) {
+            return `${withoutTz}:00`
+          }
+          return withoutTz
         }
       }
+      
       // Nếu có Z (UTC), bỏ Z và giữ nguyên thời gian
       if (dateTimeStr.endsWith('Z')) {
-        return dateTimeStr.slice(0, -1)
+        const withoutZ = dateTimeStr.slice(0, -1)
+        // Đảm bảo có seconds
+        if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(withoutZ)) {
+          return `${withoutZ}:00`
+        }
+        return withoutZ
       }
-      // Nếu đã là format không có timezone, giữ nguyên
+      
+      // Nếu đã là format không có timezone, giữ nguyên nhưng đảm bảo có seconds
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(dateTimeStr)) {
+        return `${dateTimeStr}:00`
+      }
+      
       return dateTimeStr
     }
     

@@ -362,25 +362,39 @@ export default function BookingsPage() {
               body: JSON.stringify(approvePayload)
             })
 
-            if (!approveRes.ok) {
-              const approveError = await approveRes.json().catch(() => ({}))
-              const errorMsg = approveError.error || 'Failed to approve booking'
+            // Parse response để kiểm tra
+            const approveData = await approveRes.json().catch(() => null)
+            
+            // Kiểm tra response code từ backend (S0000 = success)
+            const isSuccess = approveRes.ok && (
+              approveData?.responseCode === 'S0000' || 
+              approveData?.success === true ||
+              approveData?.data !== null ||
+              approveRes.status >= 200 && approveRes.status < 300
+            )
+
+            if (!isSuccess) {
+              const errorMsg = approveData?.message || approveData?.error || 'Không thể duyệt đặt phòng'
               setFieldErrors({ general: errorMsg })
+              setFlash({ type: 'error', text: errorMsg })
               return
             }
 
-          // Cập nhật state ngay lập tức để hiển thị thay đổi ngay, không cần đợi refetch
-          setRows(prevRows => prevRows.map(booking => 
-            booking.id === edit.id 
-              ? { ...booking, status: 'APPROVED' as BookingStatus }
-              : booking
-          ))
+            // Cập nhật state ngay lập tức để hiển thị thay đổi ngay
+            setRows(prevRows => prevRows.map(booking => 
+              booking.id === edit.id 
+                ? { ...booking, status: 'APPROVED' as BookingStatus }
+                : booking
+            ))
 
-          // Không gọi refetch ngay để tránh làm chậm UI - sẽ tự động sync khi user filter/search
-          // refetchBookings().catch(err => console.error('Background refetch error:', err))
+            // Refetch để đảm bảo dữ liệu đồng bộ với backend
+            refetchBookings().catch(err => {
+              console.error('Background refetch error:', err)
+              // Không hiển thị lỗi cho user vì đã cập nhật state ở trên
+            })
 
-          setFlash({ type: 'success', text: 'Đã duyệt đặt phòng thành công.' })
-          handleCloseEdit()
+            setFlash({ type: 'success', text: 'Đã duyệt đặt phòng thành công.' })
+            handleCloseEdit()
         } else {
           // Nếu status khác APPROVED, gọi PUT để cập nhật thông tin và status
           // PUT /bookings/{id} - Body format: { id, roomId, checkinDate, checkoutDate, numGuests, note, status }
@@ -573,7 +587,7 @@ export default function BookingsPage() {
               </svg>
             </div>
             <div className="min-w-0 flex-1">
-              <h1 className="text-lg font-bold text-gray-900 truncate">Đặt phòng</h1>
+              <h1 className="text-lg font-bold text-gray-900 truncate">Quản lý đặt phòng</h1>
               <p className="text-sm text-gray-500">{filtered.length} đặt phòng</p>
             </div>
           </div>
@@ -1086,255 +1100,265 @@ export default function BookingsPage() {
         </div>
       </div>
 
-      {/* Detail Modal - Compact */}
+      {/* Detail Modal - Responsive */}
       <Modal open={detailOpen} onClose={() => setDetailOpen(false)} title="Chi tiết đặt phòng" size="xl">
-        <div className="p-3 sm:p-4">
+        <div className="p-3 sm:p-4 md:p-6">
           {selected && (
-            <div className="space-y-4">
-              {/* Header với thông tin chính */}
-              <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-3 sm:p-4 border border-blue-200">
-                {/* Thông tin đặt phòng chính */}
-                <div className="space-y-3">
-                  {/* Header với icon */}
-                  <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
-                    <div className="flex items-center gap-3 w-full sm:w-auto">
-                      <div className="w-12 h-12 sm:w-14 sm:h-14 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg flex-shrink-0">
-                        <svg className="w-6 h-6 sm:w-7 sm:h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                        </svg>
-              </div>
-                      <div className="flex-1 min-w-0">
-                        <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold text-gray-900">Đặt phòng {selected.code}</h2>
-                        <p className="text-base sm:text-lg lg:text-xl text-gray-600 truncate">{selected.userId} - {selected.userName || `User`}</p>
-              </div>
-              </div>
-              </div>
-
-                  {/* Thông tin nhanh */}
-                  <div className="grid grid-cols-2 gap-2 sm:gap-3">
-                    <div className="bg-white/70 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
-                      <div className="flex items-center gap-2 mb-1">
-                        <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
-                        </svg>
-                        <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">ID</span>
-                      </div>
-                      <p className="text-base sm:text-lg font-bold text-blue-900">{selected.id}</p>
+            <div className="space-y-4 sm:space-y-5 md:space-y-6">
+              {/* Header Section - Mobile Optimized */}
+              <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-3 sm:p-4 md:p-6 border border-blue-200">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4">
+                  {/* Icon và Title */}
+                  <div className="flex items-center gap-3 w-full sm:w-auto sm:flex-1 min-w-0">
+                    <div className="w-12 h-12 sm:w-14 sm:h-14 md:w-16 md:h-16 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg flex-shrink-0">
+                      <svg className="w-6 h-6 sm:w-7 sm:h-7 md:w-8 md:h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                      </svg>
                     </div>
-
-                    <div className="bg-white/70 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
-                      <div className="flex items-center gap-2 mb-1">
-                        <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                        </svg>
-                        <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Số khách</span>
+                    <div className="flex-1 min-w-0">
+                      <h2 className="text-lg sm:text-xl md:text-2xl lg:text-3xl font-bold text-gray-900 mb-1 break-words">Đặt phòng {selected.code}</h2>
+                      <div className="flex flex-col xs:flex-row xs:items-center gap-1 xs:gap-2">
+                        <span className="text-xs sm:text-sm text-gray-600">ID: {selected.id}</span>
+                        <span className="hidden xs:inline text-gray-400">•</span>
+                        <span className="text-xs sm:text-sm text-gray-600 truncate">{selected.userId} - {selected.userName || 'User'}</span>
                       </div>
-                      <p className="text-base sm:text-lg font-bold text-blue-900">{selected.numGuests}</p>
                     </div>
                   </div>
-
-                  {/* Thông tin khách hàng */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
-                    {(selected as any).userEmail && (
-                      <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
-                        <div className="flex items-center gap-2 mb-1">
-                          <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                          </svg>
-                          <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Khách hàng</span>
-                        </div>
-                        <p className="text-sm sm:text-base font-bold text-blue-900">{(selected as any).userEmail}</p>
-                      </div>
-                    )}
-                    {(selected as any).phoneNumber && (
-                      <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
-                        <div className="flex items-center gap-2 mb-1">
-                          <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
-                          </svg>
-                          <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">SĐT</span>
-                        </div>
-                        <p className="text-sm sm:text-base font-bold text-blue-900">{(selected as any).phoneNumber || 'N/A'}</p>
-                      </div>
-                    )}
+                  {/* Status Badge */}
+                  <div className="flex-shrink-0 w-full sm:w-auto sm:ml-auto">
+                    <div className="flex justify-start sm:justify-end">
+                      {renderStatusChip(selected.status)}
+                    </div>
                   </div>
+                </div>
+              </div>
 
-                  {/* Email */}
+              {/* Thông tin khách hàng */}
+              <div className="space-y-3 sm:space-y-4">
+                <h3 className="text-base sm:text-lg font-semibold text-gray-800 border-b border-gray-200 pb-2">Thông tin khách hàng</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
                   {(selected as any).userEmail && (
-                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
-                      <div className="flex items-center gap-2 mb-1">
-                        <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
+                      <div className="flex items-center gap-2 mb-2">
+                        <svg className="w-4 h-4 sm:w-5 sm:h-5 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                         </svg>
-                        <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Email</span>
+                        <span className="text-xs sm:text-sm font-semibold text-gray-700">Email</span>
                       </div>
-                      <p className="text-sm sm:text-base font-bold text-blue-900">{(selected as any).userEmail}</p>
+                      <p className="text-sm sm:text-base font-medium text-gray-900 break-words break-all">{(selected as any).userEmail}</p>
                     </div>
                   )}
+                  {(selected as any).phoneNumber && (
+                    <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
+                      <div className="flex items-center gap-2 mb-2">
+                        <svg className="w-4 h-4 sm:w-5 sm:h-5 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                        </svg>
+                        <span className="text-xs sm:text-sm font-semibold text-gray-700">Số điện thoại</span>
+                      </div>
+                      <p className="text-sm sm:text-base font-medium text-gray-900 break-words">{(selected as any).phoneNumber}</p>
+                    </div>
+                  )}
+                  <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
+                    <div className="flex items-center gap-2 mb-2">
+                      <svg className="w-4 h-4 sm:w-5 sm:h-5 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                      </svg>
+                      <span className="text-xs sm:text-sm font-semibold text-gray-700">Số khách</span>
+                    </div>
+                    <p className="text-sm sm:text-base font-medium text-gray-900">{selected.numGuests} người</p>
+                  </div>
+                </div>
+              </div>
 
-                  {/* Phòng và Tòa */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
-                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
-                      <div className="flex items-center gap-2 mb-1">
-                        <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              {/* Thông tin phòng */}
+              <div className="space-y-3 sm:space-y-4">
+                <h3 className="text-base sm:text-lg font-semibold text-gray-800 border-b border-gray-200 pb-2">Thông tin phòng</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                  <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
+                    <div className="flex items-center gap-2 mb-2">
+                      <svg className="w-4 h-4 sm:w-5 sm:h-5 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                      </svg>
+                      <span className="text-xs sm:text-sm font-semibold text-gray-700">Phòng</span>
+                    </div>
+                    <p className="text-sm sm:text-base font-medium text-gray-900 break-words">
+                      {(selected as any).roomTypeName ? `${(selected as any).roomTypeName}` : getRoomName(selected.roomId)}
+                      {(selected as any).roomCode ? ` - ${(selected as any).roomCode}` : ''}
+                    </p>
+                  </div>
+                  {(selected as any).building && (
+                    <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
+                      <div className="flex items-center gap-2 mb-2">
+                        <svg className="w-4 h-4 sm:w-5 sm:h-5 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
                         </svg>
-                        <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Phòng</span>
+                        <span className="text-xs sm:text-sm font-semibold text-gray-700">Tòa nhà</span>
                       </div>
-                      <p className="text-sm sm:text-base font-bold text-blue-900">
-                        {(selected as any).roomTypeName ? `${(selected as any).roomTypeName}` : getRoomName(selected.roomId)}
-                        {(selected as any).roomCode ? ` - ${(selected as any).roomCode}` : ''}
-                      </p>
-                    </div>
-                    {(selected as any).building && (
-                      <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
-                        <div className="flex items-center gap-2 mb-1">
-                          <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-                          </svg>
-                          <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Tòa</span>
-                        </div>
-                        <p className="text-sm sm:text-base font-bold text-blue-900">{(selected as any).building}</p>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Check-in và Check-out */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
-                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
-                      <div className="flex items-center gap-2 mb-1">
-                        <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                        </svg>
-                        <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Check-in</span>
-                      </div>
-                      <p className="text-sm sm:text-base font-bold text-blue-900">
-                        {selected.checkinDate ? new Date(selected.checkinDate).toLocaleString('vi-VN') : selected.checkinDate}
-                      </p>
-                    </div>
-                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
-                      <div className="flex items-center gap-2 mb-1">
-                        <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                        </svg>
-                        <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Check-out</span>
-                      </div>
-                      <p className="text-sm sm:text-base font-bold text-blue-900">
-                        {selected.checkoutDate ? new Date(selected.checkoutDate).toLocaleString('vi-VN') : selected.checkoutDate}
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Mục đích */}
-                  {(selected as any).purpose && (
-                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
-                      <div className="flex items-center gap-2 mb-1">
-                        <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                        </svg>
-                        <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Mục đích</span>
-                      </div>
-                      <p className="text-sm sm:text-base font-bold text-blue-900">{(selected as any).purpose}</p>
-                    </div>
-                  )}
-
-                  {/* Trạng thái và ghi chú */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
-                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
-                      <div className="flex items-center gap-2 mb-1">
-                        <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                        <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Trạng thái</span>
-                      </div>
-                      <div className="mt-1">{renderStatusChip(selected.status)}</div>
-                    </div>
-
-                    {selected.note && (
-                      <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
-                        <div className="flex items-center gap-2 mb-1">
-                          <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                          </svg>
-                          <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Ghi chú</span>
-                        </div>
-                        <p className="text-sm sm:text-base font-bold text-blue-900 whitespace-pre-line break-words">{selected.note}</p>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Tổng tiền và Thanh toán */}
-                  {(((selected as any).totalPrice !== null && (selected as any).totalPrice !== undefined) || (selected as any).paymentStatus || selectedMeta.totalPrice !== null || selectedMeta.paymentStatus || selected.created_at || selected.updated_at) && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
-                      <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
-                        <div className="flex items-center gap-2 mb-1">
-                          <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
-                          </svg>
-                          <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Tổng tiền</span>
-                        </div>
-                        <p className="text-sm sm:text-base font-bold text-blue-900">
-                          {(() => {
-                            const totalPrice = (selected as any).totalPrice !== null && (selected as any).totalPrice !== undefined 
-                              ? (selected as any).totalPrice 
-                              : selectedMeta.totalPrice;
-                            return totalPrice !== null && totalPrice !== undefined 
-                              ? Number(totalPrice).toLocaleString('vi-VN') + ' VND'
-                              : 'Miễn phí';
-                          })()}
-                        </p>
-                      </div>
-
-                      {((selected as any).paymentStatus || selectedMeta.paymentStatus) && (
-                        <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
-                          <div className="flex items-center gap-2 mb-1">
-                            <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M5 12a2 2 0 010-4h14a2 2 0 110 4M5 12a2 2 0 000 4h14a2 2 0 100-4" />
-                            </svg>
-                            <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Thanh toán</span>
-                          </div>
-                          <p className="text-sm sm:text-base font-bold text-blue-900">{(selected as any).paymentStatus || selectedMeta.paymentStatus}</p>
-                        </div>
-                      )}
-
-                      {selected.created_at && (
-                        <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
-                          <div className="flex items-center gap-2 mb-1">
-                            <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                            </svg>
-                            <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Đặt lúc</span>
-                          </div>
-                          <p className="text-sm sm:text-base font-bold text-blue-900">
-                            {new Date(selected.created_at).toLocaleString('vi-VN', { 
-                              hour: '2-digit', 
-                              minute: '2-digit', 
-                              second: '2-digit',
-                              day: 'numeric',
-                              month: 'numeric',
-                              year: 'numeric'
-                            })}
-                          </p>
-                        </div>
-                      )}
-
-                      {selected.updated_at && (
-                        <div className="bg-white/80 backdrop-blur-sm rounded-lg p-2 sm:p-3 border border-blue-200">
-                          <div className="flex items-center gap-2 mb-1">
-                            <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                            </svg>
-                            <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Cập nhật gần nhất</span>
-                          </div>
-                          <p className="text-sm sm:text-base font-bold text-blue-900">
-                            {new Date(selected.updated_at).toLocaleString('vi-VN')}
-                          </p>
-                        </div>
-                      )}
+                      <p className="text-sm sm:text-base font-medium text-gray-900 break-words">{(selected as any).building}</p>
                     </div>
                   )}
                 </div>
               </div>
+
+              {/* Thời gian đặt phòng */}
+              <div className="space-y-3 sm:space-y-4">
+                <h3 className="text-base sm:text-lg font-semibold text-gray-800 border-b border-gray-200 pb-2">Thời gian đặt phòng</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                  <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
+                    <div className="flex items-center gap-2 mb-2">
+                      <svg className="w-4 h-4 sm:w-5 sm:h-5 text-green-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                      </svg>
+                      <span className="text-xs sm:text-sm font-semibold text-gray-700">Ngày check-in</span>
+                    </div>
+                    <p className="text-sm sm:text-base font-medium text-gray-900 break-words">
+                      {selected.checkinDate ? (() => {
+                        const date = new Date(selected.checkinDate);
+                        return date.toLocaleDateString('vi-VN', {
+                          year: 'numeric',
+                          month: 'long',
+                          day: 'numeric'
+                        });
+                      })() : selected.checkinDate}
+                    </p>
+                  </div>
+                  <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
+                    <div className="flex items-center gap-2 mb-2">
+                      <svg className="w-4 h-4 sm:w-5 sm:h-5 text-red-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                      </svg>
+                      <span className="text-xs sm:text-sm font-semibold text-gray-700">Ngày check-out</span>
+                    </div>
+                    <p className="text-sm sm:text-base font-medium text-gray-900 break-words">
+                      {selected.checkoutDate ? (() => {
+                        const date = new Date(selected.checkoutDate);
+                        return date.toLocaleDateString('vi-VN', {
+                          year: 'numeric',
+                          month: 'long',
+                          day: 'numeric'
+                        });
+                      })() : selected.checkoutDate}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Mục đích và Ghi chú */}
+              {((selected as any).purpose || selected.note) && (
+                <div className="space-y-3 sm:space-y-4">
+                  <h3 className="text-base sm:text-lg font-semibold text-gray-800 border-b border-gray-200 pb-2">Thông tin bổ sung</h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                    {(selected as any).purpose && (
+                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
+                        <div className="flex items-center gap-2 mb-2">
+                          <svg className="w-4 h-4 sm:w-5 sm:h-5 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                          </svg>
+                          <span className="text-xs sm:text-sm font-semibold text-gray-700">Mục đích</span>
+                        </div>
+                        <p className="text-sm sm:text-base font-medium text-gray-900 break-words">{(selected as any).purpose}</p>
+                      </div>
+                    )}
+                    {selected.note && (
+                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
+                        <div className="flex items-center gap-2 mb-2">
+                          <svg className="w-4 h-4 sm:w-5 sm:h-5 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                          </svg>
+                          <span className="text-xs sm:text-sm font-semibold text-gray-700">Ghi chú</span>
+                        </div>
+                        <p className="text-sm sm:text-base text-gray-700 whitespace-pre-line break-words">{selected.note}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Thông tin thanh toán */}
+              {(((selected as any).totalPrice !== null && (selected as any).totalPrice !== undefined) || (selected as any).paymentStatus || selectedMeta.totalPrice !== null || selectedMeta.paymentStatus) && (
+                <div className="space-y-3 sm:space-y-4">
+                  <h3 className="text-base sm:text-lg font-semibold text-gray-800 border-b border-gray-200 pb-2">Thông tin thanh toán</h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                    <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
+                      <div className="flex items-center gap-2 mb-2">
+                        <svg className="w-4 h-4 sm:w-5 sm:h-5 text-green-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
+                        </svg>
+                        <span className="text-xs sm:text-sm font-semibold text-gray-700">Tổng tiền</span>
+                      </div>
+                      <p className="text-base sm:text-lg font-bold text-gray-900 break-words">
+                        {(() => {
+                          const totalPrice = (selected as any).totalPrice !== null && (selected as any).totalPrice !== undefined 
+                            ? (selected as any).totalPrice 
+                            : selectedMeta.totalPrice;
+                          return totalPrice !== null && totalPrice !== undefined 
+                            ? Number(totalPrice).toLocaleString('vi-VN') + ' VND'
+                            : 'Miễn phí';
+                        })()}
+                      </p>
+                    </div>
+                    {((selected as any).paymentStatus || selectedMeta.paymentStatus) && (
+                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
+                        <div className="flex items-center gap-2 mb-2">
+                          <svg className="w-4 h-4 sm:w-5 sm:h-5 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M5 12a2 2 0 010-4h14a2 2 0 110 4M5 12a2 2 0 000 4h14a2 2 0 100-4" />
+                          </svg>
+                          <span className="text-xs sm:text-sm font-semibold text-gray-700">Trạng thái thanh toán</span>
+                        </div>
+                        <p className="text-sm sm:text-base font-medium text-gray-900 break-words">{(selected as any).paymentStatus || selectedMeta.paymentStatus}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Thông tin hệ thống */}
+              {(selected.created_at || selected.updated_at) && (
+                <div className="space-y-3 sm:space-y-4">
+                  <h3 className="text-base sm:text-lg font-semibold text-gray-800 border-b border-gray-200 pb-2">Thông tin hệ thống</h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                    {selected.created_at && (
+                      <div className="bg-gray-50 rounded-lg p-3 sm:p-4 border border-gray-200">
+                        <div className="flex items-center gap-2 mb-2">
+                          <svg className="w-4 h-4 sm:w-5 sm:h-5 text-gray-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                          </svg>
+                          <span className="text-xs sm:text-sm font-semibold text-gray-600">Ngày tạo</span>
+                        </div>
+                        <p className="text-xs sm:text-sm text-gray-700 break-words">
+                          {new Date(selected.created_at).toLocaleString('vi-VN', { 
+                            hour: '2-digit', 
+                            minute: '2-digit', 
+                            day: 'numeric',
+                            month: 'numeric',
+                            year: 'numeric'
+                          })}
+                        </p>
+                      </div>
+                    )}
+                    {selected.updated_at && (
+                      <div className="bg-gray-50 rounded-lg p-3 sm:p-4 border border-gray-200">
+                        <div className="flex items-center gap-2 mb-2">
+                          <svg className="w-4 h-4 sm:w-5 sm:h-5 text-gray-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                          <span className="text-xs sm:text-sm font-semibold text-gray-600">Cập nhật lần cuối</span>
+                        </div>
+                        <p className="text-xs sm:text-sm text-gray-700 break-words">
+                          {new Date(selected.updated_at).toLocaleString('vi-VN', {
+                            hour: '2-digit', 
+                            minute: '2-digit', 
+                            day: 'numeric',
+                            month: 'numeric',
+                            year: 'numeric'
+                          })}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

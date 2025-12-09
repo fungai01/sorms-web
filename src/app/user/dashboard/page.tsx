@@ -222,6 +222,11 @@ function UserPageContent() {
   const [bookingModalOpen, setBookingModalOpen] = useState(false);
   const [serviceModalOpen, setServiceModalOpen] = useState(false);
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
+  const [checkoutModalOpen, setCheckoutModalOpen] = useState(false);
+  const [selectedBookingForCheckout, setSelectedBookingForCheckout] = useState<RoomBooking | null>(null);
+  const [checkoutSubmitting, setCheckoutSubmitting] = useState(false);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const [checkoutNote, setCheckoutNote] = useState("");
   const [selectedPayment, setSelectedPayment] = useState<Payment | null>(null);
   const [selectedRoom, setSelectedRoom] = useState<Room | null>(null);
   const [flash, setFlash] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -403,16 +408,29 @@ function UserPageContent() {
     }));
     try {
       const result = await getFaceStatus(bookingId);
+      const isRegistered = !!result?.registered;
+      
       setFaceStates(prev => ({
         ...prev,
         [bookingId]: {
           ...prev[bookingId],
           loading: false,
-          registered: !!result?.registered,
+          registered: isRegistered,
           // Không reset qrToken ở đây để user vẫn xem lại nếu đã tải trước đó
           error: null
         }
       }));
+
+      // Nếu chưa có khuôn mặt, tự động chuyển đến trang đăng ký
+      if (!isRegistered) {
+        router.push(`/user/face-registration?bookingId=${bookingId}`);
+      } else {
+        // Nếu đã có khuôn mặt, hiển thị thông báo và có thể xóa/tạo mới
+        setFlash({ 
+          type: 'success', 
+          text: 'Đã có khuôn mặt đã đăng ký. Bạn có thể xóa để tạo mới hoặc tiếp tục sử dụng.' 
+        });
+      }
     } catch (e) {
       setFaceStates(prev => ({
         ...prev,
@@ -425,6 +443,12 @@ function UserPageContent() {
               : "Không thể kiểm tra trạng thái khuôn mặt. Vui lòng thử lại."
         }
       }));
+      
+      // Nếu lỗi, vẫn cho phép chuyển đến trang đăng ký
+      const shouldRedirect = confirm('Không thể kiểm tra trạng thái. Bạn có muốn đăng ký khuôn mặt mới không?');
+      if (shouldRedirect) {
+        router.push(`/user/face-registration?bookingId=${bookingId}`);
+      }
     }
   };
 
@@ -451,10 +475,20 @@ function UserPageContent() {
           loading: false,
           registered: false,
           qrToken: null,
+          qrDataUrl: null,
+          qrImageUrl: null,
           error: null
         }
       }));
-      setFlash({ type: 'success', text: 'Đã xóa khuôn mặt thành công. Bạn có thể đăng ký lại nếu cần.' });
+      
+      // Sau khi xóa thành công, hỏi có muốn đăng ký mới không
+      const shouldRegister = confirm('Đã xóa khuôn mặt thành công. Bạn có muốn đăng ký khuôn mặt mới ngay bây giờ không?');
+      if (shouldRegister) {
+        router.push(`/user/face-registration?bookingId=${bookingId}`);
+      } else {
+        setFlash({ type: 'success', text: 'Đã xóa khuôn mặt thành công. Bạn có thể đăng ký lại bất cứ lúc nào.' });
+      }
+      
       refetchUserBookings();
     } catch (e) {
       setFaceStates(prev => ({
@@ -909,6 +943,9 @@ function UserPageContent() {
       console.error('Booking creation error:', error);
       setBookingFormMessage({ type: 'error', text: errorMessage });
       setFlash({ type: 'error', text: `Đặt phòng thất bại: ${errorMessage}` });
+      setBookingErrors({});
+    } finally {
+      // Reset loading state if needed
     }
   };
 
@@ -1001,6 +1038,56 @@ function UserPageContent() {
     } catch (error) {
       setServiceFormMessage({ type: 'error', text: 'Có lỗi xảy ra khi đặt dịch vụ' });
       console.error('Service order creation error:', error);
+    }
+  };
+
+  const handleCheckout = async () => {
+    if (!selectedBookingForCheckout) {
+      setCheckoutError('Không có booking được chọn');
+      return;
+    }
+
+    setCheckoutSubmitting(true);
+    setCheckoutError(null);
+
+    try {
+      // Lấy userId từ token
+      let userId: string | undefined = undefined;
+      const accessToken = authService.getAccessToken();
+      if (accessToken) {
+        try {
+          const tokenParts = accessToken.split('.');
+          if (tokenParts.length === 3) {
+            const payload = JSON.parse(atob(tokenParts[1]));
+            if (payload.userId) {
+              userId = String(payload.userId);
+            } else if (payload.sub) {
+              userId = String(payload.sub);
+            }
+          }
+        } catch (e) {
+          console.warn('Could not decode token for userId:', e);
+        }
+      }
+
+      // Gọi API checkout
+      const response = await apiClient.checkoutBooking(selectedBookingForCheckout.id, userId);
+
+      if (response.success) {
+        setFlash({ type: 'success', text: 'Check-out thành công! Vui lòng trả chìa khóa tại bàn bảo vệ.' });
+        setCheckoutModalOpen(false);
+        setSelectedBookingForCheckout(null);
+        setCheckoutNote("");
+        // Refresh bookings
+        await refetchUserBookings();
+      } else {
+        setCheckoutError(response.error || 'Không thể thực hiện check-out. Vui lòng thử lại.');
+      }
+    } catch (err: any) {
+      console.error('Checkout error:', err);
+      setCheckoutError(err.message || 'Có lỗi xảy ra khi thực hiện check-out. Vui lòng thử lại.');
+    } finally {
+      setCheckoutSubmitting(false);
     }
   };
 
@@ -1116,12 +1203,21 @@ function UserPageContent() {
         <div className="max-w-7xl mx-auto">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
             <div className="min-w-0 flex-1">
-              <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">
-                {isLecturer ? 'Giảng viên' : 'Khách hàng'}
-              </h1>
-              <p className="text-sm lg:text-base text-gray-600 mt-1">
-                {isLecturer ? 'Quản lý đặt phòng và dịch vụ cho giảng viên' : 'Quản lý đặt phòng và dịch vụ'}
-              </p>
+              <div className="flex items-center gap-3 mb-2">
+                <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center">
+                  <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+                  </svg>
+                </div>
+                <div>
+                  <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">
+                    {isLecturer ? 'Giảng viên' : 'Khách hàng'}
+                  </h1>
+                  <p className="text-sm lg:text-base text-gray-600 mt-1">
+                    {isLecturer ? 'Quản lý đặt phòng và dịch vụ cho giảng viên' : 'Quản lý đặt phòng và dịch vụ'}
+                  </p>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -1142,108 +1238,159 @@ function UserPageContent() {
           )}
 
           {/* Stats */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-            <Card>
-              <CardBody>
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-gray-800">{totalBookings}</div>
-                  <div className="text-sm text-gray-600">Tổng đặt phòng</div>
-                  <div className="text-xs text-gray-500">{confirmedBookings} đã xác nhận</div>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+            <Card className="border border-gray-200 shadow-md bg-white hover:shadow-lg transition-shadow rounded-xl">
+              <CardBody className="p-4 sm:p-6">
+                <div className="flex items-center justify-between">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs sm:text-sm font-medium text-gray-600 mb-1">Tổng đặt phòng</p>
+                    <p className="text-2xl sm:text-3xl font-bold text-blue-500">{totalBookings}</p>
+                    <p className="text-xs text-gray-500 mt-1 truncate">{confirmedBookings} đã xác nhận</p>
+                  </div>
+                  <div className="w-12 h-12 sm:w-14 sm:h-14 bg-blue-100 rounded-xl flex items-center justify-center flex-shrink-0 ml-2">
+                    <svg className="w-6 h-6 sm:w-7 sm:h-7 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+                    </svg>
+                  </div>
                 </div>
               </CardBody>
             </Card>
-            <Card>
-              <CardBody>
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-green-600">{totalServiceOrders}</div>
-                  <div className="text-sm text-gray-600">Dịch vụ đã đặt</div>
-                  <div className="text-xs text-gray-500">{completedServiceOrders} hoàn thành</div>
+            <Card className="border border-gray-200 shadow-md bg-white hover:shadow-lg transition-shadow rounded-xl">
+              <CardBody className="p-4 sm:p-6"> 
+                <div className="flex items-center justify-between">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs sm:text-sm font-medium text-gray-600 mb-1">Dịch vụ đã đặt</p>
+                    <p className="text-2xl sm:text-3xl font-bold text-green-500">{totalServiceOrders}</p>
+                    <p className="text-xs text-gray-500 mt-1 truncate">{completedServiceOrders} hoàn thành</p>
+                  </div>
+                  <div className="w-12 h-12 sm:w-14 sm:h-14 bg-green-100 rounded-xl flex items-center justify-center flex-shrink-0 ml-2">
+                    <svg className="w-6 h-6 sm:w-7 sm:h-7 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                    </svg>
+                  </div>
                 </div>
               </CardBody>
             </Card>
-            <Card>
-              <CardBody>
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-purple-600">{totalPayments}</div>
-                  <div className="text-sm text-gray-600">Hóa đơn</div>
-                  <div className="text-xs text-gray-500">{paidPayments} đã thanh toán</div>
+            <Card className="border border-gray-200 shadow-md bg-white hover:shadow-lg transition-shadow rounded-xl">
+              <CardBody className="p-4 sm:p-6">
+                <div className="flex items-center justify-between">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs sm:text-sm font-medium text-gray-600 mb-1">Hóa đơn</p>
+                    <p className="text-2xl sm:text-3xl font-bold text-purple-500">{totalPayments}</p>
+                    <p className="text-xs text-gray-500 mt-1 truncate">{paidPayments} đã thanh toán</p>
+                  </div>
+                  <div className="w-12 h-12 sm:w-14 sm:h-14 bg-purple-100 rounded-xl flex items-center justify-center flex-shrink-0 ml-2">
+                    <svg className="w-6 h-6 sm:w-7 sm:h-7 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h7l5 5v11a2 2 0 01-2 2z" />
+                    </svg>
+                  </div>
                 </div>
               </CardBody>
             </Card>
-            <Card>
-              <CardBody>
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-orange-600">{pendingPayments + overduePayments}</div>
-                  <div className="text-sm text-gray-600">Chờ thanh toán</div>
-                  <div className="text-xs text-gray-500">{overduePayments} quá hạn</div>
+            <Card className="border border-gray-200 shadow-md bg-white hover:shadow-lg transition-shadow rounded-xl">
+              <CardBody className="p-4 sm:p-6">
+                <div className="flex items-center justify-between">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs sm:text-sm font-medium text-gray-600 mb-1">Chờ thanh toán</p>
+                    <p className="text-2xl sm:text-3xl font-bold text-orange-500">{pendingPayments + overduePayments}</p>
+                    <p className="text-xs text-gray-500 mt-1 truncate">{overduePayments} quá hạn</p>
+                  </div>
+                  <div className="w-12 h-12 sm:w-14 sm:h-14 bg-orange-100 rounded-xl flex items-center justify-center flex-shrink-0 ml-2">
+                    <svg className="w-6 h-6 sm:w-7 sm:h-7 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  </div>
                 </div>
               </CardBody>
             </Card>
           </div>
 
           {/* Tabs */}
-          <div className="border-b border-gray-200">
-            <nav className="-mb-px flex space-x-8" role="tablist" aria-label="User sections">
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-1 sm:p-2">
+            <nav className="grid grid-cols-2 sm:flex sm:space-x-1 sm:space-x-2 gap-2 sm:gap-0" role="tablist" aria-label="User sections">
               <button
                 onClick={() => setActiveTab('rooms')}
-                className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                className={`py-2 px-2 sm:py-3 sm:px-4 rounded-lg font-semibold text-xs sm:text-sm transition-all flex items-center justify-center gap-1 sm:gap-2 whitespace-nowrap ${
                   activeTab === 'rooms'
-                    ? 'border-blue-500 text-blue-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                    ? 'bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:bg-gray-50'
                 }`}
                 role="tab"
                 aria-selected={activeTab === 'rooms'}
               >
-                Phòng có sẵn ({rooms.filter(r => r.status === 'AVAILABLE').length})
+                <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                <span className="hidden sm:inline">Tìm phòng</span>
+                <span className="sm:hidden">Tìm phòng</span>
+                <span className="ml-1 text-xs opacity-90">({rooms.filter(r => r.status === 'AVAILABLE').length})</span>
               </button>
               <button
                 onClick={() => setActiveTab('booking')}
-                className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                className={`py-2 px-2 sm:py-3 sm:px-4 rounded-lg font-semibold text-xs sm:text-sm transition-all flex items-center justify-center gap-1 sm:gap-2 whitespace-nowrap ${
                   activeTab === 'booking'
-                    ? 'border-blue-500 text-blue-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                    ? 'bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:bg-gray-50'
                 }`}
                 role="tab"
                 aria-selected={activeTab === 'booking'}
               >
-                Đặt phòng ({totalBookings})
+                <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+                <span className="hidden sm:inline">Đặt phòng</span>
+                <span className="sm:hidden">Đặt phòng</span>
+                <span className="ml-1 text-xs opacity-90">({totalBookings})</span>
               </button>
               <button
                 onClick={() => setActiveTab('services')}
-                className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                className={`py-2 px-2 sm:py-3 sm:px-4 rounded-lg font-semibold text-xs sm:text-sm transition-all flex items-center justify-center gap-1 sm:gap-2 whitespace-nowrap ${
                   activeTab === 'services'
-                    ? 'border-blue-500 text-blue-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                    ? 'bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:bg-gray-50'
                 }`}
                 role="tab"
                 aria-selected={activeTab === 'services'}
               >
-                Dịch vụ ({totalServiceOrders})
+                <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+                <span className="hidden sm:inline">Dịch vụ</span>
+                <span className="sm:hidden">Dịch vụ</span>
+                <span className="ml-1 text-xs opacity-90">({totalServiceOrders})</span>
               </button>
               <button
                 onClick={() => setActiveTab('payments')}
-                className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                className={`py-2 px-2 sm:py-3 sm:px-4 rounded-lg font-semibold text-xs sm:text-sm transition-all flex items-center justify-center gap-1 sm:gap-2 whitespace-nowrap ${
                   activeTab === 'payments'
-                    ? 'border-blue-500 text-blue-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                    ? 'bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:bg-gray-50'
                 }`}
                 role="tab"
                 aria-selected={activeTab === 'payments'}
               >
-                Hóa đơn ({totalPayments})
+                <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h7l5 5v11a2 2 0 01-2 2z" />
+                </svg>
+                <span className="hidden sm:inline">Hóa đơn</span>
+                <span className="sm:hidden">Hóa đơn</span>
+                <span className="ml-1 text-xs opacity-90">({totalPayments})</span>
               </button>
-
               <button
                 onClick={() => setActiveTab('history')}
-                className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                className={`py-2 px-2 sm:py-3 sm:px-4 rounded-lg font-semibold text-xs sm:text-sm transition-all flex items-center justify-center gap-1 sm:gap-2 whitespace-nowrap col-span-2 sm:col-span-1 ${
                   activeTab === 'history'
-                    ? 'border-blue-500 text-blue-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                    ? 'bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:bg-gray-50'
                 }`}
                 role="tab"
                 aria-selected={activeTab === 'history'}
               >
-                Lịch sử
+                <svg className="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span className="hidden sm:inline">Lịch sử</span>
+                <span className="sm:hidden">Lịch sử</span>
               </button>
             </nav>
           </div>
@@ -1280,18 +1427,28 @@ function UserPageContent() {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="block text-xs font-medium text-gray-700 mb-1">
                           Từ ngày
                         </label>
                         <Input
                           type="date"
+                          min={new Date().toISOString().slice(0,10)}
                           value={roomsFilterFrom}
                           onChange={(e) => {
-                            setRoomsFilterFrom(e.target.value);
+                            const todayStr = new Date().toISOString().slice(0,10);
+                            let v = e.target.value;
+                            if (!v || v < todayStr) v = todayStr; // không cho chọn ngày đã qua
+                            // nếu To rỗng hoặc <= From, tự set To = From + 1
+                            const nextDay = (() => { const d = new Date(v); d.setDate(d.getDate()+1); return d.toISOString().slice(0,10); })();
+                            setRoomsFilterFrom(v);
+                            if (!roomsFilterTo || roomsFilterTo <= v) {
+                              setRoomsFilterTo(nextDay);
+                            }
                             setRoomsFilterError(null);
                           }}
+                          className="text-xs sm:text-sm"
                         />
                       </div>
                       <div>
@@ -1300,12 +1457,31 @@ function UserPageContent() {
                         </label>
                         <Input
                           type="date"
+                          min={new Date().toISOString().slice(0,10)}
                           value={roomsFilterTo}
-                      min={roomsFilterFrom || undefined}
                           onChange={(e) => {
-                            setRoomsFilterTo(e.target.value);
+                            const todayStr = new Date().toISOString().slice(0,10);
+                            let to = e.target.value;
+                            if (!to || to < todayStr) to = todayStr; // không cho chọn ngày đã qua
+                            // Nếu chọn Đến ngày là hôm nay: to = hôm nay + 1, from = hôm nay
+                            if (to === todayStr) {
+                              const next = (() => { const d = new Date(todayStr); d.setDate(d.getDate()+1); return d.toISOString().slice(0,10); })();
+                              setRoomsFilterFrom(todayStr);
+                              setRoomsFilterTo(next);
+                              setRoomsFilterError(null);
+                              return;
+                            }
+                            // Nếu to <= from thì set to = from + 1
+                            const from = roomsFilterFrom && roomsFilterFrom > todayStr ? roomsFilterFrom : (roomsFilterFrom || todayStr);
+                            if (!from || to <= from) {
+                              const next = (() => { const d = new Date(from); d.setDate(d.getDate()+1); return d.toISOString().slice(0,10); })();
+                              setRoomsFilterTo(next);
+                            } else {
+                              setRoomsFilterTo(to);
+                            }
                             setRoomsFilterError(null);
                           }}
+                          className="text-xs sm:text-sm"
                         />
                       </div>
                     </div>
@@ -1386,7 +1562,9 @@ function UserPageContent() {
                                 </div>
                               </div>
                               
-                              <div className="p-5 space-y-4">
+                              <div className="relative p-5 space-y-4 bg-gradient-to-r from-blue-50/30 via-indigo-50/30 to-purple-50/30">
+                                {/* Gradient Border Top */}
+                                <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50"></div>
                                 {/* Layout 2 cột: Trái (Tên phòng, Dãy Tòa) - Phải (Tầng, Trạng thái) */}
                                 <div className="grid grid-cols-2 gap-4">
                                   {/* Cột trái: Tên phòng và Dãy Tòa */}
@@ -1597,38 +1775,38 @@ function UserPageContent() {
                   </CardBody>
                 </Card>
               )}
-              <div className="flex justify-between items-center">
-                <h2 className="text-lg font-semibold text-gray-900">Đặt phòng</h2>
-                <Button onClick={() => setBookingModalOpen(true)} className="bg-gray-700 hover:bg-gray-800 text-white">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                <h2 className="text-base sm:text-lg font-semibold text-gray-900">Đặt phòng</h2>
+                <Button onClick={() => setBookingModalOpen(true)} className="w-full sm:w-auto bg-gray-700 hover:bg-gray-800 text-white text-sm sm:text-base">
                   Đặt phòng mới
                 </Button>
               </div>
               
-              <div className="grid gap-4">
+              <div className="grid gap-3 sm:gap-4">
                 {bookings.map((booking) => {
                   const faceState = faceStates[booking.id];
                   return (
                     <Card key={booking.id}>
-                      <CardBody>
+                      <CardBody className="p-4 sm:p-6">
                         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-                          <div className="flex-1">
+                          <div className="flex-1 min-w-0">
                             <div className="flex flex-wrap items-center gap-2 mb-2">
-                              <h3 className="text-lg font-semibold text-gray-900">
+                              <h3 className="text-base sm:text-lg font-semibold text-gray-900">
                                 Phòng {booking.roomType}
                               </h3>
                               {getStatusBadge(booking.status)}
                             </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm text-gray-600">
-                              <div><span className="font-medium">Khách hàng:</span> {booking.guestName}</div>
-                              <div><span className="font-medium">Email:</span> {booking.guestEmail}</div>
-                              <div><span className="font-medium">SĐT:</span> {booking.phoneNumber}</div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3 text-xs sm:text-sm text-gray-600">
+                              <div className="truncate"><span className="font-medium">Khách hàng:</span> <span className="truncate">{booking.guestName}</span></div>
+                              <div className="truncate"><span className="font-medium">Email:</span> <span className="truncate">{booking.guestEmail}</span></div>
+                              <div className="truncate"><span className="font-medium">SĐT:</span> {booking.phoneNumber}</div>
                               <div><span className="font-medium">Số khách:</span> {booking.guests}</div>
                             </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm text-gray-600 mt-2">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3 text-xs sm:text-sm text-gray-600 mt-2">
                               <div><span className="font-medium">Tòa:</span> {booking.building}</div>
                               <div><span className="font-medium">Phòng:</span> {booking.roomNumber}</div>
-                              <div><span className="font-medium">Check-in:</span> {booking.checkIn}</div>
-                              <div><span className="font-medium">Check-out:</span> {booking.checkOut}</div>
+                              <div className="truncate"><span className="font-medium">Check-in:</span> {booking.checkIn}</div>
+                              <div className="truncate"><span className="font-medium">Check-out:</span> {booking.checkOut}</div>
                             </div>
                             <div className="mt-2 text-sm text-gray-600">
                               <span className="font-medium">Mục đích:</span> {booking.purpose}
@@ -1641,66 +1819,97 @@ function UserPageContent() {
                             </div>
 
                             {booking.status === 'CONFIRMED' && (
-                              <div className="mt-4 border-t pt-3 space-y-2">
-                                <p className="text-sm font-medium text-gray-900">
-                                  Nhận phòng bằng khuôn mặt & mã QR
-                                </p>
-                                <p className="text-xs text-gray-600">
-                                  Trạng thái khuôn mặt:&nbsp;
-                                  {faceState?.loading
-                                    ? 'Đang kiểm tra...'
-                                    : faceState?.error
-                                    ? <span className="text-red-600">{faceState.error}</span>
-                                    : faceState?.registered
-                                    ? <span className="text-green-700 font-semibold">Đã đăng ký khuôn mặt</span>
-                                    : <span className="text-yellow-700">Chưa đăng ký khuôn mặt</span>}
-                                </p>
+                              <div className="mt-4 border-t pt-3">
+                                {/* Face Status Info - Compact */}
+                                <div className="flex items-center justify-between mb-3">
+                                  <div className="flex items-center gap-2">
+                                    <div className={`w-2 h-2 rounded-full ${
+                                      faceState?.loading
+                                        ? 'bg-gray-400 animate-pulse'
+                                        : faceState?.error
+                                        ? 'bg-red-500'
+                                        : faceState?.registered
+                                        ? 'bg-green-500'
+                                        : 'bg-yellow-500'
+                                    }`}></div>
+                                    <span className="text-xs text-gray-600">
+                                      {faceState?.loading
+                                        ? 'Đang kiểm tra...'
+                                        : faceState?.error
+                                        ? <span className="text-red-600">Lỗi</span>
+                                        : faceState?.registered
+                                        ? <span className="text-green-700 font-semibold">Đã đăng ký</span>
+                                        : <span className="text-yellow-700">Chưa đăng ký</span>}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {/* Checkout Warning */}
                                 {(() => { 
                                   const co = new Date(booking.checkOut);
                                   const diff = co.getTime() - Date.now();
                                   const oneDay = 12 * 60 * 60 * 1000;
                                   if (!Number.isNaN(co.getTime()) && diff <= oneDay) {
                                     return (
-                                      <div className="mt-3 p-2 bg-yellow-50 border border-yellow-200 rounded">
-                                        <p className="text-xs text-yellow-800">Sắp đến giờ trả phòng. Vui lòng chuẩn bị trả chìa khóa tại bảo vệ hoặc thực hiện Check-out trực tuyến.</p>
+                                      <div className="mb-3 p-2 bg-yellow-50 border border-yellow-200 rounded-lg">
+                                        <p className="text-xs text-yellow-800">⚠️ Sắp đến giờ trả phòng. Vui lòng chuẩn bị trả chìa khóa hoặc thực hiện Check-out trực tuyến.</p>
                                       </div>
                                     )
                                   }
                                   return null
                                 })()}
-                                <div className="flex flex-wrap gap-2">
+
+                                {/* Action Buttons - Compact Design */}
+                                <div className="flex flex-wrap items-center gap-2">
+                                  {/* Check-out Button */}
                                   {(() => { 
                                     const co = new Date(booking.checkOut);
                                     const diff = co.getTime() - Date.now();
                                     const oneDay = 24 * 60 * 60 * 1000;
-                                    if (!Number.isNaN(co.getTime()) && diff <= oneDay) {
+                                    if (booking.originalStatus === 'CHECKED_IN' || (!Number.isNaN(co.getTime()) && diff <= oneDay)) {
                                       return (
                                         <Button
-                                          className="text-sm bg-red-600 hover:bg-red-700 text-white"
-                                          onClick={() => router.push(`/user/checkout?bookingId=${booking.id}`)}
+                                          className="text-xs px-2 sm:px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white shadow-sm flex-1 sm:flex-initial min-w-[100px]"
+                                          onClick={() => {
+                                            setSelectedBookingForCheckout(booking);
+                                            setCheckoutModalOpen(true);
+                                            setCheckoutNote("");
+                                            setCheckoutError(null);
+                                          }}
                                         >
-                                          Check-out
+                                          <svg className="w-3.5 h-3.5 mr-1 sm:mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                                          </svg>
+                                          <span className="hidden sm:inline">Check-out</span>
+                                          <span className="sm:hidden">Out</span>
                                         </Button>
                                       )
                                     }
                                     return null
                                   })()}
 
-                                  <Button
-                                    className="text-sm"
-                                    onClick={() => handleCheckFaceStatus(booking.id)}
-                                    disabled={faceState?.loading}
-                                  >
-                                    Kiểm tra trạng thái khuôn mặt
-                                  </Button>
+                                  {/* Face Management Button */}
                                   <Button
                                     variant="secondary"
-                                    className="text-sm"
+                                    className="text-xs px-2 sm:px-3 py-1.5 flex-1 sm:flex-initial min-w-[100px]"
+                                    onClick={() =>
+                                      router.push(`/user/face-registration?bookingId=${booking.id}`)
+                                    }
+                                  >
+                                    <svg className="w-3.5 h-3.5 mr-1 sm:mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                                    </svg>
+                                    <span className="hidden sm:inline">Khuôn mặt</span>
+                                    <span className="sm:hidden">Face</span>
+                                  </Button>
+
+                                  {/* QR Code Button */}
+                                  <Button
+                                    variant="secondary"
+                                    className="text-xs px-2 sm:px-3 py-1.5 flex-1 sm:flex-initial min-w-[80px]"
                                     onClick={async () => {
-                                      // Nếu chưa có QR code, load trước
                                       if (!faceState?.qrImageUrl) {
                                         await handleLoadQrForBooking(booking.id);
-                                        // Đợi một chút để state update
                                         setTimeout(() => {
                                           const updatedState = faceStates[booking.id];
                                           if (updatedState?.qrImageUrl) {
@@ -1716,7 +1925,6 @@ function UserPageContent() {
                                           }
                                         }, 100);
                                       } else {
-                                        // Nếu đã có QR code, mở modal ngay
                                         setSelectedQrData({
                                           qrDataUrl: faceState.qrImageUrl,
                                           bookingId: booking.id,
@@ -1730,27 +1938,12 @@ function UserPageContent() {
                                     }}
                                     disabled={faceState?.loading || !faceState?.qrImageUrl}
                                   >
-                                    {faceState?.loading ? 'Đang tải...' : 'Xem mã QR'}
+                                    <svg className="w-3.5 h-3.5 mr-1 sm:mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 12h2a1 1 0 001-1v-2a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
+                                    </svg>
+                                    QR
                                   </Button>
-                                  <Button
-                                    variant="secondary"
-                                    className="text-sm"
-                                    onClick={() =>
-                                      router.push(`/user/face-registration?bookingId=${booking.id}`)
-                                    }
-                                  >
-                                    Đăng ký / quản lý khuôn mặt
-                                  </Button>
-                                  {faceState?.registered && (
-                                    <Button
-                                      variant="secondary"
-                                      className="text-sm text-red-600 hover:text-red-700"
-                                      onClick={() => handleDeleteFace(booking.id)}
-                                      disabled={faceState?.loading}
-                                    >
-                                      Xóa khuôn mặt
-                                    </Button>
-                                  )}
+
                                 </div>
                               </div>
                             )}
@@ -2014,9 +2207,8 @@ function UserPageContent() {
               <h3 className="font-medium text-gray-900 mb-2">Thông tin phòng đã chọn</h3>
               <div className="grid grid-cols-2 gap-2 text-sm">
                 <div><span className="font-medium">Tên phòng:</span> {selectedRoom.name || `${selectedRoom.building} - ${selectedRoom.roomNumber}`}</div>
-                <div><span className="font-medium">Mã phòng:</span> {selectedRoom.building} - {selectedRoom.roomNumber}</div>
                 <div><span className="font-medium">Loại:</span> {selectedRoom.roomType}</div>
-                <div><span className="font-medium">Sức chứa:</span> {selectedRoom.capacity} người</div>
+                <div><span className="font-medium">Mô tả:</span> {selectedRoom.description || 'Không có mô tả'}</div>
                 <div><span className="font-medium">Giá:</span> <span className="text-green-600 font-medium">Miễn phí</span></div>
               </div>
             </div>
@@ -2152,15 +2344,23 @@ function UserPageContent() {
                 )}
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
                     Ngày trả phòng <span className="text-red-500">*</span>
-                    <span className="ml-2 text-xs text-gray-500 font-normal">(Tự động)</span>
-                  </label>
-                  <Input
+                  </label>                  <Input
                     type="date"
                     value={newBooking.checkOut}
-                    disabled
-                    className="bg-gray-100 cursor-not-allowed"
+                    min={(newBooking.checkIn || todayStr)}
+                    onChange={(e) => {
+                      const today = new Date().toISOString().slice(0,10);
+                      const from = newBooking.checkIn || today;
+                      let to = e.target.value;
+                      if (!to || to <= from) {
+                        const d = new Date(from);
+                        d.setDate(d.getDate() + 1);
+                        to = d.toISOString().slice(0,10);
+                      }
+                      setNewBooking(prev => ({ ...prev, checkOut: to }));
+                    }}
                   />
                   <div className="mt-2">
                     <label className="block text-xs font-medium text-gray-600 mb-1">Giờ trả phòng</label>
@@ -2171,11 +2371,6 @@ function UserPageContent() {
                       className="bg-gray-100 cursor-not-allowed"
                     />
                   </div>
-                  {newBooking.checkIn && (
-                    <p className="mt-1 text-xs text-gray-500">
-                      Tự động đặt: {newBooking.checkIn} → {newBooking.checkOut} (1 ngày)
-                    </p>
-                  )}
                 {bookingErrors.checkOut && (
                   <p className="mt-1 text-xs text-red-600">{bookingErrors.checkOut}</p>
                 )}
@@ -2500,6 +2695,145 @@ function UserPageContent() {
         )}
       </Modal>
 
+      {/* Checkout Modal */}
+      <Modal
+        open={checkoutModalOpen}
+        onClose={() => {
+          setCheckoutModalOpen(false);
+          setSelectedBookingForCheckout(null);
+          setCheckoutNote("");
+          setCheckoutError(null);
+        }}
+        title="Check-out phòng"
+      >
+        {selectedBookingForCheckout && (
+          <div className="space-y-6">
+            {/* Booking Info */}
+            <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-4 border-2 border-blue-200">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+                  </svg>
+                </div>
+                <div className="flex-1">
+                  <p className="text-sm font-bold text-gray-900 mb-2">Thông tin booking</p>
+                  <div className="space-y-1 text-sm text-gray-700">
+                    <p><span className="font-medium">Phòng:</span> {selectedBookingForCheckout.roomType} - {selectedBookingForCheckout.roomNumber}</p>
+                    <p><span className="font-medium">Check-in:</span> {new Date(selectedBookingForCheckout.checkIn).toLocaleString('vi-VN')}</p>
+                    <p><span className="font-medium">Check-out:</span> {new Date(selectedBookingForCheckout.checkOut).toLocaleString('vi-VN')}</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Info Box */}
+            <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-4">
+              <div className="flex items-start gap-3">
+                <svg className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <div>
+                  <p className="text-sm font-semibold text-blue-900 mb-1">Thông tin quan trọng</p>
+                  <p className="text-sm text-blue-800">
+                    Sau khi gửi yêu cầu check-out, bạn sẽ cần trả chìa khóa tại bàn bảo vệ để hoàn tất thủ tục.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Note Field */}
+            <div>
+              <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
+                <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                </svg>
+                Ghi chú (tùy chọn)
+              </label>
+              <textarea
+                className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+                rows={4}
+                value={checkoutNote}
+                onChange={(e) => setCheckoutNote(e.target.value)}
+                placeholder="Ví dụ: Tình trạng phòng trước khi rời đi, số chìa khóa bàn giao, thời gian dự kiến trả chìa khóa..."
+              />
+            </div>
+
+            {/* Error Message */}
+            {checkoutError && (
+              <div className="bg-red-50 border-2 border-red-200 rounded-lg p-3">
+                <p className="text-sm text-red-800 flex items-center gap-2">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  {checkoutError}
+                </p>
+              </div>
+            )}
+
+            {/* Instructions */}
+            <div className="bg-amber-50 border-2 border-amber-200 rounded-xl p-4">
+              <p className="text-sm font-semibold text-amber-900 mb-2">📋 Hướng dẫn sau khi check-out:</p>
+              <ul className="space-y-1 text-sm text-amber-800">
+                {[
+                  'Thu dọn đồ đạc và đảm bảo không bỏ quên tài sản cá nhân',
+                  'Tắt các thiết bị điện, nước',
+                  'Đóng cửa sổ, khóa cửa phòng',
+                  'Trả chìa khóa tại bàn bảo vệ'
+                ].map((item, idx) => (
+                  <li key={idx} className="flex items-start gap-2">
+                    <span className="text-amber-600 font-bold mt-0.5">{idx + 1}.</span>
+                    <span>{item}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex flex-col sm:flex-row gap-3 pt-4 border-t border-gray-200">
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setCheckoutModalOpen(false);
+                  setSelectedBookingForCheckout(null);
+                  setCheckoutNote("");
+                  setCheckoutError(null);
+                }}
+                className="flex items-center justify-center gap-2"
+                disabled={checkoutSubmitting}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+                Hủy
+              </Button>
+              <Button
+                onClick={handleCheckout}
+                disabled={checkoutSubmitting}
+                className="flex-1 bg-red-500 hover:bg-red-600 text-white shadow-md flex items-center justify-center gap-2 disabled:bg-gray-400"
+              >
+                {checkoutSubmitting ? (
+                  <>
+                    <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Đang xử lý...
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    Xác nhận check-out
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
       {/* QR Code Modal */}
       <Modal
         open={qrModalOpen}
@@ -2509,9 +2843,7 @@ function UserPageContent() {
         {selectedQrData && (
           <div className="space-y-6">
             <div className="text-center">
-              <p className="text-sm text-gray-600 mb-4">
-                Xuất trình mã QR này tại lễ tân khi check-in
-              </p>
+        
               {selectedQrData.bookingData && 
                selectedQrData.bookingId && 
                selectedQrData.bookingData.userId && 
