@@ -12,6 +12,7 @@ interface ConditionalLayoutProps {
 }
 
 function ConditionalLayoutContent({ children }: ConditionalLayoutProps) {
+  const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarVisible, setSidebarVisible] = useState(true); // Sidebar visibility (show/hide)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true); // Sidebar collapsed state (icon/full)
@@ -22,6 +23,9 @@ function ConditionalLayoutContent({ children }: ConditionalLayoutProps) {
     role: string;
     avatar?: string;
   } | null>(null);
+
+  // Check if current path should skip header, footer, and sidebar
+  const skipLayout = pathname?.startsWith('/security/checkin') || pathname?.startsWith('/security/open-door');
 
   // Persist sidebar state across page navigation
   useEffect(() => {
@@ -69,6 +73,17 @@ function ConditionalLayoutContent({ children }: ConditionalLayoutProps) {
       }
     }
   }, []);
+
+  // If skipLayout is true, render only the content without header, footer, sidebar
+  if (skipLayout) {
+    return (
+      <div className="min-h-screen bg-gray-50" suppressHydrationWarning>
+        <RoleGuard>
+          {children}
+        </RoleGuard>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50" suppressHydrationWarning>

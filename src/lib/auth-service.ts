@@ -176,14 +176,14 @@ class AuthService {
 
     const accountInfo = data.accountInfo
     if (accountInfo) {
-      const roleNameArray = Array.isArray(accountInfo.roleName) ? accountInfo.roleName : []
+      // Backend AccountInfoAuthenticateDTO format: { id, email, firstName, lastName, avatarUrl, roles }
+      // roles is List<String>, không có roleName, username
       const rolesArray = Array.isArray(accountInfo.roles) ? accountInfo.roles : []
-      const allRoles = roleNameArray.length > 0 ? roleNameArray : rolesArray
       
       const userInfo: UserInfo = {
         id: accountInfo.id || '',
         email: accountInfo.email || '',
-        username: accountInfo.username,
+        username: accountInfo.username || accountInfo.email || '', // Fallback to email if no username
         firstName: accountInfo.firstName,
         lastName: accountInfo.lastName,
         name: accountInfo.firstName && accountInfo.lastName 
@@ -191,9 +191,9 @@ class AuthService {
           : accountInfo.firstName || accountInfo.lastName || accountInfo.email || '',
         picture: accountInfo.avatarUrl || accountInfo.picture,
         avatarUrl: accountInfo.avatarUrl,
-        role: allRoles.length > 0 ? String(allRoles[0]) : accountInfo.role,
-        roleName: allRoles.length > 0 ? allRoles : (roleNameArray.length > 0 ? roleNameArray : []),
-        roles: allRoles.length > 0 ? allRoles : (rolesArray.length > 0 ? rolesArray : roleNameArray),
+        role: rolesArray.length > 0 ? String(rolesArray[0]) : accountInfo.role || 'USER',
+        roleName: rolesArray, // Use roles as roleName
+        roles: rolesArray,
       }
       
       this.setUserInfo(userInfo)
@@ -252,9 +252,12 @@ class AuthService {
         throw new Error('Backend không trả về access token mới sau khi refresh')
       }
 
+      // Backend trả về refreshToken trong AuthenticationResponse
+      const refreshToken = data.refreshToken || data.refresh_token
+      
       const tokens: AuthTokens = {
         accessToken: newToken,
-        refreshToken: undefined,
+        refreshToken: refreshToken,
         expiresIn: data.expiresIn || data.expires_in,
       }
 
@@ -262,20 +265,23 @@ class AuthService {
 
       if (data.accountInfo) {
         const accountInfo = data.accountInfo
+        // Backend AccountInfoAuthenticateDTO format: { id, email, firstName, lastName, avatarUrl, roles }
+        const rolesArray = Array.isArray(accountInfo.roles) ? accountInfo.roles : []
+        
         const userInfo: UserInfo = {
-          id: accountInfo.id,
+          id: accountInfo.id || '',
           email: accountInfo.email || '',
-          username: accountInfo.username,
+          username: accountInfo.username || accountInfo.email || '',
           firstName: accountInfo.firstName,
           lastName: accountInfo.lastName,
           name: accountInfo.firstName && accountInfo.lastName 
             ? `${accountInfo.firstName} ${accountInfo.lastName}`
-            : accountInfo.firstName || accountInfo.lastName || accountInfo.email,
+            : accountInfo.firstName || accountInfo.lastName || accountInfo.email || '',
           picture: accountInfo.avatarUrl || accountInfo.picture,
           avatarUrl: accountInfo.avatarUrl,
-          role: accountInfo.roleName?.[0] || accountInfo.roles?.[0],
-          roleName: accountInfo.roleName || accountInfo.roles,
-          roles: accountInfo.roleName || accountInfo.roles,
+          role: rolesArray.length > 0 ? String(rolesArray[0]) : accountInfo.role || 'USER',
+          roleName: rolesArray,
+          roles: rolesArray,
         }
         this.setUserInfo(userInfo)
       }

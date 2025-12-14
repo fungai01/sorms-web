@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
 import { useUsers } from "@/hooks/useApi";
@@ -58,8 +58,37 @@ function UsersInner() {
   const [query, setQuery] = useState("")
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(10);
-  // Load users with hook (auto refetch on query change)
-  const { data: usersData, loading, error, refetch: refetchUsers } = useUsers(undefined, 0, 100, query.trim() || undefined);
+  // Refs to prevent spam requests
+  const isInitialLoadRef = useRef(false)
+  const queryDebounceRef = useRef<NodeJS.Timeout | null>(null)
+  const isProcessingRef = useRef(false)
+  
+  // Load users with hook - debounced query
+  const [debouncedQuery, setDebouncedQuery] = useState("")
+  const { data: usersData, loading, error, refetch: refetchUsers } = useUsers(undefined, 0, 100, debouncedQuery.trim() || undefined);
+  
+  // Debounce query changes
+  useEffect(() => {
+    if (!isInitialLoadRef.current) {
+      isInitialLoadRef.current = true
+      setDebouncedQuery(query)
+      return
+    }
+    
+    if (queryDebounceRef.current) {
+      clearTimeout(queryDebounceRef.current)
+    }
+    
+    queryDebounceRef.current = setTimeout(() => {
+      setDebouncedQuery(query)
+    }, 500)
+    
+    return () => {
+      if (queryDebounceRef.current) {
+        clearTimeout(queryDebounceRef.current)
+      }
+    }
+  }, [query])
   const [sortKey, setSortKey] = useState<"name" | "email">("name");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [detailOpen, setDetailOpen] = useState(false);
@@ -313,6 +342,11 @@ function UsersInner() {
     });
     return ordered;
   }, [rows, sortKey, sortOrder]);
+  
+  // Memoize paginated data to prevent recalculation
+  const paginatedData = useMemo(() => {
+    return filtered.slice((page - 1) * size, page * size);
+  }, [filtered, page, size]);
 
   const updateFullName = (first?: string, last?: string) => {
     const f = first ?? editForm.first_name ?? ''
@@ -1507,6 +1541,7 @@ export default function UsersPage() {
     </Suspense>
   )
 }
+
 
 
 

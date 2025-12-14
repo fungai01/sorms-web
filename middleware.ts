@@ -8,6 +8,12 @@ export async function middleware(req: NextRequest) {
 		return NextResponse.next();
 	}
 
+	// Public routes that don't require authentication
+	const publicRoutes = ['/security/checkin', '/security/open-door'];
+	if (publicRoutes.includes(pathname)) {
+		return NextResponse.next();
+	}
+
 	// Get role and login flag from cookies (set by client after auth)
 	const roleFromCookie = req.cookies.get("role")?.value;
 	const isLoggedInCookie = req.cookies.get("isLoggedIn")?.value === 'true';
@@ -30,8 +36,6 @@ export async function middleware(req: NextRequest) {
 				return "/admin/dashboard";
 			case "office":
 				return "/office/dashboard";
-			case "security":
-				return "/security/dashboard";
 			case "staff":
 				return "/staff/dashboard";
 			default:
@@ -62,6 +66,11 @@ export async function middleware(req: NextRequest) {
 			return NextResponse.redirect(url);
 		}
 	} else if (pathname.startsWith("/security")) {
+		// Public security routes (checkin, open-door) don't require role check
+		if (pathname === "/security/checkin" || pathname === "/security/open-door") {
+			return NextResponse.next();
+		}
+		// Other security routes still require security role
 		if (roleFromCookie !== "security") {
 			console.log('❌ Access denied - not security, redirecting to user dashboard');
 			const url = req.nextUrl.clone();

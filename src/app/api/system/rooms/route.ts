@@ -109,7 +109,16 @@ export async function GET(request: NextRequest) {
       // data là array trực tiếp, không phải { content: [...] }
       const items = Array.isArray(data) ? data : [];
       console.log('[API /system/rooms] Returning items:', items.length);
-      return NextResponse.json({ items, total: items.length });
+      
+      // Add caching headers - cache for 30 seconds (rooms status changes more frequently)
+      return NextResponse.json(
+        { items, total: items.length },
+        {
+          headers: {
+            'Cache-Control': 'public, s-maxage=30, stale-while-revalidate=60',
+          },
+        }
+      );
     }
     
     console.error('[API /system/rooms] Failed to get all rooms:', {

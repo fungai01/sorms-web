@@ -89,6 +89,11 @@ export default function PaymentsPage() {
       return a.created_at.localeCompare(b.created_at) * dir
     })
   }, [rows, query, filterStatus, sortKey, sortOrder])
+  
+  // Memoize paginated data to prevent recalculation
+  const paginatedData = useMemo(() => {
+    return filtered.slice((page - 1) * size, page * size)
+  }, [filtered, page, size])
 
   function openCreate() {
     setEdit({ code: '', order_code: '', payer_name: '', method: 'Chuyển Khoản', amount: '', created_at: '', status: 'PENDING', note: '' })

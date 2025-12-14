@@ -19,6 +19,13 @@ export default function RoleGuard({ children }: { children: React.ReactNode }) {
 
     const checkAccess = async () => {
       try {
+        // Public routes that don't require authentication
+        const publicRoutes = ["/security/checkin", "/security/open-door"];
+        if (publicRoutes.includes(pathname)) {
+          setIsChecking(false);
+          return;
+        }
+
         // Check if user is authenticated
         const isAuthenticated = authService.isAuthenticated();
         
@@ -76,6 +83,12 @@ export default function RoleGuard({ children }: { children: React.ReactNode }) {
           return;
         }
 
+        // Skip role check for public security routes
+        if (pathname === "/security/checkin" || pathname === "/security/open-door") {
+          setIsChecking(false);
+          return;
+        }
+
         const required = requires[entry];
 
         // Map role to dashboard path
@@ -83,7 +96,7 @@ export default function RoleGuard({ children }: { children: React.ReactNode }) {
           admin: "/admin/dashboard",
           office: "/office/dashboard",
           staff: "/staff/dashboard",
-          security: "/security/dashboard",
+          security: "/user/dashboard", // Security users go to user dashboard
           user: "/user/dashboard",
         };
 

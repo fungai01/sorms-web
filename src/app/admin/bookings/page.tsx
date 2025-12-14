@@ -29,9 +29,43 @@ export default function BookingsPage() {
   const [dateTo, setDateTo] = useState("")
   const [filterStatus, setFilterStatus] = useState<'ALL' | BookingStatus>('ALL')
   
-  // API hooks
+  // Refs to prevent spam requests
+  const isInitialLoadRef = useRef(false)
+  const filterDebounceRef = useRef<NodeJS.Timeout | null>(null)
+  const isProcessingRef = useRef(false)
+  
+  // API hooks - only refetch when filterStatus changes (debounced)
   const { data: bookingsData, refetch: refetchBookings, loading: bookingsLoading, error: bookingsError } = useBookings(filterStatus)
   const { data: roomsData, refetch: refetchRooms, loading: roomsLoading, error: roomsError } = useRooms()
+  
+  // Debounced refetch for bookings when filter changes
+  useEffect(() => {
+    if (!isInitialLoadRef.current) {
+      isInitialLoadRef.current = true
+      return
+    }
+    
+    // Clear previous debounce
+    if (filterDebounceRef.current) {
+      clearTimeout(filterDebounceRef.current)
+    }
+    
+    // Debounce filter changes to prevent spam
+    filterDebounceRef.current = setTimeout(() => {
+      if (!isProcessingRef.current) {
+        isProcessingRef.current = true
+        refetchBookings().finally(() => {
+          isProcessingRef.current = false
+        })
+      }
+    }, 500) // Wait 500ms after last filter change
+    
+    return () => {
+      if (filterDebounceRef.current) {
+        clearTimeout(filterDebounceRef.current)
+      }
+    }
+  }, [filterStatus, refetchBookings])
   const [sortKey, setSortKey] = useState<'id' | 'code' | 'checkin' | 'checkout'>("checkin")
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>("asc")
   const [page, setPage] = useState(1)
@@ -40,34 +74,35 @@ export default function BookingsPage() {
   const [detailOpen, setDetailOpen] = useState(false)
   const [selected, setSelected] = useState<Booking | null>(null)
 
-  const selectedMeta = selected
-    ? (() => {
-        const raw = selected as Record<string, any>
-        const totalCandidate =
-          raw?.totalPrice ??
-          raw?.total_price ??
-          raw?.totalAmount ??
-          raw?.total_amount ??
-          raw?.amount ??
-          null
-        const parsedTotal =
-          typeof totalCandidate === 'number'
-            ? totalCandidate
-            : typeof totalCandidate === 'string' && totalCandidate.trim() !== ''
-              ? Number(totalCandidate)
-              : null
-        const paymentCandidate =
-          raw?.paymentStatus ??
-          raw?.payment_status ??
-          raw?.paymentState ??
-          raw?.payment_state ??
-          null
-        return {
-          totalPrice: typeof parsedTotal === 'number' && Number.isFinite(parsedTotal) ? parsedTotal : null,
-          paymentStatus: typeof paymentCandidate === 'string' ? paymentCandidate : null
-        }
-      })()
-    : { totalPrice: null, paymentStatus: null }
+  // Memoize selectedMeta to prevent recalculation on every render
+  const selectedMeta = useMemo(() => {
+    if (!selected) return { totalPrice: null, paymentStatus: null }
+    
+    const raw = selected as Record<string, any>
+    const totalCandidate =
+      raw?.totalPrice ??
+      raw?.total_price ??
+      raw?.totalAmount ??
+      raw?.total_amount ??
+      raw?.amount ??
+      null
+    const parsedTotal =
+      typeof totalCandidate === 'number'
+        ? totalCandidate
+        : typeof totalCandidate === 'string' && totalCandidate.trim() !== ''
+          ? Number(totalCandidate)
+          : null
+    const paymentCandidate =
+      raw?.paymentStatus ??
+      raw?.payment_status ??
+      raw?.paymentState ??
+      raw?.payment_state ??
+      null
+    return {
+      totalPrice: typeof parsedTotal === 'number' && Number.isFinite(parsedTotal) ? parsedTotal : null,
+      paymentStatus: typeof paymentCandidate === 'string' ? paymentCandidate : null
+    }
+  }, [selected])
 
   const [editOpen, setEditOpen] = useState(false)
   const [edit, setEdit] = useState<{ id?: number, code: string, userId?: number, roomId: number, checkinDate: string, checkoutDate: string, numGuests: number, status: BookingStatus, note: string }>({ code: '', userId: undefined, roomId: 1, checkinDate: '', checkoutDate: '', numGuests: 1, status: 'PENDING', note: '' })
@@ -82,6 +117,29 @@ export default function BookingsPage() {
   }, [])
 
   useEffect(() => { if (!flash) return; const t = setTimeout(() => setFlash(null), 3000); return () => clearTimeout(t) }, [flash])
+
+  // Memoize room name map for fast lookup - must be before useEffect that uses it
+  const roomNameMap = useMemo(() => {
+    const map = new Map<number, string>()
+    rooms.forEach(room => {
+      map.set(room.id, room.name || room.code || `Room ${room.id}`)
+    })
+    return map
+  }, [rooms])
+  
+  const getRoomName = useCallback((roomId: number) => {
+    return roomNameMap.get(roomId) || `Room ${roomId}`
+  }, [roomNameMap])
+  
+  // Memoize renderStatusChip to prevent recreation
+  const renderStatusChip = useCallback((s: BookingStatus) => {
+    if (s === 'PENDING') return <Badge tone="pending">Chờ duyệt</Badge>
+    if (s === 'APPROVED') return <Badge tone="approved">Đã duyệt</Badge>
+    if (s === 'REJECTED') return <Badge tone="rejected">Đã từ chối</Badge>
+    if (s === 'CANCELLED') return <Badge tone="cancelled">Đã hủy</Badge>
+    if (s === 'CHECKED_IN') return <Badge tone="checked-in">Đã nhận phòng</Badge>
+    return <Badge tone="checked-out">Đã trả phòng</Badge>
+  }, [])
 
   // Check for new bookings and add to notification system
   useEffect(() => {
@@ -121,7 +179,7 @@ export default function BookingsPage() {
       
       lastBookingCheck.current = Date.now();
     }
-  }, [rows, rooms]);
+  }, [rows, rooms, getRoomName]);
 
   // Keyboard shortcuts for edit modal: Enter = Save, Esc = Close (avoid Enter in textarea)
   useEffect(() => {
@@ -230,6 +288,11 @@ export default function BookingsPage() {
       return a.checkoutDate.localeCompare(b.checkoutDate) * dir
     })
   }, [rows, sortKey, sortOrder])
+  
+  // Memoize paginated data to prevent recalculation
+  const paginatedData = useMemo(() => {
+    return filtered.slice((page - 1) * size, page * size)
+  }, [filtered, page, size])
 
   function openCreate() {
     setFieldErrors({})
@@ -560,21 +623,6 @@ export default function BookingsPage() {
     setFlash({ type: 'error', text: 'Chức năng kích hoạt đặt phòng chưa được backend hỗ trợ' })
   }
 
-  function renderStatusChip(s: BookingStatus) {
-    if (s === 'PENDING') return <Badge tone="pending">Chờ duyệt</Badge>
-    if (s === 'APPROVED') return <Badge tone="approved">Đã duyệt</Badge>
-    if (s === 'REJECTED') return <Badge tone="rejected">Đã từ chối</Badge>
-    if (s === 'CANCELLED') return <Badge tone="cancelled">Đã hủy</Badge>
-    if (s === 'CHECKED_IN') return <Badge tone="checked-in">Đã nhận phòng</Badge>
-    return <Badge tone="checked-out">Đã trả phòng</Badge>
-  }
-
-  const getRoomName = (roomId: number) => {
-    const room = rooms.find(r => r.id === roomId)
-    if (!room) return `Room ${roomId}`
-    return room.name || room.code || `Room ${roomId}`
-  }
-
   return (
     <>
       {/* Header - Mobile Optimized */}
@@ -834,7 +882,7 @@ export default function BookingsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filtered.slice((page - 1) * size, page * size).map((row) => (
+                    {paginatedData.map((row) => (
                           <tr key={row.id} className="hover:bg-gray-50 border-b border-gray-100">
                             <td className="px-4 py-3 text-center font-medium text-gray-900">{row.code}</td>
                             <td className="px-4 py-3 text-center text-gray-700">{row.userId} - {row.userName || `User`}</td>
@@ -881,7 +929,7 @@ export default function BookingsPage() {
                   {/* Mobile Cards - Optimized */}
                   <div className="lg:hidden p-3">
                     <div className="space-y-3">
-                      {filtered.slice((page - 1) * size, page * size).map((row) => (
+                      {paginatedData.map((row) => (
                         <div
                           key={row.id}
                           className="bg-white rounded-2xl border border-gray-200 shadow-sm hover:shadow-lg transition-all duration-300 overflow-hidden"

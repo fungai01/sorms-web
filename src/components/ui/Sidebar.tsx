@@ -245,7 +245,7 @@ export default function Sidebar({ user, isVisible = false, collapsed = true, onT
     
     } else if (isSecurity || currentRole === 'security') {
       return [
-        { name: 'Dashboard', href: '/security/dashboard', icon: <Icons.Dashboard />, current: pathname.startsWith('/security/dashboard') },
+        { name: 'Dashboard', href: '/user/dashboard', icon: <Icons.Dashboard />, current: pathname.startsWith('/user/dashboard') },
       ];
 
     } else if (isUser || currentRole === 'user') {

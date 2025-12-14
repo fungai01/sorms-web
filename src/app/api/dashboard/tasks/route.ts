@@ -31,7 +31,15 @@ export async function GET() {
     const done = list.filter((t) => toKey(t.status) === 'DONE' || toKey(t.status) === 'COMPLETED').length
     const cancelled = list.filter((t) => toKey(t.status) === 'CANCELLED' || toKey(t.status) === 'CANCELED').length
 
-    return NextResponse.json({ todo, in_progress, done, cancelled })
+    // Add caching headers - cache for 30 seconds
+    return NextResponse.json(
+      { todo, in_progress, done, cancelled },
+      {
+        headers: {
+          'Cache-Control': 'public, s-maxage=30, stale-while-revalidate=60',
+        },
+      }
+    )
   } catch (error) {
     console.error('[Dashboard Tasks] API error:', error)
     // Return empty counts instead of error to prevent dashboard from breaking

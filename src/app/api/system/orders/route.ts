@@ -149,15 +149,91 @@ export async function POST(req: NextRequest) {
 
     // Staff workflow: Create service order
     if (action === 'service') {
+      // Validate required fields according to backend CreateServiceOrderRequest
+      // Backend requires: bookingId, orderId, serviceId, quantity, assignedStaffId, requestedBy, serviceTime
+      if (!body.bookingId) {
+        return NextResponse.json({ error: 'bookingId is required' }, { status: 400 })
+      }
+      if (!body.orderId) {
+        return NextResponse.json({ error: 'orderId is required' }, { status: 400 })
+      }
+      if (!body.serviceId) {
+        return NextResponse.json({ error: 'serviceId is required' }, { status: 400 })
+      }
+      if (!body.quantity || body.quantity <= 0) {
+        return NextResponse.json({ error: 'quantity is required and must be greater than 0' }, { status: 400 })
+      }
+      if (!body.assignedStaffId) {
+        return NextResponse.json({ error: 'assignedStaffId is required' }, { status: 400 })
+      }
+      if (!body.requestedBy) {
+        return NextResponse.json({ error: 'requestedBy is required' }, { status: 400 })
+      }
+      if (!body.serviceTime) {
+        return NextResponse.json({ error: 'serviceTime is required' }, { status: 400 })
+      }
+      
+      // Format payload according to backend expectations
+      // Backend expects: bookingId (Long), orderId (Long), serviceId (Long), 
+      // quantity (BigDecimal), assignedStaffId (Long), requestedBy (Long), 
+      // serviceTime (LocalDateTime), note (String, optional)
+      const payload = {
+        bookingId: Number(body.bookingId),
+        orderId: Number(body.orderId),
+        serviceId: Number(body.serviceId),
+        quantity: Number(body.quantity), // Backend will convert to BigDecimal
+        assignedStaffId: Number(body.assignedStaffId),
+        requestedBy: Number(body.requestedBy),
+        serviceTime: body.serviceTime, // Should be in format: "yyyy-MM-dd'T'HH:mm:ss"
+        note: body.note || null,
+      }
+      
       const auth = req.headers.get('authorization') || ''
-      const res = await fetch(`${BASE}/orders/service`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) },
-        body: JSON.stringify(body),
+      console.log('[API /system/orders] Creating service order:', {
+        bookingId: payload.bookingId,
+        orderId: payload.orderId,
+        serviceId: payload.serviceId,
+        quantity: payload.quantity,
+        assignedStaffId: payload.assignedStaffId,
+        requestedBy: payload.requestedBy,
+        serviceTime: payload.serviceTime,
+        hasAuth: !!auth,
       })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
-      return NextResponse.json(data.data ?? data, { status: 201 })
+      
+      try {
+        const res = await fetch(`${BASE}/orders/service`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) },
+          body: JSON.stringify(payload),
+        })
+        
+        const data = await res.json().catch(() => ({}))
+        
+        if (!res.ok) {
+          console.error('[API /system/orders] Backend error:', {
+            status: res.status,
+            statusText: res.statusText,
+            error: data?.message || data?.error || 'Unknown error',
+            response: data,
+          })
+          return NextResponse.json(
+            { 
+              error: data?.message || data?.error || `Backend error: ${res.status} ${res.statusText}`,
+              details: data,
+            }, 
+            { status: res.status >= 400 && res.status < 500 ? res.status : 500 }
+          )
+        }
+        
+        console.log('[API /system/orders] Service order created successfully:', data)
+        return NextResponse.json(data.data ?? data, { status: 201 })
+      } catch (error) {
+        console.error('[API /system/orders] Request failed:', error)
+        return NextResponse.json(
+          { error: error instanceof Error ? error.message : 'Failed to create service order' },
+          { status: 500 }
+        )
+      }
     }
 
     // Staff workflow: Staff confirm order

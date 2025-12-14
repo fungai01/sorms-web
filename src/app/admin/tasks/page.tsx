@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import { useStaffTasks } from "@/hooks/useApi";
 import Input from "@/components/ui/Input";
 import Button from "@/components/ui/Button";
@@ -64,6 +64,12 @@ export default function TasksPage() {
   const [loading, setLoading] = useState(false)
   // Hook: load tasks via API route
   const { data: tasksData, loading: tasksLoading, error, refetch } = useStaffTasks()
+  
+  // Refs to prevent spam requests
+  const isInitialLoadRef = useRef(false)
+  const filterDebounceRef = useRef<NodeJS.Timeout | null>(null)
+  const isProcessingRef = useRef(false)
+  
   useEffect(() => {
     if (tasksData) {
       if (Array.isArray((tasksData as any).items)) setRows(((tasksData as any).items).map(normalizeTask))
@@ -74,7 +80,14 @@ export default function TasksPage() {
     setLoading(!!tasksLoading)
   }, [tasksData, tasksLoading])
   
-  async function refetchTasks() {
+  const refetchTasks = useCallback(async () => {
+    // Prevent multiple simultaneous requests
+    if (isProcessingRef.current) {
+      console.log('[Tasks] Request already in progress, skipping...')
+      return
+    }
+    
+    isProcessingRef.current = true
     setLoading(true)
     try {
       // Build query params based on filters
@@ -90,22 +103,45 @@ export default function TasksPage() {
       const res = await fetch(endpoint, { headers: { 'Content-Type': 'application/json' }, credentials: 'include' })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
-      if (Array.isArray(data)) setRows(data)
-      else if (Array.isArray(data?.items)) setRows(data.items)
+      if (Array.isArray(data)) setRows(data.map(normalizeTask))
+      else if (Array.isArray(data?.items)) setRows(data.items.map(normalizeTask))
       else setRows([])
     } catch {
       setRows([])
     } finally {
       setLoading(false)
+      isProcessingRef.current = false
     }
-  }
-  
-  // Refetch when filters change
-  useEffect(() => {
-    refetchTasks()
   }, [filterStatus, filterAssignee, filterRelatedType, filterRelatedId])
   
-  useEffect(() => { refetch() }, [])
+  // Initial load only once
+  useEffect(() => {
+    if (!isInitialLoadRef.current) {
+      isInitialLoadRef.current = true
+      refetch()
+    }
+  }, [refetch])
+  
+  // Debounced refetch when filters change (only after initial load)
+  useEffect(() => {
+    if (!isInitialLoadRef.current) return // Skip if initial load hasn't happened
+    
+    // Clear previous debounce
+    if (filterDebounceRef.current) {
+      clearTimeout(filterDebounceRef.current)
+    }
+    
+    // Debounce filter changes to prevent spam
+    filterDebounceRef.current = setTimeout(() => {
+      refetchTasks()
+    }, 500) // Wait 500ms after last filter change
+    
+    return () => {
+      if (filterDebounceRef.current) {
+        clearTimeout(filterDebounceRef.current)
+      }
+    }
+  }, [filterStatus, filterAssignee, filterRelatedType, filterRelatedId, refetchTasks])
 
   useEffect(() => { if (!flash) return; const t = setTimeout(() => setFlash(null), 3000); return () => clearTimeout(t) }, [flash])
 
@@ -145,6 +181,12 @@ export default function TasksPage() {
     setEditOpen(true)
   }
   function confirmDelete(id: number) { setConfirmOpen({ open: true, id }) }
+  
+  // Only open detail modal when clicked - no auto-loading
+  function openDetail(task: StaffTask) {
+    setSelected(task)
+    setDetailOpen(true)
+  }
   async function doDelete() {
     if (!confirmOpen.id) return
     const id = confirmOpen.id
@@ -506,7 +548,7 @@ export default function TasksPage() {
                       </td>
                       <td className="px-4 py-3 text-center">
                         <div className="flex gap-2 justify-center">
-                          <Button variant="secondary" className="h-8 px-3 text-xs" onClick={() => { setSelected(r); setDetailOpen(true) }}>Xem</Button>
+                          <Button variant="secondary" className="h-8 px-3 text-xs" onClick={() => openDetail(r)}>Xem</Button>
                           <Button variant="secondary" className="h-8 px-3 text-xs" onClick={() => openEditRow(r)}>Sửa</Button>
                           {r.isActive !== false ? (
                             <Button variant="danger" className="h-8 px-3 text-xs" onClick={() => confirmDelete(r.id)}>Vô hiệu</Button>
@@ -575,7 +617,7 @@ export default function TasksPage() {
                     {/* Nút thao tác giống bookings */}
                     <div className="px-3 py-3 bg-gray-50 border-t border-gray-100">
                       <div className="grid grid-cols-3 gap-2">
-                        <Button variant="secondary" className="h-10 text-xs font-medium px-2" onClick={() => { setSelected(r); setDetailOpen(true) }}>Xem</Button>
+                        <Button variant="secondary" className="h-10 text-xs font-medium px-2" onClick={() => openDetail(r)}>Xem</Button>
                         <Button className="h-10 text-xs font-medium px-2" onClick={() => openEditRow(r)}>Sửa</Button>
                         {r.isActive !== false ? (
                           <Button variant="danger" className="h-10 text-xs font-medium px-2" onClick={() => confirmDelete(r.id)}>Vô hiệu</Button>

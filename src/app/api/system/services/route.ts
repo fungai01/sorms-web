@@ -33,7 +33,16 @@ export async function GET(req: NextRequest) {
     
     const raw: any = response.data
     const items = Array.isArray(raw?.content) ? raw.content : (Array.isArray(raw) ? raw : [])
-    return NextResponse.json({ items, total: items.length })
+    
+    // Add caching headers - cache for 60 seconds (services don't change often)
+    return NextResponse.json(
+      { items, total: items.length },
+      {
+        headers: {
+          'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=120',
+        },
+      }
+    )
   } catch (error) {
     console.error('Services API error:', error)
     return NextResponse.json(

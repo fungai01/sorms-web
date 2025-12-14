@@ -87,6 +87,11 @@ export default function ServicesPage() {
       return (a.unitPrice - b.unitPrice) * dir
     })
   }, [rows, query, sortKey, sortOrder])
+  
+  // Memoize paginated data to prevent recalculation
+  const paginatedData = useMemo(() => {
+    return filtered.slice((page - 1) * size, page * size)
+  }, [filtered, page, size])
 
   // Hàm tự động tạo code dịch vụ mới (SV001, SV002, ...)
   function generateServiceCode(): string {

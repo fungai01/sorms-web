@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, Suspense } from "react";
+import { useState, useEffect, Suspense, useMemo, useRef } from "react";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
@@ -174,32 +174,35 @@ function UserPageContent() {
   const { data: servicesData, loading: servicesLoading } = useServices();
   const { data: staffUsersData, loading: staffUsersLoading } = useStaffUsers();
 
-  const bookings: RoomBooking[] = (Array.isArray(bookingsData) ? bookingsData : []).map((booking: any) => {
-    const parsed = parseBookingNote(booking.note);
-    return {
-      id: booking.id,
-      roomId: booking.roomId,
-      roomType: booking.roomTypeName || 'Phòng tiêu chuẩn',
-      checkIn: booking.checkinDate,
-      checkOut: booking.checkoutDate,
-      guests: booking.numGuests,
-      status:
-        booking.status === 'APPROVED' || booking.status === 'CHECKED_IN'
-          ? 'CONFIRMED'
-          : booking.status === 'REJECTED' || booking.status === 'CANCELLED'
-          ? 'REJECTED'
-          : 'PENDING',
-      createdAt: booking.createdDate || booking.created_at || new Date().toISOString(),
-      purpose: parsed.purpose,
-      guestName: booking.userName || parsed.guestName || 'N/A',
-      guestEmail: booking.userEmail || parsed.guestEmail || 'N/A',
-      phoneNumber: booking.phoneNumber || parsed.phoneNumber || 'N/A',
-      building: booking.roomCode?.charAt(0) || 'A',
-      roomNumber: booking.roomCode?.slice(1) || booking.roomId.toString(),
-      originalStatus: booking.status, // Lưu trạng thái gốc để track CHECKED_IN
-      userId: booking.userId, // Lưu user ID
-    };
-  });
+  // Memoize bookings to prevent unnecessary re-renders and API calls
+  const bookings: RoomBooking[] = useMemo(() => {
+    return (Array.isArray(bookingsData) ? bookingsData : []).map((booking: any) => {
+      const parsed = parseBookingNote(booking.note);
+      return {
+        id: booking.id,
+        roomId: booking.roomId,
+        roomType: booking.roomTypeName || 'Phòng tiêu chuẩn',
+        checkIn: booking.checkinDate,
+        checkOut: booking.checkoutDate,
+        guests: booking.numGuests,
+        status:
+          booking.status === 'APPROVED' || booking.status === 'CHECKED_IN'
+            ? 'CONFIRMED'
+            : booking.status === 'REJECTED' || booking.status === 'CANCELLED'
+            ? 'REJECTED'
+            : 'PENDING',
+        createdAt: booking.createdDate || booking.created_at || new Date().toISOString(),
+        purpose: parsed.purpose,
+        guestName: booking.userName || parsed.guestName || 'N/A',
+        guestEmail: booking.userEmail || parsed.guestEmail || 'N/A',
+        phoneNumber: booking.phoneNumber || parsed.phoneNumber || 'N/A',
+        building: booking.roomCode?.charAt(0) || 'A',
+        roomNumber: booking.roomCode?.slice(1) || booking.roomId.toString(),
+        originalStatus: booking.status, // Lưu trạng thái gốc để track CHECKED_IN
+        userId: booking.userId, // Lưu user ID
+      };
+    });
+  }, [bookingsData]);
 
   // Transform service orders from backend format
   const serviceOrders: ServiceOrder[] = ((serviceOrdersData as any) || []).map((order: any) => ({
@@ -295,6 +298,10 @@ function UserPageContent() {
   
   // Track các booking đã hiển thị QR sau check-in (để tránh hiển thị lại)
   const [shownCheckInQr, setShownCheckInQr] = useState<Set<number>>(new Set());
+  
+  // Track processed bookings to prevent duplicate API calls
+  const processedBookingsRef = useRef<Set<number>>(new Set());
+  const loadingBookingsRef = useRef<Set<number>>(new Set());
 
   useEffect(() => {
     setLoading({ rooms: roomsLoading, bookings: bookingsLoading, services: serviceOrdersLoading })
@@ -581,112 +588,152 @@ function UserPageContent() {
   };
 
   // Tự động kiểm tra trạng thái khuôn mặt và load QR code cho các booking đã confirmed
+  // Use booking IDs instead of entire array to prevent unnecessary re-runs
+  const confirmedBookingIds = useMemo(() => 
+    bookings.filter(b => b.status === 'CONFIRMED').map(b => b.id),
+    [bookings]
+  );
+  
   useEffect(() => {
     const autoLoadFaceAndQr = async () => {
-      for (const booking of bookings) {
-        if (booking.status === 'CONFIRMED') {
-          const faceState = faceStates[booking.id];
-          
-          // Nếu chưa có thông tin face state, kiểm tra trạng thái
-          if (!faceState || faceState.registered === undefined) {
-            try {
-              const result = await getFaceStatus(booking.id);
-              const isRegistered = !!result?.registered;
-              
-              setFaceStates(prev => ({
-                ...prev,
-                [booking.id]: {
-                  ...prev[booking.id],
-                  registered: isRegistered,
-                  loading: false,
-                }
-              }));
-              
-              // Nếu đã đăng ký khuôn mặt, tự động load QR code
-              if (isRegistered) {
-                await handleLoadQrForBooking(booking.id);
+      for (const bookingId of confirmedBookingIds) {
+        // Skip if already processing or processed
+        if (loadingBookingsRef.current.has(bookingId) || processedBookingsRef.current.has(bookingId)) {
+          continue;
+        }
+        
+        const booking = bookings.find(b => b.id === bookingId);
+        if (!booking || booking.status !== 'CONFIRMED') continue;
+        
+        const faceState = faceStates[bookingId];
+        
+        // Nếu chưa có thông tin face state, kiểm tra trạng thái
+        if (!faceState || faceState.registered === undefined) {
+          loadingBookingsRef.current.add(bookingId);
+          try {
+            const result = await getFaceStatus(bookingId);
+            const isRegistered = !!result?.registered;
+            
+            setFaceStates(prev => ({
+              ...prev,
+              [bookingId]: {
+                ...prev[bookingId],
+                registered: isRegistered,
+                loading: false,
               }
-            } catch (e) {
-              // Ignore errors, sẽ hiển thị khi user click button
+            }));
+            
+            // Nếu đã đăng ký khuôn mặt, tự động load QR code
+            if (isRegistered) {
+              await handleLoadQrForBooking(bookingId);
             }
-          } 
-          // Nếu đã đăng ký khuôn mặt nhưng chưa có QR code, tự động load
-          else if (faceState.registered && !faceState.qrDataUrl && !faceState.loading) {
-            await handleLoadQrForBooking(booking.id);
+            
+            processedBookingsRef.current.add(bookingId);
+          } catch (e) {
+            // Ignore errors, sẽ hiển thị khi user click button
+            processedBookingsRef.current.add(bookingId); // Mark as processed even on error to prevent retry loops
+          } finally {
+            loadingBookingsRef.current.delete(bookingId);
           }
+        } 
+        // Nếu đã đăng ký khuôn mặt nhưng chưa có QR code, tự động load
+        else if (faceState.registered && !faceState.qrDataUrl && !faceState.loading) {
+          loadingBookingsRef.current.add(bookingId);
+          try {
+            await handleLoadQrForBooking(bookingId);
+            processedBookingsRef.current.add(bookingId);
+          } catch (e) {
+            processedBookingsRef.current.add(bookingId);
+          } finally {
+            loadingBookingsRef.current.delete(bookingId);
+          }
+        } else {
+          // Already processed
+          processedBookingsRef.current.add(bookingId);
         }
       }
     };
     
-    if (bookings.length > 0) {
+    if (confirmedBookingIds.length > 0) {
       autoLoadFaceAndQr();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookings]);
+  }, [confirmedBookingIds.join(',')]); // Use string of IDs instead of array
 
   // Tự động hiển thị QR code khi check-in thành công (status = CHECKED_IN)
+  // Use checked-in booking IDs to prevent unnecessary re-runs
+  const checkedInBookingIds = useMemo(() => 
+    bookings.filter(b => b.originalStatus === 'CHECKED_IN').map(b => b.id),
+    [bookings]
+  );
+  
   useEffect(() => {
     const handleCheckInSuccess = async () => {
-      for (const booking of bookings) {
-        // Kiểm tra nếu booking vừa được check-in (status = CHECKED_IN)
-        if (booking.originalStatus === 'CHECKED_IN' && !shownCheckInQr.has(booking.id)) {
-          // Đánh dấu đã xử lý booking này
-          setShownCheckInQr(prev => new Set(prev).add(booking.id));
+      for (const bookingId of checkedInBookingIds) {
+        // Skip if already shown
+        if (shownCheckInQr.has(bookingId)) {
+          continue;
+        }
+        
+        const booking = bookings.find(b => b.id === bookingId);
+        if (!booking || booking.originalStatus !== 'CHECKED_IN') continue;
+        
+        // Đánh dấu đã xử lý booking này
+        setShownCheckInQr(prev => new Set(prev).add(bookingId));
+        
+        try {
+          // Load QR code trực tiếp
+          const qr = await getBookingQr(bookingId);
           
-          try {
-            // Load QR code trực tiếp
-            const qr = await getBookingQr(booking.id);
-            
-            // Chỉ sử dụng qrImageUrl từ backend (Cloudinary), không generate từ token
-            if (qr.qrImageUrl) {
-              // Cập nhật face state với QR code
-              setFaceStates(prev => ({
-                ...prev,
-                [booking.id]: {
-                  ...prev[booking.id],
-                  loading: false,
-                  qrToken: qr.token,
-                  qrDataUrl: qr.qrImageUrl,
-                  qrImageUrl: qr.qrImageUrl,
-                  error: null
-                }
-              }));
-              
-              // Hiển thị modal QR với thông tin bookingID và userID
-              setSelectedQrData({
+          // Chỉ sử dụng qrImageUrl từ backend (Cloudinary), không generate từ token
+          if (qr.qrImageUrl) {
+            // Cập nhật face state với QR code
+            setFaceStates(prev => ({
+              ...prev,
+              [bookingId]: {
+                ...prev[bookingId],
+                loading: false,
+                qrToken: qr.token,
                 qrDataUrl: qr.qrImageUrl,
-                bookingId: booking.id,
-                bookingData: {
-                  ...booking,
-                  userId: booking.userId || qr.payload?.userId,
-                  bookingId: booking.id,
-                  roomType: booking.roomType,
-                  roomNumber: booking.roomNumber,
-                  guestName: booking.guestName,
-                  userName: booking.guestName
-                }
-              });
-              setQrModalOpen(true);
-              
-              // Hiển thị thông báo thành công
-              setFlash({ 
-                type: 'success', 
-                text: `Check-in thành công! Mã QR của bạn (Booking ID: ${booking.id}, User ID: ${booking.userId || qr.payload?.userId || 'N/A'})` 
-              });
-            }
-          } catch (e) {
-            console.error('Error loading QR after check-in:', e);
-            // Nếu lỗi, vẫn đánh dấu đã xử lý để tránh retry liên tục
+                qrImageUrl: qr.qrImageUrl,
+                error: null
+              }
+            }));
+            
+            // Hiển thị modal QR với thông tin bookingID và userID
+            setSelectedQrData({
+              qrDataUrl: qr.qrImageUrl,
+              bookingId: bookingId,
+              bookingData: {
+                ...booking,
+                userId: booking.userId || qr.payload?.userId,
+                bookingId: bookingId,
+                roomType: booking.roomType,
+                roomNumber: booking.roomNumber,
+                guestName: booking.guestName,
+                userName: booking.guestName
+              }
+            });
+            setQrModalOpen(true);
+            
+            // Hiển thị thông báo thành công
+            setFlash({ 
+              type: 'success', 
+              text: `Check-in thành công! Mã QR của bạn (Booking ID: ${bookingId}, User ID: ${booking.userId || qr.payload?.userId || 'N/A'})` 
+            });
           }
+        } catch (e) {
+          console.error('Error loading QR after check-in:', e);
+          // Nếu lỗi, vẫn đánh dấu đã xử lý để tránh retry liên tục
         }
       }
     };
 
-    if (bookings.length > 0) {
+    if (checkedInBookingIds.length > 0) {
       handleCheckInSuccess();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookings, bookingsData]);
+  }, [checkedInBookingIds.join(',')]); // Use string of IDs instead of array
 
   // Get user info from session and API for Service Order Modal
   useEffect(() => {

@@ -94,6 +94,11 @@ export default function ServiceOrdersPage() {
       return a.created_at.localeCompare(b.created_at) * dir
     })
   }, [rows, query, filterStatus, sortKey, sortOrder])
+  
+  // Memoize paginated data to prevent recalculation
+  const paginatedData = useMemo(() => {
+    return filtered.slice((page - 1) * size, page * size)
+  }, [filtered, page, size])
 
   function openCreate() {
     setEdit({ code: '', customer_name: '', room_code: '', created_at: '', total_price: '', status: 'PENDING', note: '', items: [], item_service_id: '', item_name: '', item_qty: '', item_price: '' })

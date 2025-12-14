@@ -69,7 +69,16 @@ export async function GET(req: NextRequest) {
     
     const raw: any = response.data
     const items = Array.isArray(raw?.content) ? raw.content : (Array.isArray(raw) ? raw : [])
-    return NextResponse.json({ items, total: items.length })
+    
+    // Add caching headers - cache for 30 seconds, revalidate in background
+    return NextResponse.json(
+      { items, total: items.length },
+      {
+        headers: {
+          'Cache-Control': 'public, s-maxage=30, stale-while-revalidate=60',
+        },
+      }
+    )
   } catch (error) {
     console.error('Bookings API error:', error)
     return NextResponse.json(

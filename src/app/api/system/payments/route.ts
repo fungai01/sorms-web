@@ -41,7 +41,15 @@ export async function GET(req: NextRequest) {
     if (q) list = list.filter(p => p.code.toLowerCase().includes(q) || (p.order_code || '').toLowerCase().includes(q) || p.payer_name.toLowerCase().includes(q))
     if (status && ['PENDING','SUCCESS','FAILED','REFUNDED'].includes(status)) list = list.filter(p => p.status === status)
 
-    return NextResponse.json({ items: list, total: list.length })
+    // Add caching headers - cache for 30 seconds
+    return NextResponse.json(
+      { items: list, total: list.length },
+      {
+        headers: {
+          'Cache-Control': 'public, s-maxage=30, stale-while-revalidate=60',
+        },
+      }
+    )
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || 'Internal server error' }, { status: 500 })
   }

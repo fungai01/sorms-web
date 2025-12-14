@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, Suspense } from "react";
+import { useState, useEffect, Suspense, useMemo, useRef, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Button from "@/components/ui/Button";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
@@ -24,9 +24,41 @@ function RolesInner() {
   const [rows, setRows] = useState<Role[]>([]);
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
+  
+  // Refs to prevent spam requests
+  const isInitialLoadRef = useRef(false);
+  const queryDebounceRef = useRef<NodeJS.Timeout | null>(null);
+  const isProcessingRef = useRef(false);
+  
+  // Debounced query
+  const [debouncedQuery, setDebouncedQuery] = useState("");
 
-  // Hook-based roles loading
-  const { data: rolesData, loading: rolesLoading, error, refetch } = useRoles({ q: query || undefined, page: 0, size: 100 })
+  // Hook-based roles loading - use debounced query
+  const { data: rolesData, loading: rolesLoading, error, refetch } = useRoles({ q: debouncedQuery || undefined, page: 0, size: 100 })
+  
+  // Debounce query changes
+  useEffect(() => {
+    if (!isInitialLoadRef.current) {
+      isInitialLoadRef.current = true;
+      setDebouncedQuery(query);
+      return;
+    }
+    
+    if (queryDebounceRef.current) {
+      clearTimeout(queryDebounceRef.current);
+    }
+    
+    queryDebounceRef.current = setTimeout(() => {
+      setDebouncedQuery(query);
+    }, 500);
+    
+    return () => {
+      if (queryDebounceRef.current) {
+        clearTimeout(queryDebounceRef.current);
+      }
+    };
+  }, [query]);
+  
   useEffect(() => {
     setLoading(!!rolesLoading)
     if (!rolesData) return
@@ -36,43 +68,13 @@ function RolesInner() {
     setRows(rolesArray)
   }, [rolesData, rolesLoading])
 
-  async function refetchRoles() {
-    setLoading(true)
-    try {
-      const res = await fetch('/api/system/roles', { 
-        headers: { 'Content-Type': 'application/json' }, 
-        credentials: 'include',
-        cache: 'no-store'
-      })
-      
-      if (!res.ok) {
-        const errorBody = await res.json().catch(() => null);
-        const errorText = errorBody?.details || errorBody?.error || `Request failed with status ${res.status}`;
-        throw new Error(`Không thể tải dữ liệu: ${errorText}`)
-      }
-      
-      const data = await res.json()
-      console.log('📊 Roles data received:', data)
-
-      let rolesArray: Role[] = []
-      if (Array.isArray(data?.items)) {
-        rolesArray = data.items
-      } else if (Array.isArray(data)) {
-        rolesArray = data
-      }
-
-      console.log('📊 Total roles:', rolesArray.length, 'Sample:', rolesArray[0])
-      setRows(rolesArray)
-    } catch (e) {
-      setFlash({ type: 'error', text: e instanceof Error ? e.message : 'Có lỗi xảy ra khi tải dữ liệu' })
-      setRows([])
-    } finally {
-      setLoading(false)
-    }
-  }
-
+  // Initial load - only once
   useEffect(() => {
-    refetch()
+    if (!isInitialLoadRef.current) {
+      isInitialLoadRef.current = true;
+      refetch();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   const [open, setOpen] = useState(false);
   const [openDeleteModal, setOpenDeleteModal] = useState(false);
@@ -93,12 +95,19 @@ function RolesInner() {
   const [size, setSize] = useState(10);
   const [formError, setFormError] = useState<string | null>(null);
 
-  // Filter and sort roles based on query and sort
-  const filtered = [...rows].sort((a, b) => {
-    const dir = sortOrder === "asc" ? 1 : -1;
-    if (sortKey === "code") return a.code.localeCompare(b.code) * dir;
-    return a.name.localeCompare(b.name) * dir;
-  });
+  // Filter and sort roles based on query and sort - memoized
+  const filtered = useMemo(() => {
+    return [...rows].sort((a, b) => {
+      const dir = sortOrder === "asc" ? 1 : -1;
+      if (sortKey === "code") return a.code.localeCompare(b.code) * dir;
+      return a.name.localeCompare(b.name) * dir;
+    });
+  }, [rows, sortKey, sortOrder]);
+  
+  // Memoize paginated data to prevent recalculation
+  const paginatedData = useMemo(() => {
+    return filtered.slice((page - 1) * size, page * size);
+  }, [filtered, page, size]);
 
   // Open modal to create a new role
   function openCreate() {
@@ -123,10 +132,12 @@ function RolesInner() {
 
   // Save new or updated role
   async function save() {
+    if (isProcessingRef.current) return;
     if (!form.code.trim() || !form.name.trim()) {
       setFormError('Vui lòng nhập đầy đủ Code và Tên.');
       return;
     }
+    isProcessingRef.current = true;
     try {
       if (editing) {
         const prevActive = editing.isActive !== false;
@@ -178,6 +189,8 @@ function RolesInner() {
       const message = e instanceof Error ? e.message : 'Có lỗi xảy ra';
       setFormError(message);
       setFlash({ type: 'error', text: message })
+    } finally {
+      isProcessingRef.current = false;
     }
   }
 
@@ -189,7 +202,8 @@ function RolesInner() {
 
   // Confirm deletion via API (soft delete - deactivate)
   async function confirmDelete() {
-    if (!productToDelete) return
+    if (!productToDelete || isProcessingRef.current) return;
+    isProcessingRef.current = true;
     try {
       const params = new URLSearchParams()
       if (productToDelete.id != null) {
@@ -203,16 +217,19 @@ function RolesInner() {
         throw new Error(errorData.error || 'Vô hiệu hóa vai trò thất bại')
       }
       setFlash({ type: 'success', text: 'Đã vô hiệu hóa vai trò thành công.' });
-      await refetchRoles()
+      await refetch()
     } catch (e) {
       setFlash({ type: 'error', text: e instanceof Error ? e.message : 'Có lỗi xảy ra' })
     } finally {
+      isProcessingRef.current = false;
       setOpenDeleteModal(false);
     }
   }
 
   // Activate role
   async function activateRole(role: Role) {
+    if (isProcessingRef.current) return;
+    isProcessingRef.current = true;
     try {
       const params = new URLSearchParams()
       if (role.id != null) {
@@ -227,9 +244,11 @@ function RolesInner() {
         throw new Error(errorData.error || 'Kích hoạt vai trò thất bại')
       }
       setFlash({ type: 'success', text: 'Đã kích hoạt vai trò thành công.' });
-      await refetchRoles()
+      await refetch()
     } catch (e) {
       setFlash({ type: 'error', text: e instanceof Error ? e.message : 'Có lỗi xảy ra' })
+    } finally {
+      isProcessingRef.current = false;
     }
   }
 
@@ -394,7 +413,7 @@ function RolesInner() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.slice((page - 1) * size, (page - 1) * size + size).map((r, idx) => (
+                {paginatedData.map((r, idx) => (
                   <tr key={r.code || `role-${idx}`} className="border-b border-gray-100 hover:bg-gray-50">
                     <td className="px-4 sm:px-6 py-1.5 sm:py-2">
                       <span 
@@ -438,7 +457,7 @@ function RolesInner() {
 
           {/* Mobile list */}
           <div className="lg:hidden p-3 space-y-3">
-            {filtered.slice((page - 1) * size, (page - 1) * size + size).map((r, idx) => (
+            {paginatedData.map((r, idx) => (
               <div key={r.code || `role-mobile-${idx}`} className="bg-white rounded-2xl border border-gray-200 shadow-sm hover:shadow-lg transition-all duration-300 overflow-hidden">
                 <div className="bg-gradient-to-r from-blue-50 to-indigo-50 px-4 py-3 border-b border-gray-100">
                   <div className="flex items-center justify-between">

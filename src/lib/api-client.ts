@@ -29,23 +29,6 @@ class ApiClient {
       const baseURLWithoutTrailingSlash = this.baseURL.endsWith('/') ? this.baseURL.slice(0, -1) : this.baseURL
       const endpointWithLeadingSlash = endpoint.startsWith('/') ? endpoint : `/${endpoint}`
       const url = `${baseURLWithoutTrailingSlash}${endpointWithLeadingSlash}`
-      
-      // Validate URL scheme (must be http or https for CORS)
-      try {
-        const urlObj = new URL(url)
-        if (!['http:', 'https:'].includes(urlObj.protocol)) {
-          return {
-            success: false,
-            error: `URL scheme không hợp lệ: ${urlObj.protocol}. Chỉ hỗ trợ http:// hoặc https://`
-          }
-        }
-      } catch (urlError) {
-        return {
-          success: false,
-          error: `URL không hợp lệ: ${url}. Vui lòng kiểm tra cấu hình API_BASE_URL.`
-        }
-      }
-
       const incomingHeaders = options.headers as Record<string, string> | Headers | undefined
       let authHeaderFromOptions: string | null = null
       
@@ -631,17 +614,82 @@ class ApiClient {
       }
     }
 
+    // Backend CreateServiceOrderRequest requires ALL these fields:
+    // - bookingId (Long) - required
+    // - orderId (Long) - required (must exist, backend will update it)
+    // - serviceId (Long) - required
+    // - quantity (BigDecimal) - required
+    // - assignedStaffId (Long) - required
+    // - requestedBy (Long) - required
+    // - serviceTime (LocalDateTime) - required
+    // - note (String) - optional
+    
     const payload = {
       bookingId: orderData.bookingId,
-      orderId: orderData.orderId, // optional
+      orderId: orderData.orderId, // REQUIRED - must be existing order ID
       serviceId: orderData.serviceId,
       quantity: orderData.quantity,
-      assignedStaffId: orderData.assignedStaffId,
-      requestedBy: orderData.requestedBy, // optional
-      serviceTime: st, // BE expects LocalDateTime without timezone
-      note: orderData.note || ''
+      assignedStaffId: orderData.assignedStaffId, // REQUIRED
+      requestedBy: orderData.requestedBy, // REQUIRED
+      serviceTime: st, // BE expects LocalDateTime without timezone (yyyy-MM-dd'T'HH:mm:ss)
+      note: orderData.note || null
     }
-    return this.post('/orders/service', payload)
+    
+    // Validate required fields
+    if (!payload.bookingId) {
+      return { success: false, error: 'bookingId is required' }
+    }
+    if (!payload.orderId) {
+      return { success: false, error: 'orderId is required (must be existing order ID)' }
+    }
+    if (!payload.serviceId) {
+      return { success: false, error: 'serviceId is required' }
+    }
+    if (!payload.quantity || payload.quantity <= 0) {
+      return { success: false, error: 'quantity is required and must be greater than 0' }
+    }
+    if (!payload.assignedStaffId) {
+      return { success: false, error: 'assignedStaffId is required' }
+    }
+    if (!payload.requestedBy) {
+      return { success: false, error: 'requestedBy is required' }
+    }
+    if (!payload.serviceTime) {
+      return { success: false, error: 'serviceTime is required' }
+    }
+    
+    // Use Next.js API route as proxy instead of calling backend directly
+    // This ensures proper authentication and error handling
+    try {
+      const response = await fetch('/api/system/orders?action=service', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify(payload),
+      })
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: `HTTP ${response.status}` }))
+        return {
+          success: false,
+          error: errorData.error || errorData.message || `Failed to create service order: ${response.status}`,
+        }
+      }
+      
+      const data = await response.json()
+      return {
+        success: true,
+        data: data.data ?? data,
+      }
+    } catch (error) {
+      console.error('createServiceOrder error:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to create service order',
+      }
+    }
   }
 
   async addOrderItem(orderId: number, itemData: any) {

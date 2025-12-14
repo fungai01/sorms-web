@@ -12,12 +12,14 @@ export async function POST(
   try {
     console.log('[Security Check-in] Request received')
     
-    // IMPORTANT: Get token BEFORE reading FormData (FormData consumption may affect request)
-    // Try multiple sources for token: header first, then cookies
-    let authHeader = getAuthorizationHeader(req)
+    // IMPORTANT: Backend has disabled authentication for check-in endpoint
+    // Try to get token for logging purposes, but don't require it
+    // Get token BEFORE reading FormData (FormData consumption may affect request)
+    let authHeader: string | null = getAuthorizationHeader(req) || null
     let token: string | null = null
+    let userInfo: any = null
     
-    // If no token in header, try cookies
+    // Try multiple sources for token: header first, then cookies (optional)
     if (!authHeader) {
       const accessTokenCookie = req.cookies.get('access_token')?.value
       const authAccessTokenCookie = req.cookies.get('auth_access_token')?.value
@@ -25,17 +27,17 @@ export async function POST(
       
       if (accessTokenCookie) {
         token = accessTokenCookie
-        console.log('[Security Check-in] Token from access_token cookie')
+        console.log('[Security Check-in] Token from access_token cookie (optional)')
       } else if (authAccessTokenCookie) {
         token = authAccessTokenCookie
-        console.log('[Security Check-in] Token from auth_access_token cookie')
+        console.log('[Security Check-in] Token from auth_access_token cookie (optional)')
       } else if (userInfoCookie) {
         try {
           const decoded = decodeURIComponent(userInfoCookie)
           const userInfo = JSON.parse(decoded)
           if (userInfo && userInfo.token) {
             token = userInfo.token
-            console.log('[Security Check-in] Token from user_info cookie')
+            console.log('[Security Check-in] Token from user_info cookie (optional)')
           }
         } catch (error) {
           console.warn('[Security Check-in] Failed to parse user_info cookie:', error)
@@ -55,36 +57,26 @@ export async function POST(
       }
     }
     
-    // Try to verify token, but don't fail if verification fails - let backend handle it
-    let userInfo: any = null
+    // Verify token validity - only send Authorization header if token is valid
+    // If token is invalid or expired, don't send it to avoid 401 errors
+    let isValidToken = false
     if (token) {
       try {
         userInfo = await verifyToken(req)
         if (userInfo?.id) {
-          console.log('[Security Check-in] User authenticated:', { id: userInfo.id, email: userInfo.email })
+          isValidToken = true
+          console.log('[Security Check-in] Valid token found - User info:', { id: userInfo.id, email: userInfo.email })
         } else {
-          console.warn('[Security Check-in] Token verification returned no user info, but continuing with token')
+          console.log('[Security Check-in] Token verification failed - will not send Authorization header')
+          authHeader = null // Clear invalid token
         }
       } catch (verifyError) {
-        console.warn('[Security Check-in] Token verification failed, but continuing with token:', verifyError)
-        // Continue - backend will validate the token
+        console.log('[Security Check-in] Token verification error - will not send Authorization header:', verifyError)
+        authHeader = null // Clear invalid token
       }
+    } else {
+      console.log('[Security Check-in] No token provided - proceeding without authentication (backend allows this)')
     }
-    
-    // If no token found at all, then fail
-    if (!authHeader || !token) {
-      console.error('[Security Check-in] CRITICAL: No token found in header or cookies')
-      return NextResponse.json(
-        { error: 'Unauthorized: No authentication token found. Please login again.' },
-        { status: 401 }
-      )
-    }
-    
-    console.log('[Security Check-in] Token obtained:', {
-      hasToken: !!authHeader,
-      tokenLength: authHeader.length,
-      tokenPrefix: authHeader.substring(0, 30) + '...',
-    })
 
     // Params
     const { bookingId: bookingIdStr } = await context.params
@@ -159,15 +151,26 @@ export async function POST(
       )
     }
 
-    // Prepare headers for backend request (token already obtained above)
+    // Prepare headers for backend request
     // Note: Do NOT set Content-Type for multipart/form-data - browser/fetch will set it automatically with boundary
+    // Backend has disabled authentication, so Authorization header is optional
+    // IMPORTANT: Only send Authorization header if token is VALID to avoid 401 errors
     const headers: HeadersInit = {
       'accept': '*/*',
-      'Authorization': authHeader, // Token already obtained above
+    }
+    
+    // Only add Authorization header if token exists AND is valid
+    // If token is invalid/expired, don't send it - backend will allow unauthenticated request
+    if (authHeader && isValidToken) {
+      headers['Authorization'] = authHeader
+      console.log('[Security Check-in] Valid Authorization header included')
+    } else {
+      console.log('[Security Check-in] No Authorization header - proceeding without authentication (backend allows this)')
     }
     
     console.log('[Security Check-in] Headers prepared for backend:', {
       hasAuthorization: !!headers['Authorization'],
+      tokenValid: isValidToken,
       accept: headers['accept'],
     })
 
@@ -202,6 +205,29 @@ export async function POST(
     // Pipe through response
     const contentType = beRes.headers.get('content-type') || ''
     const status = beRes.status
+
+    // Log response body for debugging, especially for 401 errors
+    if (status === 401) {
+      const responseText = await beRes.text().catch(() => '')
+      console.error('[Security Check-in] 401 Unauthorized - Backend response:', responseText)
+      try {
+        const errorData = JSON.parse(responseText)
+        console.error('[Security Check-in] Error details:', errorData)
+        return NextResponse.json(
+          { 
+            error: errorData?.message || errorData?.error || 'Unauthorized: Token không hợp lệ hoặc đã hết hạn',
+            responseCode: errorData?.responseCode,
+            details: errorData
+          },
+          { status: 401 }
+        )
+      } catch {
+        return NextResponse.json(
+          { error: responseText || 'Unauthorized: Token không hợp lệ hoặc đã hết hạn. Vui lòng đăng nhập lại.' },
+          { status: 401 }
+        )
+      }
+    }
 
     if (contentType.includes('application/json')) {
       const data = await beRes.json().catch(() => null)

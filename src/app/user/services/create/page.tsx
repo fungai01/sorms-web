@@ -4,11 +4,13 @@ import { useState, useEffect } from "react";
 
 import { useUserBookings, useServices } from "@/hooks/useApi";
 import { useRouter } from "next/navigation";
+import { useAuth } from "@/hooks/useAuth";
 import Button from "@/components/ui/Button";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import Input from "@/components/ui/Input";
 import { apiClient } from "@/lib/api-client";
 import { type Service } from "@/lib/types";
+import { authService } from "@/lib/auth-service";
 
 
 type StaffProfile = {
@@ -36,6 +38,7 @@ type Booking = {
 
 export default function CreateServicePage() {
   const router = useRouter();
+  const { user } = useAuth();
   const { data: bookingsData } = useUserBookings();
   const { data: servicesData } = useServices();
   
@@ -139,15 +142,65 @@ export default function CreateServicePage() {
       return;
     }
 
+    // Get current user ID
+    let requestedBy: number | null = null;
     try {
-    setLoading(true);
+      const userInfo = user || authService.getUserInfo();
+      if (userInfo && (userInfo as any).id) {
+        requestedBy = Number((userInfo as any).id);
+      } else if (userInfo && (userInfo as any).userId) {
+        requestedBy = Number((userInfo as any).userId);
+      }
+    } catch (error) {
+      console.error('Error getting user ID:', error);
+    }
+
+    if (!requestedBy) {
+      setFlash({ type: 'error', text: 'Không thể xác định người dùng. Vui lòng đăng nhập lại.' });
+      return;
+    }
+
+    try {
+      setLoading(true);
+      
+      // Step 1: Create order cart first (required by backend)
+      const cartResponse = await fetch('/api/system/orders?action=cart', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          bookingId: selectedBookingId,
+          requestedBy: requestedBy,
+          note: note.trim() || null,
+        }),
+      });
+
+      if (!cartResponse.ok) {
+        const cartError = await cartResponse.json().catch(() => ({ error: 'Failed to create order cart' }));
+        throw new Error(cartError.error || 'Không thể tạo giỏ hàng');
+      }
+
+      const cartData = await cartResponse.json();
+      const orderId = cartData?.data?.id || cartData?.id;
+      
+      if (!orderId) {
+        throw new Error('Không nhận được order ID từ giỏ hàng');
+      }
+
+      // Step 2: Create service order with the cart orderId
+      const serviceTimeFormatted = `${serviceDate}T${serviceTime.length === 5 ? serviceTime + ':00' : serviceTime}`;
+      
       const orderData = {
         bookingId: selectedBookingId,
-        assignedStaffId: selectedStaffId,
+        orderId: orderId, // Required: order ID from cart
         serviceId: selectedServiceId,
         quantity: quantity,
-        serviceTime: `${serviceDate}T${serviceTime.length === 5 ? serviceTime + ':00' : serviceTime}`,
-        note: note.trim() || undefined,
+        assignedStaffId: selectedStaffId,
+        requestedBy: requestedBy, // Required: current user ID
+        serviceTime: serviceTimeFormatted,
+        note: note.trim() || null,
       };
 
       const response = await apiClient.createServiceOrder(orderData);

@@ -51,7 +51,16 @@ export async function GET(request: NextRequest) {
       // data là array trực tiếp, không phải { content: [...] }
       const items = Array.isArray(data) ? data : [];
       console.log('[API /system/room-types] Returning items:', items.length);
-      return NextResponse.json({ items, total: items.length });
+      
+      // Add caching headers - cache for 60 seconds (room types don't change often)
+      return NextResponse.json(
+        { items, total: items.length },
+        {
+          headers: {
+            'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=120',
+          },
+        }
+      );
     }
     
     console.error('[API /system/room-types] Failed to get all room types:', response.error);

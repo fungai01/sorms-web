@@ -27,10 +27,8 @@ export async function GET(req: NextRequest) {
     
     if (!response.success) {
       console.error('[Dashboard API] Failed to fetch checkins:', response.error)
-      return NextResponse.json(
-        { error: response.error || 'Failed to fetch checkins data' }, 
-        { status: 500 }
-      )
+      // Return empty data instead of error to prevent dashboard crash
+      return NextResponse.json({ series: [] })
     }
 
     interface Booking {
@@ -39,15 +37,19 @@ export async function GET(req: NextRequest) {
       // Add other properties if needed
     }
 
-    // Normalize response data
+    // Normalize response data - handle different response formats
     const raw: any = response.data
-    const allBookings: Booking[] = Array.isArray(raw?.content) 
-      ? raw.content 
-      : Array.isArray(raw?.items)
-        ? raw.items
-        : Array.isArray(raw) 
-          ? raw 
-          : []
+    const allBookings: Booking[] = Array.isArray(raw?.items)
+      ? raw.items
+      : Array.isArray(raw?.content)
+        ? raw.content
+        : Array.isArray(raw?.data?.content)
+          ? raw.data.content
+          : Array.isArray(raw?.data?.items)
+            ? raw.data.items
+            : Array.isArray(raw)
+              ? raw
+              : []
 
     // Filter bookings with CHECKED_IN status
     const checkins = allBookings.filter((b: any) => b.status === 'CHECKED_IN')
@@ -74,7 +76,15 @@ export async function GET(req: NextRequest) {
       seriesCount: series.length 
     })
     
-    return NextResponse.json({ series })
+    // Add caching headers - cache for 30 seconds
+    return NextResponse.json(
+      { series },
+      {
+        headers: {
+          'Cache-Control': 'public, s-maxage=30, stale-while-revalidate=60',
+        },
+      }
+    )
   } catch (error) {
     console.error('[Dashboard API] Checkins error:', error)
     return NextResponse.json(

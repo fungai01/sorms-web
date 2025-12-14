@@ -56,8 +56,16 @@ export async function GET(req: NextRequest) {
     const occupied = rooms.filter((room: any) => room?.status === 'OCCUPIED').length
 
     console.log('[Dashboard API] Occupancy calculated:', { total, occupied })
-    
-    return NextResponse.json({ total, occupied })
+
+    // Add caching headers - cache for 30 seconds
+    return NextResponse.json(
+      { total, occupied },
+      {
+        headers: {
+          'Cache-Control': 'public, s-maxage=30, stale-while-revalidate=60',
+        },
+      }
+    )
   } catch (error) {
     console.error('[Dashboard API] Occupancy error:', error)
     return NextResponse.json(

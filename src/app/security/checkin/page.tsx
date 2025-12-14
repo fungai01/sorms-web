@@ -3,12 +3,9 @@
 import { useState, useEffect, useRef } from "react";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
-import Input from "@/components/ui/Input";
 import Modal from "@/components/ui/Modal";
 import dynamic from "next/dynamic";
 import { Html5Qrcode } from "html5-qrcode";
-import { cookieManager } from "@/lib/http";
-import { API_CONFIG } from "@/lib/config";
 
 // Dynamic import Webcam để tránh SSR issues
 const WebcamComponent = dynamic(
@@ -26,6 +23,7 @@ type QRVerificationResult = {
   userId?: string;
   userName?: string;
   userEmail?: string;
+  phoneNumber?: string;
   roomId?: number;
   roomCode?: string;
   checkinDate?: string;
@@ -43,35 +41,27 @@ type FaceVerificationResult = {
   error?: string;
 };
 
-type CheckInStep = 'qr' | 'face' | 'complete';
-
-export default function SecurityDashboardPage() {
-  // Set user role in sessionStorage
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      sessionStorage.setItem('userRole', 'security');
-    }
-  }, []);
-
+export default function CheckInPage() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<QRVerificationResult | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [flash, setFlash] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   
-  // QR Scanner state - chỉ dùng quét QR, không có nhập thủ công
+  // QR Scanner state
   const [scanning, setScanning] = useState(false);
   const [qrScanner, setQrScanner] = useState<Html5Qrcode | null>(null);
   const scannerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadingFile, setUploadingFile] = useState(false);
+  const isProcessingRef = useRef(false); // Flag để ngăn scanner quét lại khi đang xử lý
   
   // Face verification state
-  const [currentStep, setCurrentStep] = useState<CheckInStep>('qr');
   const [faceVerifying, setFaceVerifying] = useState(false);
   const [faceResult, setFaceResult] = useState<FaceVerificationResult | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [keyIssued, setKeyIssued] = useState(false);
   const [roomKey, setRoomKey] = useState<string | null>(null);
+  const [showCamera, setShowCamera] = useState(false); // State để điều khiển hiển thị camera
   
   const webcamRef = useRef<any>(null);
 
@@ -83,7 +73,7 @@ export default function SecurityDashboardPage() {
     }
   }, [flash]);
 
-  // QR Scanner setup and cleanup - tự động bật khi component mount
+  // QR Scanner setup and cleanup
   useEffect(() => {
     let isMounted = true;
     let scannerInstance: Html5Qrcode | null = null;
@@ -91,21 +81,14 @@ export default function SecurityDashboardPage() {
     const startScanning = async () => {
       if (!isMounted) return;
 
-      // Kiểm tra xem element có tồn tại và chưa có scanner không
       const element = document.getElementById("qr-reader");
-      if (!element) {
-        return;
-      }
+      if (!element) return;
 
-      // Kiểm tra xem đã có scanner instance chưa
-      if (element.children.length > 0 || qrScanner) {
-        return;
-      }
+      if (element.children.length > 0 || qrScanner) return;
 
       try {
         scannerInstance = new Html5Qrcode("qr-reader");
         if (!isMounted) {
-          // Component đã unmount, cleanup ngay
           try {
             await scannerInstance.clear();
           } catch (e) {}
@@ -115,16 +98,35 @@ export default function SecurityDashboardPage() {
         setQrScanner(scannerInstance);
         setScanning(true);
         
+        // Tính toán kích thước qrbox dựa trên kích thước màn hình - đảm bảo hình vuông
+        const getQrBoxSize = () => {
+          if (typeof window === 'undefined') return { width: 600, height: 600 };
+          const width = window.innerWidth;
+          const height = window.innerHeight;
+          // Lấy giá trị nhỏ hơn giữa 90% width và 80% height để đảm bảo hình vuông vừa màn hình
+          const size = Math.min(width * 0.9, height * 0.8);
+          // Đảm bảo tối thiểu 400px
+          const finalSize = Math.max(400, size);
+          return { width: finalSize, height: finalSize };
+        };
+        
+        const qrBoxSize = getQrBoxSize();
+        
         await scannerInstance.start(
-          { facingMode: "environment" }, // Use back camera
+          { 
+            facingMode: "environment"
+          },
           {
-            fps: 10,
-            qrbox: { width: 500, height: 500 },
+            fps: 10, // Tăng FPS lên để video mượt hơn
+            qrbox: qrBoxSize,
             aspectRatio: 1.0,
+            disableFlip: false
           },
           async (decodedText) => {
-            // QR code detected
-            if (!isMounted) return;
+            if (!isMounted || isProcessingRef.current) return;
+            
+            // Đánh dấu đang xử lý để ngăn quét lại
+            isProcessingRef.current = true;
             
             try {
               if (scannerInstance) {
@@ -134,13 +136,13 @@ export default function SecurityDashboardPage() {
               setScanning(false);
               setQrScanner(null);
               scannerInstance = null;
-              // Xử lý token ngay lập tức
-              handleProcessQRToken(decodedText);
+              await handleProcessQRToken(decodedText);
             } catch (err) {
               console.error('Error stopping scanner:', err);
               setScanning(false);
               setQrScanner(null);
               scannerInstance = null;
+              isProcessingRef.current = false; // Reset flag nếu có lỗi
             }
           },
           (errorMessage) => {
@@ -158,14 +160,12 @@ export default function SecurityDashboardPage() {
       }
     };
 
-    // Delay một chút để đảm bảo DOM đã render
     const timer = setTimeout(() => {
       if (isMounted && scannerRef.current) {
         startScanning();
       }
     }, 300);
 
-    // Cleanup khi unmount
     return () => {
       isMounted = false;
       clearTimeout(timer);
@@ -174,9 +174,7 @@ export default function SecurityDashboardPage() {
           try {
             await scannerInstance.stop();
             await scannerInstance.clear();
-          } catch (e) {
-            // Ignore cleanup errors
-          }
+          } catch (e) {}
         })();
       }
       if (qrScanner) {
@@ -184,16 +182,16 @@ export default function SecurityDashboardPage() {
           try {
             await qrScanner.stop();
             await qrScanner.clear();
-          } catch (e) {
-            // Ignore cleanup errors
-          }
+          } catch (e) {}
         })();
       }
     };
-  }, []); // Chỉ chạy 1 lần khi mount
+  }, []);
 
   const handleRestartScan = async () => {
-    // Dừng scanner hiện tại
+    // Reset processing flag
+    isProcessingRef.current = false;
+    
     if (qrScanner) {
       try {
         if (scanning) {
@@ -207,37 +205,58 @@ export default function SecurityDashboardPage() {
     }
     setScanning(false);
     
-    // Xóa element để đảm bảo không còn instance cũ
     const element = document.getElementById("qr-reader");
     if (element) {
       element.innerHTML = '';
     }
     
-    // Khởi động lại scanner sau một chút
     setTimeout(async () => {
       try {
         const scanner = new Html5Qrcode("qr-reader");
         setQrScanner(scanner);
         setScanning(true);
         
+        // Tính toán kích thước qrbox - đảm bảo hình vuông
+        const getQrBoxSize = () => {
+          if (typeof window === 'undefined') return { width: 600, height: 600 };
+          const width = window.innerWidth;
+          const height = window.innerHeight;
+          // Lấy giá trị nhỏ hơn giữa 90% width và 80% height để đảm bảo hình vuông
+          const size = Math.min(width * 0.9, height * 0.8);
+          // Đảm bảo tối thiểu 400px
+          const finalSize = Math.max(400, size);
+          return { width: finalSize, height: finalSize };
+        };
+        
+        const qrBoxSize = getQrBoxSize();
+        
         await scanner.start(
-          { facingMode: "environment" },
+          { 
+            facingMode: "environment"
+          },
           {
-            fps: 10,
-            qrbox: { width: 500, height: 500 },
+            fps: 10, // Tăng FPS lên để video mượt hơn
+            qrbox: qrBoxSize,
             aspectRatio: 1.0,
+            disableFlip: false
           },
           async (decodedText) => {
+            if (isProcessingRef.current) return;
+            
+            // Đánh dấu đang xử lý để ngăn quét lại
+            isProcessingRef.current = true;
+            
             try {
               await scanner.stop();
               await scanner.clear();
               setScanning(false);
               setQrScanner(null);
-              handleProcessQRToken(decodedText);
+              await handleProcessQRToken(decodedText);
             } catch (err) {
               console.error('Error stopping scanner:', err);
               setScanning(false);
               setQrScanner(null);
+              isProcessingRef.current = false; // Reset flag nếu có lỗi
             }
           },
           (errorMessage) => {
@@ -260,7 +279,6 @@ export default function SecurityDashboardPage() {
     setFlash(null);
 
     try {
-      // Tạo một element tạm thời để scan file (không hiển thị)
       const tempElementId = 'temp-qr-scanner-' + Date.now();
       const tempDiv = document.createElement('div');
       tempDiv.id = tempElementId;
@@ -268,28 +286,21 @@ export default function SecurityDashboardPage() {
       document.body.appendChild(tempDiv);
 
       try {
-        // Tạo instance Html5Qrcode với element tạm thời
         const html5QrCode = new Html5Qrcode(tempElementId);
-        
-        // Scan file ảnh trực tiếp
         const decodedText = await html5QrCode.scanFile(file, true);
         
         if (decodedText) {
-          // Xử lý token từ file
           await handleProcessQRToken(decodedText);
         } else {
           setFlash({ type: 'error', text: 'Không tìm thấy mã QR trong ảnh. Vui lòng thử lại với ảnh khác.' });
         }
       } finally {
-        // Cleanup: xóa element tạm thời
         try {
           const tempEl = document.getElementById(tempElementId);
           if (tempEl) {
             document.body.removeChild(tempEl);
           }
-        } catch (e) {
-          // Ignore cleanup errors
-        }
+        } catch (e) {}
       }
     } catch (error: any) {
       console.error('Error scanning file:', error);
@@ -301,7 +312,6 @@ export default function SecurityDashboardPage() {
       }
     } finally {
       setUploadingFile(false);
-      // Reset file input
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
@@ -311,7 +321,6 @@ export default function SecurityDashboardPage() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      // Kiểm tra loại file
       if (!file.type.startsWith('image/')) {
         setFlash({ type: 'error', text: 'Vui lòng chọn file ảnh (JPG, PNG, etc.)' });
         return;
@@ -330,9 +339,7 @@ export default function SecurityDashboardPage() {
     setLoading(true);
     setFlash(null);
 
-    // Try to decode token (base64 JSON or plain JSON), otherwise treat as bookingId
     const tryDecode = (t: string): any | null => {
-      // Try base64 (URL-safe and standard)
       try {
         let b64 = t.replace(/-/g, '+').replace(/_/g, '/');
         while (b64.length % 4 !== 0) b64 += '=';
@@ -343,7 +350,6 @@ export default function SecurityDashboardPage() {
         }
       } catch {}
       
-      // Try base64 without padding fix
       try {
         const json = atob(t);
         const parsed = JSON.parse(json);
@@ -352,7 +358,6 @@ export default function SecurityDashboardPage() {
         }
       } catch {}
       
-      // Try JSON directly
       try {
         const parsed = JSON.parse(t);
         if (parsed && typeof parsed === 'object') {
@@ -368,7 +373,6 @@ export default function SecurityDashboardPage() {
     let bookingId: number | null = null;
     let userId: string | null = null;
 
-    // Kiểm tra format: bookingId|userId (ví dụ: 24|98ae5023-e953-4010-9975-d4aa97588992)
     if (tokenToProcess.includes('|')) {
       const parts = tokenToProcess.split('|');
       if (parts.length >= 2) {
@@ -380,11 +384,9 @@ export default function SecurityDashboardPage() {
         }
       }
     } else if (payload && typeof payload === 'object') {
-      // Format JSON (base64 hoặc plain)
       bookingId = Number(payload.bookingId || payload.id || payload.booking_id);
       userId = payload.userId ? String(payload.userId) : (payload.user_id ? String(payload.user_id) : null);
     } else if (/^\d+$/.test(tokenToProcess)) {
-      // Nếu chỉ là số, coi như bookingId
       bookingId = Number(tokenToProcess);
     }
 
@@ -396,10 +398,11 @@ export default function SecurityDashboardPage() {
       return;
     }
 
-    // Fetch booking info to display correct details
+    // Fetch booking info
     let bookingCode: string | undefined;
     let userName: string | undefined;
     let userEmail: string | undefined;
+    let phoneNumber: string | undefined;
     let roomCode: string | undefined;
     let checkinDate: string | undefined;
     let checkoutDate: string | undefined;
@@ -410,9 +413,7 @@ export default function SecurityDashboardPage() {
       const infoRes = await fetch(`/api/system/bookings?id=${bookingId}`, { credentials: 'include' });
       if (infoRes.ok) {
         const b = await infoRes.json();
-        console.log('Booking data from API:', b); // Debug log
         
-        // Map common fields with fallbacks - kiểm tra nhiều field name khác nhau
         bookingCode = b.code || b.bookingCode || b.booking_code || undefined;
         userName = b.userName || b.userName || b.user?.fullName || b.user?.full_name || b.user?.name || b.fullName || b.full_name || b.name || undefined;
         userEmail = b.userEmail || b.user_email || b.user?.email || b.email || undefined;
@@ -422,8 +423,7 @@ export default function SecurityDashboardPage() {
         numGuests = b.numGuests || b.num_guests || b.guests || b.numberOfGuests || undefined;
         bookingUserId = b.userId ? String(b.userId) : (b.user_id ? String(b.user_id) : (b.user?.id ? String(b.user.id) : undefined));
         
-        // Nếu không có userName/userEmail, thử fetch từ user API
-        if ((!userName || !userEmail) && bookingUserId) {
+        if ((!userName || !userEmail || !phoneNumber) && bookingUserId) {
           try {
             const userRes = await fetch(`/api/system/users?id=${bookingUserId}`, { credentials: 'include' });
             if (userRes.ok) {
@@ -436,6 +436,9 @@ export default function SecurityDashboardPage() {
                 if (!userEmail) {
                   userEmail = user.email || undefined;
                 }
+                if (!phoneNumber) {
+                  phoneNumber = user.phoneNumber || user.phone_number || user.phone || undefined;
+                }
               }
             }
           } catch (userErr) {
@@ -443,7 +446,11 @@ export default function SecurityDashboardPage() {
           }
         }
         
-        // Nếu không có roomCode, thử fetch từ room API
+        // Try to get phoneNumber from booking if not found in user
+        if (!phoneNumber) {
+          phoneNumber = b.phoneNumber || b.phone_number || b.phone || b.user?.phoneNumber || b.user?.phone_number || b.user?.phone || undefined;
+        }
+        
         if (!roomCode && b.roomId) {
           try {
             const roomRes = await fetch(`/api/system/rooms?id=${b.roomId}`, { credentials: 'include' });
@@ -476,7 +483,6 @@ export default function SecurityDashboardPage() {
       return;
     }
 
-    // Sử dụng userId từ token nếu có, nếu không thì dùng từ booking
     const finalUserId = userId || bookingUserId;
 
     if (!finalUserId) {
@@ -487,6 +493,18 @@ export default function SecurityDashboardPage() {
       return;
     }
 
+    // Dừng QR scanner khi đã quét thành công
+    if (qrScanner && scanning) {
+      try {
+        await qrScanner.stop();
+        await qrScanner.clear();
+      } catch (e) {
+        console.error('Error stopping scanner after success:', e);
+      }
+      setScanning(false);
+      setQrScanner(null);
+    }
+
     setResult({
       valid: true,
       bookingId,
@@ -494,86 +512,21 @@ export default function SecurityDashboardPage() {
       bookingCode,
       userName,
       userEmail,
+      phoneNumber,
       roomCode,
       checkinDate,
       checkoutDate,
       numGuests,
     } as any);
     setLoading(false);
-    setFlash({ type: 'success', text: 'Đã đọc mã QR thành công. Vui lòng tiến hành xác thực khuôn mặt.' });
-    setCurrentStep('face');
+    setFlash({ type: 'success', text: 'Đã đọc mã QR thành công. Vui lòng kiểm tra thông tin và tiến hành check-in.' });
+    setShowCamera(false); // Reset camera state
     setModalOpen(true);
-  };
-
-
-  const handleVerifyFace = async () => {
-    if (!result?.userId || !webcamRef.current) {
-      setFlash({ type: 'error', text: 'Không thể truy cập camera hoặc thiếu thông tin user' });
-      return;
-    }
-
-    try {
-      const screenshot = webcamRef.current.getScreenshot();
-      if (!screenshot) {
-        setFlash({ type: 'error', text: 'Không thể chụp ảnh từ camera' });
-        return;
-      }
-
-      setFaceVerifying(true);
-      setFaceResult(null);
-
-      // Convert base64 to Blob
-      const res = await fetch(screenshot);
-      const blob = await res.blob();
-      const file = new File([blob], `face-verify-${Date.now()}.jpg`, { type: blob.type || 'image/jpeg' });
-
-      // Create FormData
-      const formData = new FormData();
-      formData.append('image', file);
-      formData.append('userId', String(result.userId));
-
-      // Call face verification API
-      const verifyRes = await fetch('/api/security/face/verify', {
-        method: 'POST',
-        credentials: 'include',
-        body: formData,
-      });
-
-      const verifyData = await verifyRes.json();
-
-      if (!verifyRes.ok || !verifyData.match) {
-        setFaceResult({
-          success: false,
-          match: false,
-          error: verifyData.error || verifyData.message || 'Khuôn mặt không khớp',
-        });
-        setFlash({ type: 'error', text: verifyData.error || verifyData.message || 'Khuôn mặt không khớp' });
-        return;
-      }
-
-      setFaceResult({
-        success: true,
-        match: true,
-        confidence: verifyData.confidence,
-        message: verifyData.message || 'Khuôn mặt khớp',
-      });
-      setFlash({ type: 'success', text: 'Xác thực khuôn mặt thành công!' });
-      
-      // Generate room key (có thể là mã phòng hoặc mã chìa khóa)
-      const key = result.roomCode || `KEY-${result.bookingId}-${Date.now()}`;
-      setRoomKey(key);
-      setKeyIssued(true);
-      setCurrentStep('complete');
-    } catch (error: any) {
-      setFaceResult({
-        success: false,
-        match: false,
-        error: error.message || 'Lỗi khi xác thực khuôn mặt',
-      });
-      setFlash({ type: 'error', text: error.message || 'Lỗi khi xác thực khuôn mặt' });
-    } finally {
-      setFaceVerifying(false);
-    }
+    
+    // Reset processing flag sau khi hiển thị modal
+    setTimeout(() => {
+      isProcessingRef.current = false;
+    }, 1000);
   };
 
   const handleCheckIn = async () => {
@@ -583,13 +536,11 @@ export default function SecurityDashboardPage() {
       setLoading(true);
       setFlash(null);
 
-      // Validate thời gian check-in trước khi gọi API
       if (result.checkinDate && result.checkoutDate) {
         const now = new Date();
         const checkinDate = new Date(result.checkinDate);
         const checkoutDate = new Date(result.checkoutDate);
         
-        // Kiểm tra thời gian hiện tại có trong khoảng check-in đến check-out không
         if (now < checkinDate) {
           setFlash({ 
             type: 'error', 
@@ -609,7 +560,19 @@ export default function SecurityDashboardPage() {
         }
       }
 
-      const screenshot = webcamRef.current.getScreenshot();
+      // Lấy kích thước container camera để chụp đúng kích thước
+      const cameraContainer = document.querySelector('.webcam-container');
+      const containerWidth = cameraContainer?.clientWidth || 640;
+      const containerHeight = cameraContainer?.clientHeight || 480;
+      
+      // Chụp ảnh với kích thước khớp với container
+      const screenshot = webcamRef.current.getScreenshot({
+        width: containerWidth,
+        height: containerHeight,
+        screenshotQuality: 0.9,
+        screenshotFormat: 'image/jpeg'
+      });
+      
       if (!screenshot) {
         setFlash({ type: 'error', text: 'Không thể chụp ảnh từ camera' });
         setLoading(false);
@@ -620,7 +583,6 @@ export default function SecurityDashboardPage() {
       const blob = await imgRes.blob();
       const file = new File([blob], `checkin-face-${Date.now()}.jpg`, { type: blob.type || 'image/jpeg' });
 
-      // Validate required fields
       if (!result.bookingId || !result.userId) {
         setFlash({ type: 'error', text: 'Thiếu thông tin booking hoặc user. Vui lòng quét lại mã QR.' });
         setLoading(false);
@@ -631,49 +593,15 @@ export default function SecurityDashboardPage() {
       formData.append('bookingId', String(result.bookingId));
       formData.append('userId', String(result.userId));
       formData.append('faceImage', file);
-      formData.append('faceRef', 'true'); // Backend expects boolean, Spring will convert string "true" to boolean
+      formData.append('faceRef', 'true');
 
-      // Get token from cookie using cookieManager
-      let token: string | null = null
-      try {
-        token = cookieManager.getAccessToken()
-        if (!token) {
-          const userInfo = cookieManager.getUserInfo<any>()
-          if (userInfo?.token) {
-            token = userInfo.token
-          }
-        }
-      } catch (error) {
-        console.warn('[Check-in] Error getting token from cookie:', error)
-      }
-
-      const headers: HeadersInit = {}
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`
-      } else {
-        console.warn('[Check-in] No token found, request may fail at backend')
-      }
-
-      // Build backend URL directly
-      const backendUrl = `${API_CONFIG.BASE_URL}/bookings/${result.bookingId}/checkin`
-      
-      console.log('[Check-in] Sending request to backend:', {
-        url: backendUrl,
-        bookingId: result.bookingId,
-        userId: result.userId,
-        hasToken: !!token,
-        fileSize: file.size,
-        fileName: file.name
-      })
-
-      const res = await fetch(backendUrl, {
+      // Use Next.js API route as proxy
+      const res = await fetch(`/api/security/bookings/${result.bookingId}/checkin`, {
         method: 'POST',
-        headers,
+        credentials: 'include',
         body: formData,
-        credentials: 'include', // Include cookies for CORS
       });
 
-      // Parse response
       let data: any = {}
       try {
         const text = await res.text()
@@ -689,9 +617,6 @@ export default function SecurityDashboardPage() {
         }
       }
       
-      console.log('[Check-in] Response:', { status: res.status, data })
-      
-      // Handle error responses
       if (!res.ok) {
         const responseCode = data?.responseCode || data?.error
         let errorMessage = data?.message || data?.error || `Lỗi ${res.status}: Không thể thực hiện check-in`
@@ -701,11 +626,9 @@ export default function SecurityDashboardPage() {
         return
       }
 
-      // Check responseCode in success response (backend format: { responseCode: 'S0000', data: {...} })
       if (data.responseCode && data.responseCode !== 'S0000') {
         let errorMessage = data?.message || data?.error || 'Không thể thực hiện check-in'
         
-        // Handle non-success response codes
         if (data.responseCode === 'S0004' || data.responseCode === 'INVALID_REQUEST') {
           errorMessage = 'Thời gian check-in không hợp lệ.\n' +
             'Vui lòng kiểm tra:\n' +
@@ -718,17 +641,14 @@ export default function SecurityDashboardPage() {
         return
       }
 
-      // Extract check-in data from response
       const checkInData = data?.data || data;
       const successMessage = data?.message || 'Check-in thành công và đã cấp chìa khóa!';
       
       setFlash({ type: 'success', text: successMessage });
       
-      // Use room code from check-in response if available, otherwise use existing roomCode
       const finalRoomKey = checkInData?.roomCode || result.roomCode || `KEY-${result.bookingId}-${Date.now()}`;
       setRoomKey(finalRoomKey);
       setKeyIssued(true);
-      setCurrentStep('complete');
     } catch (error: any) {
       setFlash({ type: 'error', text: error?.message || 'Lỗi khi thực hiện check-in' });
     } finally {
@@ -739,28 +659,28 @@ export default function SecurityDashboardPage() {
   return (
     <>
       {/* Header */}
-      <div className="bg-white border-b border-gray-200 px-4 py-6">
+      <div className="bg-white border-b border-gray-200 px-4 py-4">
         <div className="max-w-4xl mx-auto">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
               <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
             </div>
             <div>
-              <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">Bảo vệ - Xác thực mã QR</h1>
-              <p className="text-sm lg:text-base text-gray-600 mt-1">Quét mã QR để xác thực đặt phòng và check-in</p>
+              <h1 className="text-xl lg:text-2xl font-bold text-gray-900">Check-in</h1>
+              <p className="text-sm text-gray-600 mt-1">Quét mã QR để xác thực và check-in</p>
             </div>
           </div>
         </div>
       </div>
 
       {/* Content */}
-      <div className="max-w-4xl mx-auto px-4 py-6">
-        <div className="space-y-6">
+      <div className="w-full max-w-4xl mx-auto px-4 py-4">
+        <div className="space-y-4">
           {/* Flash Messages */}
           {flash && (
-            <div className={`rounded-md border p-3 text-sm shadow-sm ${
+            <div className={`rounded-lg border p-4 text-sm ${
               flash.type === 'success' 
                 ? 'bg-green-50 border-green-200 text-green-800' 
                 : 'bg-red-50 border-red-200 text-red-800'
@@ -770,17 +690,23 @@ export default function SecurityDashboardPage() {
           )}
 
           {/* QR Scanner Card */}
-          <Card>
-            <CardHeader className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white">
-              <h2 className="text-xl font-semibold">Quét mã QR</h2>
+          <Card className="border-0 shadow-none">
+            <CardHeader className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-4 px-4">
+              <h2 className="text-lg font-semibold">Quét mã QR</h2>
             </CardHeader>
-            <CardBody className="space-y-4">
-              <div className="relative">
+            <CardBody className="space-y-4 p-4">
+              <div className="relative flex justify-center items-center">
                 <div 
                   id="qr-reader" 
                   ref={scannerRef}
-                  className="w-full rounded-lg overflow-hidden border-2 border-blue-500"
-                  style={{ minHeight: '700px', height: '80vh' }}
+                  className="rounded-lg overflow-hidden border-2 border-blue-500 qr-scanner-container"
+                  style={{ 
+                    aspectRatio: '1 / 1',
+                    width: 'min(85vw, 70vh, 600px)',
+                    maxWidth: '100%',
+                    maxHeight: '70vh',
+                    position: 'relative'
+                  }}
                 />
                 {scanning && (
                   <div className="absolute top-2 left-2 bg-blue-600 text-white px-3 py-1 rounded-full text-sm font-medium flex items-center gap-2 z-10">
@@ -807,11 +733,11 @@ export default function SecurityDashboardPage() {
               </p>
               
               {/* Upload file QR code */}
-              <div className="border-t pt-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+              <div className="border-t border-gray-200 pt-4">
+                <label className="block text-sm font-medium text-gray-700 mb-3">
                   Hoặc tải ảnh mã QR từ máy tính
                 </label>
-                <div className="flex gap-2">
+                <div className="flex gap-3">
                   <input
                     ref={fileInputRef}
                     type="file"
@@ -836,9 +762,6 @@ export default function SecurityDashboardPage() {
                     </Button>
                   </label>
                 </div>
-                <p className="text-xs text-gray-500 mt-2 text-center">
-                  Hỗ trợ các định dạng: JPG, PNG, GIF, WebP
-                </p>
               </div>
 
               {scanning && (
@@ -852,19 +775,6 @@ export default function SecurityDashboardPage() {
               )}
             </CardBody>
           </Card>
-
-          {/* Instructions */}
-          <Card>
-            <CardBody>
-              <h3 className="text-lg font-semibold text-gray-900 mb-3">📋 Hướng dẫn sử dụng</h3>
-              <ol className="space-y-2 text-sm text-gray-600 list-decimal list-inside">
-                <li>Yêu cầu khách hàng mở mã QR trên điện thoại</li>
-                <li>Đưa mã QR vào khung hình camera</li>
-                <li>Hệ thống sẽ tự động quét và xác thực mã QR</li>
-                <li>Xác nhận thông tin đặt phòng và thực hiện check-in</li>
-              </ol>
-            </CardBody>
-          </Card>
         </div>
       </div>
 
@@ -872,211 +782,186 @@ export default function SecurityDashboardPage() {
       <Modal
         open={modalOpen}
         onClose={() => {
-          if (currentStep === 'complete' && keyIssued) {
-            // Don't allow closing if key is already issued
+          if (keyIssued) {
             return;
           }
           setModalOpen(false);
-          if (result?.valid && currentStep === 'qr') {
+          setShowCamera(false);
+          if (result?.valid) {
             setResult(null);
           }
+          // Không tự động restart scanner - để người dùng tự quyết định
         }}
-        title={
-          currentStep === 'qr' 
-            ? (result?.valid ? "✅ Xác thực QR thành công" : "❌ Xác thực QR thất bại")
-            : currentStep === 'face'
-            ? "🔐 Xác thực khuôn mặt"
-            : "✅ Check-in hoàn tất"
-        }
+        title={result?.valid ? "✅ Xác thực QR thành công" : "❌ Xác thực QR thất bại"}
       >
-        {currentStep === 'qr' && result?.valid ? (
+        {result?.valid ? (
           <div className="space-y-4">
-            <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-              <p className="text-sm font-semibold text-green-800 mb-2">
-                Mã QR hợp lệ - Thông tin đặt phòng:
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Mã đặt phòng</p>
-                <p className="text-sm font-medium text-gray-900">{result.bookingCode || `#${result.bookingId}`}</p>
-              </div>
-              <div>
-                <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Tên khách hàng</p>
-                <p className="text-sm font-medium text-gray-900">{result.userName || 'N/A'}</p>
-              </div>
-              <div>
-                <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Email</p>
-                <p className="text-sm font-medium text-gray-900">{result.userEmail || 'N/A'}</p>
-              </div>
-              <div>
-                <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Phòng</p>
-                <p className="text-sm font-medium text-gray-900">{result.roomCode || 'N/A'}</p>
-              </div>
-              <div>
-                <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Check-in</p>
-                <p className="text-sm font-medium text-gray-900">
-                  {result.checkinDate ? new Date(result.checkinDate).toLocaleString('vi-VN') : 'N/A'}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Check-out</p>
-                <p className="text-sm font-medium text-gray-900">
-                  {result.checkoutDate ? new Date(result.checkoutDate).toLocaleString('vi-VN') : 'N/A'}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Số khách</p>
-                <p className="text-sm font-medium text-gray-900">{result.numGuests || 'N/A'}</p>
-              </div>
-            </div>
-
-            <div className="flex gap-3 pt-4 border-t">
-              <Button
-                onClick={() => setCurrentStep('face')}
-                className="flex-1 bg-blue-600 hover:bg-blue-700 text-white"
-              >
-                Tiếp tục xác thực khuôn mặt →
-              </Button>
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setModalOpen(false);
-                  setResult(null);
-                  setCurrentStep('qr');
-                  handleRestartScan();
-                }}
-                className="flex-1"
-              >
-                Đóng
-              </Button>
-            </div>
-          </div>
-        ) : currentStep === 'face' ? (
-          <div className="space-y-4">
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-              <p className="text-sm font-semibold text-blue-800 mb-2">
-                Thông tin đặt phòng đã xác thực:
-              </p>
-              <div className="grid grid-cols-2 gap-2 text-sm">
-                <div>
-                  <span className="text-gray-600">Khách hàng:</span>
-                  <span className="font-medium ml-2">{result?.userName || 'N/A'}</span>
+            {/* Thông tin đặt phòng - chỉ hiển thị khi chưa mở camera */}
+            {!showCamera && !keyIssued && (
+              <>
+                <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                  <p className="text-sm font-semibold text-green-800">
+                    Mã QR hợp lệ - Thông tin đặt phòng:
+                  </p>
                 </div>
-                <div>
-                  <span className="text-gray-600">Phòng:</span>
-                  <span className="font-medium ml-2">{result?.roomCode || 'N/A'}</span>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Mã đặt phòng</p>
+                    <p className="text-sm font-medium text-gray-900">{result.bookingCode || `#${result.bookingId}`}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Tên khách hàng</p>
+                    <p className="text-sm font-medium text-gray-900">{result.userName || 'N/A'}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Email</p>
+                    <p className="text-sm font-medium text-gray-900">{result.userEmail || 'N/A'}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Số điện thoại</p>
+                    <p className="text-sm font-medium text-gray-900">{result.phoneNumber || 'N/A'}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Phòng</p>
+                    <p className="text-sm font-medium text-gray-900">{result.roomCode || 'N/A'}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Số khách</p>
+                    <p className="text-sm font-medium text-gray-900">{result.numGuests || 'N/A'}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Ngày check-in</p>
+                    <p className="text-sm font-medium text-gray-900">
+                      {result.checkinDate ? new Date(result.checkinDate).toLocaleString('vi-VN') : 'N/A'}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Ngày check-out</p>
+                    <p className="text-sm font-medium text-gray-900">
+                      {result.checkoutDate ? new Date(result.checkoutDate).toLocaleString('vi-VN') : 'N/A'}
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <span className="text-gray-600">Mã đặt phòng:</span>
-                  <span className="font-medium ml-2">{result?.bookingCode || 'N/A'}</span>
+
+                {/* Nút để bắt đầu xác thực check-in */}
+                <div className="flex gap-3 pt-4 border-t">
+                  <Button
+                    onClick={() => setShowCamera(true)}
+                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white"
+                  >
+                    🔐 Tiến hành xác thực check-in
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      setModalOpen(false);
+                      setResult(null);
+                      setShowCamera(false);
+                      // Không tự động restart scanner
+                    }}
+                  >
+                    Đóng
+                  </Button>
+                </div>
+              </>
+            )}
+
+            {/* Camera for face verification - hiển thị khi showCamera = true */}
+            {showCamera && !keyIssued && (
+              <div className="space-y-4 pt-4 border-t border-gray-200">
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <p className="text-sm text-blue-800">
+                    Vui lòng đưa khuôn mặt vào khung hình và nhấn nút để chụp ảnh và check-in.
+                  </p>
+                </div>
+                
+                <div className="relative rounded overflow-hidden border border-gray-200 h-[300px] bg-gray-900 webcam-container" style={{ width: '100%' }}>
+                  <WebcamComponent
+                    ref={webcamRef as any}
+                    audio={false}
+                    className="w-full h-full object-cover webcam-video"
+                    screenshotFormat="image/jpeg"
+                    screenshotQuality={0.9}
+                    videoConstraints={{ 
+                      facingMode: "user",
+                      width: { ideal: 640 },
+                      height: { ideal: 480 },
+                      frameRate: { ideal: 15, max: 30 } // Tăng FPS lên để video mượt hơn
+                    }}
+                    width={640}
+                    height={480}
+                    onUserMedia={() => setCameraError(null)}
+                    onUserMediaError={(e: unknown) => {
+                      const name = (e as any)?.name;
+                      if (name === "NotAllowedError") {
+                        setCameraError("Bạn chưa cấp quyền camera. Vui lòng cho phép và thử lại.");
+                      } else if (name === "NotFoundError" || name === "OverconstrainedError") {
+                        setCameraError("Không tìm thấy thiết bị camera phù hợp.");
+                      } else {
+                        setCameraError("Không thể truy cập camera. Vui lòng thử lại.");
+                      }
+                    }}
+                  />
+                  
+                  {/* Hiển thị lỗi trong khung camera */}
+                  {(cameraError || (flash && flash.type === 'error')) && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-gray-900 bg-opacity-95 z-10">
+                      <div className="bg-red-50 border-2 border-red-300 rounded-lg p-4 mx-4 max-w-md text-center">
+                        <div className="text-red-600 text-4xl mb-2">⚠️</div>
+                        <p className="text-sm font-semibold text-red-800 mb-1">Lỗi</p>
+                        <p className="text-sm text-red-700">{cameraError || flash?.text}</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex gap-3">
+                  <Button
+                    onClick={handleCheckIn}
+                    disabled={loading || !!cameraError}
+                    className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+                  >
+                    {loading ? 'Đang xử lý...' : '📸 Chụp ảnh & Check-in'}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={() => setShowCamera(false)}
+                    disabled={loading}
+                  >
+                    Hủy
+                  </Button>
                 </div>
               </div>
-            </div>
+            )}
 
-            {/* Camera for face verification */}
-            <div className="space-y-4">
-              <div className="relative rounded overflow-hidden border border-gray-200 h-[300px] bg-gray-900">
-                <WebcamComponent
-                  ref={webcamRef as any}
-                  audio={false}
-                  className="w-full h-full object-cover"
-                  screenshotFormat="image/jpeg"
-                  screenshotQuality={0.9}
-                  videoConstraints={{ facingMode: "user" }}
-                  onUserMedia={() => setCameraError(null)}
-                  onUserMediaError={(e: unknown) => {
-                    const name = (e as any)?.name;
-                    if (name === "NotAllowedError") {
-                      setCameraError("Bạn chưa cấp quyền camera. Vui lòng cho phép và thử lại.");
-                    } else if (name === "NotFoundError" || name === "OverconstrainedError") {
-                      setCameraError("Không tìm thấy thiết bị camera phù hợp.");
-                    } else {
-                      setCameraError("Không thể truy cập camera. Vui lòng thử lại.");
-                    }
-                  }}
-                />
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                  <div className="rounded-full border-2 border-blue-500" style={{ width: "200px", height: "200px" }} />
+            {keyIssued && roomKey && (
+              <div className="bg-gradient-to-r from-green-50 to-emerald-50 border-2 border-green-300 rounded-lg p-6 text-center mt-4">
+                <div className="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
                 </div>
-              </div>
-
-              {cameraError && (
-                <div className="bg-red-50 border border-red-200 rounded-lg p-3">
-                  <p className="text-sm text-red-700">{cameraError}</p>
+                <h3 className="text-xl font-bold text-green-800 mb-4">Check-in thành công!</h3>
+                <div className="bg-white rounded-lg p-4 border-2 border-green-300 mb-4">
+                  <p className="text-xs text-gray-500 font-semibold uppercase mb-2">Mã chìa khóa phòng</p>
+                  <p className="text-2xl font-bold text-green-600">{roomKey}</p>
+                  <p className="text-sm text-gray-600 mt-2">Phòng: {result?.roomCode || 'N/A'}</p>
                 </div>
-              )}
-
-              <div className="flex gap-3">
                 <Button
-                  onClick={handleCheckIn}
-                  disabled={loading || !!cameraError}
-                  className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+                  onClick={() => {
+                    setModalOpen(false);
+                    setResult(null);
+                    setKeyIssued(false);
+                    setRoomKey(null);
+                    handleRestartScan();
+                  }}
+                  className="w-full bg-green-600 hover:bg-green-700 text-white"
                 >
-                  {loading ? 'Đang xử lý...' : '📸 Chụp ảnh & Check-in'}
+                  Hoàn tất
                 </Button>
               </div>
-            </div>
-          </div>
-        ) : currentStep === 'complete' && keyIssued ? (
-          <div className="space-y-4">
-            <div className="bg-gradient-to-r from-green-50 to-emerald-50 border-2 border-green-300 rounded-xl p-6 text-center">
-              <div className="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-4">
-                <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </div>
-              <h3 className="text-xl font-bold text-green-800 mb-2">Check-in thành công!</h3>
-              <p className="text-sm text-gray-700 mb-4">Đã cấp chìa khóa cho khách hàng</p>
-              
-              {roomKey && (
-                <div className="bg-white rounded-lg p-4 border-2 border-green-300">
-                  <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Mã chìa khóa phòng</p>
-                  <p className="text-2xl font-bold text-green-600">{roomKey}</p>
-                  <p className="text-xs text-gray-600 mt-2">Phòng: {result?.roomCode || 'N/A'}</p>
-                </div>
-              )}
-            </div>
-
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-              <p className="text-sm font-semibold text-blue-800 mb-2">Thông tin khách hàng:</p>
-              <div className="grid grid-cols-2 gap-2 text-sm">
-                <div>
-                  <span className="text-gray-600">Tên:</span>
-                  <span className="font-medium ml-2">{result?.userName || 'N/A'}</span>
-                </div>
-                <div>
-                  <span className="text-gray-600">Email:</span>
-                  <span className="font-medium ml-2">{result?.userEmail || 'N/A'}</span>
-                </div>
-                <div>
-                  <span className="text-gray-600">Mã đặt phòng:</span>
-                  <span className="font-medium ml-2">{result?.bookingCode || 'N/A'}</span>
-                </div>
-                <div>
-                  <span className="text-gray-600">Check-in:</span>
-                  <span className="font-medium ml-2">
-                    {result?.checkinDate ? new Date(result.checkinDate).toLocaleString('vi-VN') : 'N/A'}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            <Button
-              onClick={() => {
-                setModalOpen(false);
-                setResult(null);
-                setFaceResult(null);
-                setKeyIssued(false);
-                setRoomKey(null);
-                setCurrentStep('qr');
-                handleRestartScan();
-              }}
-              className="w-full bg-green-600 hover:bg-green-700 text-white"
-            >
-              Hoàn tất
-            </Button>
+            )}
           </div>
         ) : (
           <div className="space-y-4">
@@ -1093,7 +978,7 @@ export default function SecurityDashboardPage() {
               onClick={() => {
                 setModalOpen(false);
                 setResult(null);
-                handleRestartScan();
+                // Không tự động restart scanner
               }}
               className="w-full"
             >
@@ -1105,7 +990,4 @@ export default function SecurityDashboardPage() {
     </>
   );
 }
-
-
-
 

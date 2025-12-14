@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import Input from "@/components/ui/Input";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
@@ -18,10 +18,57 @@ export default function StaffProfilesPage() {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
   const [departmentFilter, setDepartmentFilter] = useState<string>("ALL");
-  const { data, refetch } = useStaffProfilesFiltered(
-    statusFilter !== 'ALL' ? (statusFilter === 'ACTIVE' ? 'ACTIVE' : 'INACTIVE') : undefined,
-    departmentFilter !== 'ALL' ? departmentFilter : undefined
+  
+  // Refs to prevent spam requests
+  const isInitialLoadRef = useRef(false)
+  const filterDebounceRef = useRef<NodeJS.Timeout | null>(null)
+  const isProcessingRef = useRef(false)
+  
+  // Debounced filters
+  const [debouncedStatusFilter, setDebouncedStatusFilter] = useState<StatusFilter>("ALL");
+  const [debouncedDepartmentFilter, setDebouncedDepartmentFilter] = useState<string>("ALL");
+  
+  // Memoize filter values to prevent unnecessary re-fetches
+  const statusFilterValue = useMemo(() => 
+    debouncedStatusFilter !== 'ALL' ? (debouncedStatusFilter === 'ACTIVE' ? 'ACTIVE' : 'INACTIVE') : undefined,
+    [debouncedStatusFilter]
   );
+  const departmentFilterValue = useMemo(() => 
+    debouncedDepartmentFilter !== 'ALL' ? debouncedDepartmentFilter : undefined,
+    [debouncedDepartmentFilter]
+  );
+  
+  const { data, refetch } = useStaffProfilesFiltered(statusFilterValue, departmentFilterValue);
+  
+  // Debounce filter changes - only update if values actually changed 
+  useEffect(() => {
+    if (!isInitialLoadRef.current) {
+      isInitialLoadRef.current = true
+      setDebouncedStatusFilter(statusFilter)
+      setDebouncedDepartmentFilter(departmentFilter)
+      return
+    }
+    
+    // Skip if values haven't changed
+    if (statusFilter === debouncedStatusFilter && departmentFilter === debouncedDepartmentFilter) {
+      return
+    }
+    
+    if (filterDebounceRef.current) {
+      clearTimeout(filterDebounceRef.current)
+    }
+    
+    filterDebounceRef.current = setTimeout(() => {
+      setDebouncedStatusFilter(statusFilter)
+      setDebouncedDepartmentFilter(departmentFilter)
+    }, 500)
+    
+    return () => {
+      if (filterDebounceRef.current) {
+        clearTimeout(filterDebounceRef.current)
+      }
+    }
+  }, [statusFilter, departmentFilter, debouncedStatusFilter, debouncedDepartmentFilter])
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(10);
   const [flash, setFlash] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -40,9 +87,14 @@ export default function StaffProfilesPage() {
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
 
-  // Multi-roles selection for user assignment
-  const { data: rolesData } = useRoles({ page: 0, size: 100 });
-  const roles: RoleItem[] = Array.isArray((rolesData as any)?.items) ? (rolesData as any).items : (Array.isArray(rolesData as any) ? rolesData as any : []);
+  // Multi-roles selection for user assignment - memoize params to prevent re-fetch
+  const rolesParams = useMemo(() => ({ page: 0, size: 100 }), []);
+  const { data: rolesData } = useRoles(rolesParams);
+  const roles: RoleItem[] = useMemo(() => {
+    return Array.isArray((rolesData as any)?.items) 
+      ? (rolesData as any).items 
+      : (Array.isArray(rolesData as any) ? rolesData as any : []);
+  }, [rolesData]);
   const [selectedRoles, setSelectedRoles] = useState<string[]>([]);
 
   const formatCurrency = (value?: number | null) =>
@@ -55,7 +107,17 @@ export default function StaffProfilesPage() {
     if (data) {
       // Handle both { items: [...] } and direct array response
       const items = (data as any)?.items ?? (Array.isArray(data) ? data : []);
-      setRows(items as StaffProfile[]);
+      // Only update if data actually changed
+      setRows((prevRows) => {
+        const newRows = items as StaffProfile[];
+        // Quick check: if length and first item are same, likely same data
+        if (prevRows.length === newRows.length && 
+            prevRows.length > 0 && 
+            prevRows[0]?.id === newRows[0]?.id) {
+          return prevRows;
+        }
+        return newRows;
+      });
     }
   }, [data]);
 
@@ -77,6 +139,11 @@ export default function StaffProfilesPage() {
     // Rely on backend-side filters (status, department). Only sort on client.
     return [...rows].sort((a, b) => a.employeeId.localeCompare(b.employeeId));
   }, [rows]);
+  
+  // Memoize paginated data to prevent recalculation
+  const paginatedData = useMemo(() => {
+    return filtered.slice((page - 1) * size, page * size);
+  }, [filtered, page, size]);
 
   // Tạo mã nhân viên tự động EMP-001, EMP-002...
   function generateEmployeeId(): string {
@@ -119,14 +186,36 @@ export default function StaffProfilesPage() {
 
   // Chọn user từ kết quả tìm kiếm và điền vào form
   function selectUser(user: any) {
+    // Lấy ID của user - convert sang number nếu có thể
+    // Nếu là UUID (string) thì cần xử lý khác, nhưng tạm thời chỉ lấy số
+    let userId: number | undefined;
+    if (typeof user.id === 'number') {
+      userId = user.id;
+    } else if (typeof user.id === 'string') {
+      // Nếu là số dạng string thì convert
+      const numId = Number(user.id);
+      if (!isNaN(numId)) {
+        userId = numId;
+      } else {
+        // Nếu là UUID, có thể cần lấy từ field khác hoặc bỏ qua
+        // Tạm thời để undefined và user sẽ phải nhập thủ công
+        console.warn('User ID là UUID, không thể convert sang number:', user.id);
+        userId = undefined;
+      }
+    }
+    
     setEdit({
-      accountId: user.id,
+      accountId: userId,
       employeeId: generateEmployeeId(),
       workEmail: user.email || "",
       workPhone: user.phoneNumber || "",
       officeLocation: user.address || "",
       hireDate: new Date().toISOString().slice(0, 10),
       isActive: true,
+      role: "STAFF" as any,
+      department: "Nhân viên",
+      position: "Nhân viên",
+      jobTitle: "Nhân viên",
     } as Partial<StaffProfile>);
     setSearchUserOpen(false);
     setSearchKeyword("");
@@ -145,9 +234,14 @@ export default function StaffProfilesPage() {
 
   // Tạo mới không cần tìm user
   function openCreateManual() {
-    setEdit({
+    const defaultStaffData = {
       employeeId: generateEmployeeId(),
-    } as Partial<StaffProfile>);
+      role: "STAFF" as any,
+      department: "Nhân viên",
+      position: "Nhân viên",
+      jobTitle: "Nhân viên",
+    } as Partial<StaffProfile>;
+    setEdit(defaultStaffData);
     setSelectedRoles([]);
     setSubmitted(false);
     setSearchUserOpen(false);
@@ -155,28 +249,49 @@ export default function StaffProfilesPage() {
   }
 
   function openEdit(row: StaffProfile) {
-    setEdit({ ...row });
+    // Auto-fill nếu role là STAFF và các trường chưa có giá trị
+    const editData = { ...row };
+    if ((editData as any).role === "STAFF" || !(editData as any).role) {
+      if (!editData.department) editData.department = "Nhân viên";
+      if (!editData.position) editData.position = "Nhân viên";
+      if (!editData.jobTitle) editData.jobTitle = "Nhân viên";
+      (editData as any).role = "STAFF";
+    }
+    setEdit(editData);
     setEditOpen(true);
   }
 
   // Auto-fill dựa trên vai trò hệ thống
   function handleRoleChange(role: string) {
     const roleDefaults: Record<string, { department: string; position: string; jobTitle: string }> = {
-      "ADMIN_SYSTEM": { department: "Quản lý hệ thống", position: "Quản trị viên", jobTitle: "Quản trị hệ thống" },
-      "ADMINISTRATIVE": { department: "Hành chính", position: "Nhân viên", jobTitle: "Nhân viên hành chính" },
       "STAFF": { department: "Nhân viên", position: "Nhân viên", jobTitle: "Nhân viên" },
-      "SECURITY": { department: "Bảo vệ", position: "Nhân viên", jobTitle: "Nhân viên bảo vệ" },
     };
     const defaults = roleDefaults[role] || {};
     setEdit((prev) => ({
       ...prev,
       role,
-      // Chỉ fill nếu chưa có dữ liệu
-      department: prev.department || defaults.department || "",
-      position: prev.position || defaults.position || "",
-      jobTitle: prev.jobTitle || defaults.jobTitle || "",
+      // Tự động fill các trường khi chọn role STAFF
+      department: defaults.department || prev.department || "",
+      position: defaults.position || prev.position || "",
+      jobTitle: defaults.jobTitle || prev.jobTitle || "",
     }));
   }
+
+  // Auto-fill khi form mở và role là STAFF
+  useEffect(() => {
+    if (editOpen && ((edit as any).role === "STAFF" || !(edit as any).role)) {
+      const needsUpdate = !edit.department || !edit.position || !edit.jobTitle;
+      if (needsUpdate) {
+        setEdit((prev) => ({
+          ...prev,
+          role: "STAFF" as any,
+          department: prev.department || "Nhân viên",
+          position: prev.position || "Nhân viên",
+          jobTitle: prev.jobTitle || "Nhân viên",
+        }));
+      }
+    }
+  }, [editOpen, edit.department, edit.position, edit.jobTitle]);
 
   function isValidEdit() {
     if (edit.accountId === undefined || edit.accountId === null) return false;
@@ -692,7 +807,7 @@ export default function StaffProfilesPage() {
                 <Input
                   type="number"
                   min="0"
-                  placeholder="Nhập Account ID"
+                  placeholder="Nhập Account ID (số)"
                   value={edit.accountId ?? ""}
                   onChange={(e) => setEdit((prev) => ({ ...prev, accountId: e.target.value === "" ? undefined : Number(e.target.value) }))}
                   className="h-11"
@@ -717,15 +832,12 @@ export default function StaffProfilesPage() {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Vai trò hệ thống <span className="text-red-500">*</span></label>
                 <select
-                  value={(edit as any).role || ""}
+                  value={(edit as any).role || "STAFF"}
                   onChange={(e) => handleRoleChange(e.target.value)}
                   className="w-full h-11 px-4 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                  disabled
                 >
-                  <option value="">-- Chọn vai trò --</option>
-                  <option value="ADMIN_SYSTEM">Quản lý hệ thống</option>
-                  <option value="ADMINISTRATIVE">Hành chính</option>
                   <option value="STAFF">Nhân viên</option>
-                  <option value="SECURITY">Bảo vệ</option>
                 </select>
               </div>
               <div>
@@ -985,7 +1097,8 @@ export default function StaffProfilesPage() {
 
           {/* Ghi chú & Trạng thái */}
           <div className="space-y-3">
-            <div>
+            {/* ID Quản lý - đã ẩn */}
+            {/* <div>
               <label className="block text-xs font-medium text-gray-700 mb-1">ID Quản lý</label>
               <Input
                 type="number"
@@ -994,7 +1107,7 @@ export default function StaffProfilesPage() {
                 value={edit.managerId ?? ""}
                 onChange={(e) => setEdit((prev) => ({ ...prev, managerId: e.target.value === "" ? undefined : Number(e.target.value) }))}
               />
-            </div>
+            </div> */}
             <div>
               <label className="block text-xs font-medium text-gray-700 mb-1">Ghi chú</label>
               <textarea
