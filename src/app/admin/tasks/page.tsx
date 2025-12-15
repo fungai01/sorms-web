@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import { useStaffTasks } from "@/hooks/useApi";
 import Input from "@/components/ui/Input";
 import Button from "@/components/ui/Button";
@@ -24,6 +24,20 @@ type StaffTask = {
   isActive?: boolean
 }
 
+function normalizeTask(t: any): StaffTask {
+  return {
+    id: Number(t.id) || 0,
+    title: String(t.title || t.name || ''),
+    assignee: t.assignee !== undefined ? String(t.assignee) : (t.assignedTo !== undefined ? String(t.assignedTo) : ''),
+    due_date: t.due_date || t.dueDate || '',
+    priority: (t.priority || 'MEDIUM').toUpperCase() as TaskPriority,
+    status: (t.status || 'TODO').toUpperCase() as TaskStatus,
+    description: t.description || t.note || '',
+    created_at: t.created_at || t.createdAt || '',
+    isActive: t.isActive !== undefined ? !!t.isActive : undefined,
+  }
+}
+
 // Remove mock; always use API
 
 export default function TasksPage() {
@@ -32,6 +46,9 @@ export default function TasksPage() {
 
   const [query, setQuery] = useState("")
   const [filterStatus, setFilterStatus] = useState<'ALL' | TaskStatus>('ALL')
+  const [filterAssignee, setFilterAssignee] = useState<string>('')
+  const [filterRelatedType, setFilterRelatedType] = useState<string>('')
+  const [filterRelatedId, setFilterRelatedId] = useState<string>('')
   const [sortKey, setSortKey] = useState<'id' | 'created' | 'due' | 'priority'>("created")
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>("desc")
   const [page, setPage] = useState(1)
@@ -47,32 +64,84 @@ export default function TasksPage() {
   const [loading, setLoading] = useState(false)
   // Hook: load tasks via API route
   const { data: tasksData, loading: tasksLoading, error, refetch } = useStaffTasks()
+  
+  // Refs to prevent spam requests
+  const isInitialLoadRef = useRef(false)
+  const filterDebounceRef = useRef<NodeJS.Timeout | null>(null)
+  const isProcessingRef = useRef(false)
+  
   useEffect(() => {
     if (tasksData) {
-      if (Array.isArray((tasksData as any).items)) setRows(((tasksData as any).items) as StaffTask[])
-      else if (Array.isArray(tasksData as any)) setRows(tasksData as any)
+      if (Array.isArray((tasksData as any).items)) setRows(((tasksData as any).items).map(normalizeTask))
+      else if (Array.isArray(tasksData as any)) setRows((tasksData as any).map(normalizeTask))
       else setRows([])
     }
     // Sync local loading indicator
     setLoading(!!tasksLoading)
   }, [tasksData, tasksLoading])
   
-  async function refetchTasks() {
+  const refetchTasks = useCallback(async () => {
+    // Prevent multiple simultaneous requests
+    if (isProcessingRef.current) {
+      console.log('[Tasks] Request already in progress, skipping...')
+      return
+    }
+    
+    isProcessingRef.current = true
     setLoading(true)
     try {
-      const res = await fetch('/api/system/tasks', { headers: { 'Content-Type': 'application/json' }, credentials: 'include' })
+      // Build query params based on filters
+      const params = new URLSearchParams()
+      if (filterAssignee) params.set('assignedTo', filterAssignee)
+      if (filterStatus !== 'ALL') params.set('status', filterStatus)
+      if (filterRelatedType && filterRelatedId) {
+        params.set('relatedType', filterRelatedType)
+        params.set('relatedId', filterRelatedId)
+      }
+      
+      const endpoint = `/api/system/tasks${params.toString() ? '?' + params.toString() : ''}`
+      const res = await fetch(endpoint, { headers: { 'Content-Type': 'application/json' }, credentials: 'include' })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
-      if (Array.isArray(data)) setRows(data)
-      else if (Array.isArray(data?.items)) setRows(data.items)
+      if (Array.isArray(data)) setRows(data.map(normalizeTask))
+      else if (Array.isArray(data?.items)) setRows(data.items.map(normalizeTask))
       else setRows([])
     } catch {
       setRows([])
     } finally {
       setLoading(false)
+      isProcessingRef.current = false
     }
-  }
-  useEffect(() => { refetch() }, [])
+  }, [filterStatus, filterAssignee, filterRelatedType, filterRelatedId])
+  
+  // Initial load only once
+  useEffect(() => {
+    if (!isInitialLoadRef.current) {
+      isInitialLoadRef.current = true
+      refetch()
+    }
+  }, [refetch])
+  
+  // Debounced refetch when filters change (only after initial load)
+  useEffect(() => {
+    if (!isInitialLoadRef.current) return // Skip if initial load hasn't happened
+    
+    // Clear previous debounce
+    if (filterDebounceRef.current) {
+      clearTimeout(filterDebounceRef.current)
+    }
+    
+    // Debounce filter changes to prevent spam
+    filterDebounceRef.current = setTimeout(() => {
+      refetchTasks()
+    }, 500) // Wait 500ms after last filter change
+    
+    return () => {
+      if (filterDebounceRef.current) {
+        clearTimeout(filterDebounceRef.current)
+      }
+    }
+  }, [filterStatus, filterAssignee, filterRelatedType, filterRelatedId, refetchTasks])
 
   useEffect(() => { if (!flash) return; const t = setTimeout(() => setFlash(null), 3000); return () => clearTimeout(t) }, [flash])
 
@@ -84,8 +153,8 @@ export default function TasksPage() {
     return [...list].sort((a, b) => {
       if (sortKey === 'id') return (a.id - b.id) * dir
       if (sortKey === 'due') return (a.due_date || '').localeCompare(b.due_date || '') * dir
-      if (sortKey === 'priority') return priorityWeight(a.priority) - priorityWeight(b.priority) * dir
-      return a.created_at.localeCompare(b.created_at) * dir
+      if (sortKey === 'priority') return (priorityWeight(a.priority) - priorityWeight(b.priority)) * dir
+      return (a.created_at || '').localeCompare(b.created_at || '') * dir
     })
   }, [rows, query, filterStatus, sortKey, sortOrder])
 
@@ -112,6 +181,12 @@ export default function TasksPage() {
     setEditOpen(true)
   }
   function confirmDelete(id: number) { setConfirmOpen({ open: true, id }) }
+  
+  // Only open detail modal when clicked - no auto-loading
+  function openDetail(task: StaffTask) {
+    setSelected(task)
+    setDetailOpen(true)
+  }
   async function doDelete() {
     if (!confirmOpen.id) return
     const id = confirmOpen.id
@@ -180,16 +255,9 @@ export default function TasksPage() {
       {/* Header - match admin style */}
       <div className="bg-white/80 backdrop-blur-sm border-b border-gray-200/50 px-4 sm:px-6 py-4 sm:py-6 shadow-sm">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3 min-w-0 flex-1">
-            <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center flex-shrink-0 shadow-sm">
-              <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-              </svg>
-            </div>
           <div className="min-w-0 flex-1">
-              <h1 className="text-lg sm:text-2xl font-bold text-gray-900 truncate">Công việc</h1>
-              <p className="text-sm text-gray-500 truncate">{filtered.length} công việc</p>
-            </div>
+            <h1 className="text-lg sm:text-2xl font-bold text-gray-900 truncate">Công việc</h1>
+            <p className="text-sm text-gray-500 truncate">{filtered.length} công việc</p>
           </div>
           <div className="flex items-center gap-2">
             <Button 
@@ -291,6 +359,44 @@ export default function TasksPage() {
             <option value="desc">Giảm dần</option>
           </select>
         </div>
+        <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Người phụ trách (ID)</label>
+          <Input
+            type="number"
+            placeholder="Nhập ID người phụ trách"
+            value={filterAssignee}
+            onChange={(e) => setFilterAssignee(e.target.value)}
+            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg"
+          />
+        </div>
+        <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Loại liên quan</label>
+          <select 
+            value={filterRelatedType} 
+            onChange={(e) => {
+              setFilterRelatedType(e.target.value)
+              if (!e.target.value) setFilterRelatedId('')
+            }}
+            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="">-- Chọn loại --</option>
+            <option value="BOOKING">BOOKING</option>
+            <option value="SERVICE_ORDER">SERVICE_ORDER</option>
+            <option value="ROOM">ROOM</option>
+          </select>
+        </div>
+        {filterRelatedType && (
+          <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">ID liên quan</label>
+            <Input
+              type="number"
+              placeholder="Nhập ID"
+              value={filterRelatedId}
+              onChange={(e) => setFilterRelatedId(e.target.value)}
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg"
+            />
+          </div>
+        )}
       </div>
 
           {/* Desktop */}
@@ -324,6 +430,44 @@ export default function TasksPage() {
                 <option value="CANCELLED">CANCELLED</option>
               </select>
             </div>
+            <div className="w-32 flex-shrink-0">
+              <label className="block text-xs font-medium text-gray-600 mb-1">Người phụ trách</label>
+              <Input
+                type="number"
+                placeholder="ID"
+                value={filterAssignee}
+                onChange={(e) => setFilterAssignee(e.target.value)}
+                className="w-full px-3 py-2 text-sm"
+              />
+            </div>
+            <div className="w-36 flex-shrink-0">
+              <label className="block text-xs font-medium text-gray-600 mb-1">Loại liên quan</label>
+              <select 
+                value={filterRelatedType} 
+                onChange={(e) => {
+                  setFilterRelatedType(e.target.value)
+                  if (!e.target.value) setFilterRelatedId('')
+                }}
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">-- Chọn --</option>
+                <option value="BOOKING">BOOKING</option>
+                <option value="SERVICE_ORDER">SERVICE_ORDER</option>
+                <option value="ROOM">ROOM</option>
+              </select>
+            </div>
+            {filterRelatedType && (
+              <div className="w-32 flex-shrink-0">
+                <label className="block text-xs font-medium text-gray-600 mb-1">ID liên quan</label>
+                <Input
+                  type="number"
+                  placeholder="ID"
+                  value={filterRelatedId}
+                  onChange={(e) => setFilterRelatedId(e.target.value)}
+                  className="w-full px-3 py-2 text-sm"
+                />
+              </div>
+            )}
             <div className="w-36 flex-shrink-0">
               <label className="block text-xs font-medium text-gray-600 mb-1">Sắp xếp</label>
               <select
@@ -397,7 +541,7 @@ export default function TasksPage() {
                       </td>
                       <td className="px-4 py-3 text-center">
                         <div className="flex gap-2 justify-center">
-                          <Button variant="secondary" className="h-8 px-3 text-xs" onClick={() => { setSelected(r); setDetailOpen(true) }}>Xem</Button>
+                          <Button variant="secondary" className="h-8 px-3 text-xs" onClick={() => openDetail(r)}>Xem</Button>
                           <Button variant="secondary" className="h-8 px-3 text-xs" onClick={() => openEditRow(r)}>Sửa</Button>
                           {r.isActive !== false ? (
                             <Button variant="danger" className="h-8 px-3 text-xs" onClick={() => confirmDelete(r.id)}>Vô hiệu</Button>
@@ -466,7 +610,7 @@ export default function TasksPage() {
                     {/* Nút thao tác giống bookings */}
                     <div className="px-3 py-3 bg-gray-50 border-t border-gray-100">
                       <div className="grid grid-cols-3 gap-2">
-                        <Button variant="secondary" className="h-10 text-xs font-medium px-2" onClick={() => { setSelected(r); setDetailOpen(true) }}>Xem</Button>
+                        <Button variant="secondary" className="h-10 text-xs font-medium px-2" onClick={() => openDetail(r)}>Xem</Button>
                         <Button className="h-10 text-xs font-medium px-2" onClick={() => openEditRow(r)}>Sửa</Button>
                         {r.isActive !== false ? (
                           <Button variant="danger" className="h-10 text-xs font-medium px-2" onClick={() => confirmDelete(r.id)}>Vô hiệu</Button>
@@ -583,7 +727,7 @@ export default function TasksPage() {
                   </svg>
                   <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Ngày tạo</span>
                 </div>
-                <p className="text-sm sm:text-base font-bold text-blue-900">{selected.created_at.replace('T',' ')}</p>
+                <p className="text-sm sm:text-base font-bold text-blue-900">{selected.created_at ? selected.created_at.replace('T',' ') : '—'}</p>
               </div>
             </div>
 

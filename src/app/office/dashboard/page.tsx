@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
-import { useBookings, useRooms } from "@/hooks/useApi";
+import { useBookings, useRooms, useUsers } from "@/hooks/useApi";
 import { useRouter } from "next/navigation";
 
 export default function OfficeDashboard() {
@@ -21,10 +21,42 @@ export default function OfficeDashboard() {
   // Use API hooks for data fetching
   const { data: bookingsData, loading: bookingsLoading } = useBookings();
   const { data: roomsData, loading: roomsLoading } = useRooms();
+  const { data: usersData } = useUsers();
+  
+  const shownPendingBookings = useRef<Set<number>>(new Set());
 
-  // Transform API data
-  const bookings = (bookingsData as any) || [];
-  const rooms = (roomsData as any) || [];
+  // Transform API data - ensure arrays
+  const bookings = Array.isArray(bookingsData)
+    ? bookingsData
+    : Array.isArray((bookingsData as any)?.items)
+      ? (bookingsData as any).items
+      : Array.isArray((bookingsData as any)?.data?.content)
+        ? (bookingsData as any).data.content
+        : Array.isArray((bookingsData as any)?.content)
+          ? (bookingsData as any).content
+          : Array.isArray((bookingsData as any)?.data)
+            ? (bookingsData as any).data
+            : [];
+  
+  const rooms = Array.isArray(roomsData)
+    ? roomsData
+    : Array.isArray((roomsData as any)?.items)
+      ? (roomsData as any).items
+      : Array.isArray((roomsData as any)?.data?.content)
+        ? (roomsData as any).data.content
+        : Array.isArray((roomsData as any)?.content)
+          ? (roomsData as any).content
+          : Array.isArray((roomsData as any)?.data)
+            ? (roomsData as any).data
+            : [];
+  
+  const users = Array.isArray(usersData) 
+    ? usersData 
+    : Array.isArray((usersData as any)?.items) 
+      ? (usersData as any).items 
+      : Array.isArray((usersData as any)?.data?.content)
+        ? (usersData as any).data.content
+        : [];
 
   // Calculate stats
   const totalBookings = bookings.length;
@@ -82,6 +114,53 @@ export default function OfficeDashboard() {
     return `${days} ngày trước`;
   };
 
+  useEffect(() => {
+    if (bookingsLoading || !bookings || bookings.length === 0) return;
+    
+    const pendingBookings = bookings.filter((b: any) => b.status === 'PENDING');
+    
+    // Reset shown bookings when entering dashboard (mỗi lần vào sẽ hiển thị lại)
+    shownPendingBookings.current.clear();
+    
+    pendingBookings.forEach((booking: any) => {
+      const bookingId = booking.id;
+      if (shownPendingBookings.current.has(bookingId)) return;
+      
+      shownPendingBookings.current.add(bookingId);
+      
+      // Find user and room info
+      const userId = booking.userId || booking.user_id;
+      const roomId = booking.roomId || booking.room_id;
+      
+      const user = users.find((u: any) => 
+        (u.id === userId) || 
+        (u.userId === userId) ||
+        (String(u.id) === String(userId)) ||
+        (String(u.userId) === String(userId))
+      );
+      
+      const room = rooms.find((r: any) => {
+        const rId = r.id || r.roomId;
+        return rId === roomId || String(rId) === String(roomId) || Number(rId) === Number(roomId);
+      });
+      
+      const userName = booking.userName || booking.user_name || user?.name || user?.firstName || user?.email || `User #${userId}`;
+      const roomName = booking.roomName || booking.room_name || booking.roomCode || booking.room_code || room?.name || room?.roomName || room?.code || room?.roomCode || `Room #${roomId}`;
+      
+      const toastId = `pending-booking-${bookingId}-${Date.now()}`;
+      const toast = {
+        id: toastId,
+        title: 'Yêu cầu đặt phòng chờ duyệt',
+        message: `${userName} đã đặt phòng ${roomName}. Vui lòng xem xét và duyệt.`,
+        type: 'info' as const,
+        category: 'booking' as const,
+        bookingId: bookingId
+      };
+      
+    });
+  }, [bookings, bookingsLoading, users, rooms]);
+
+
   const recentActivities = (() => {
     const items = (bookings as any[])
       .slice()
@@ -109,6 +188,7 @@ export default function OfficeDashboard() {
 
   return (
     <>
+      
       {/* Header */}
       <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 border-b border-transparent shadow-sm px-4 py-8">
         <div className="max-w-7xl mx-auto">

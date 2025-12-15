@@ -62,7 +62,15 @@ export async function GET(req: NextRequest) {
       count += dayItems.length
     }
 
-    return NextResponse.json({ count, sum: totalSum, series })
+    // Add caching headers - cache for 30 seconds
+    return NextResponse.json(
+      { count, sum: totalSum, series },
+      {
+        headers: {
+          'Cache-Control': 'public, s-maxage=30, stale-while-revalidate=60',
+        },
+      }
+    )
   } catch (error) {
     console.error('[Dashboard Payments] API error:', error)
     // Return empty series instead of error to prevent dashboard from breaking

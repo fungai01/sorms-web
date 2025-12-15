@@ -1,17 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { apiClient } from '@/lib/api-client';
+import { getAuthorizationHeader, isAdmin } from '@/lib/auth-utils';
 
 // GET - Fetch all rooms
 export async function GET(request: NextRequest) {
   try {
     console.log('[API /system/rooms] GET request received');
     
-    // Extract Authorization header from request
-    const authHeader = request.headers.get('authorization');
+    // Get Authorization header from request (checks headers, cookies, etc.)
+    const authHeader = getAuthorizationHeader(request);
     console.log('[API /system/rooms] Authorization header:', authHeader ? 'Found' : 'Not found');
     
     const { searchParams } = new URL(request.url);
     const status = searchParams.get('status');
+    const startTime = searchParams.get('startTime') || undefined;
+    const endTime = searchParams.get('endTime') || undefined;
     const roomTypeId = searchParams.get('roomTypeId');
     const id = searchParams.get('id');
 
@@ -41,7 +44,7 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: 'Invalid room status' }, { status: 400 });
       }
 
-      const resp = await apiClient.getRoomsByStatus(status, options);
+      const resp = await apiClient.getRoomsByStatus(status as any, startTime ?? undefined, endTime ?? undefined, options);
       if (!resp.success) {
         console.error('[API /system/rooms] Failed to get rooms by status:', resp.error);
         return NextResponse.json({ error: resp.error || 'Failed to fetch rooms by status' }, { status: 500 });
@@ -106,7 +109,16 @@ export async function GET(request: NextRequest) {
       // data là array trực tiếp, không phải { content: [...] }
       const items = Array.isArray(data) ? data : [];
       console.log('[API /system/rooms] Returning items:', items.length);
-      return NextResponse.json({ items, total: items.length });
+      
+      // Add caching headers - cache for 30 seconds (rooms status changes more frequently)
+      return NextResponse.json(
+        { items, total: items.length },
+        {
+          headers: {
+            'Cache-Control': 'public, s-maxage=30, stale-while-revalidate=60',
+          },
+        }
+      );
     }
     
     console.error('[API /system/rooms] Failed to get all rooms:', {
@@ -124,6 +136,10 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  // Admin only
+  if (!await isAdmin(request)) {
+    return NextResponse.json({ error: 'Unauthorized - Admin access required' }, { status: 403 })
+  }
   try {
     const body = await request.json();
     console.log('POST /api/system/rooms - Request body:', body);
@@ -146,8 +162,34 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PUT(request: NextRequest) {
+  // Admin only
+  if (!await isAdmin(request)) {
+    return NextResponse.json({ error: 'Unauthorized - Admin access required' }, { status: 403 })
+  }
   try {
-    const body = await request.json();
+    // Check if request has body
+    const contentType = request.headers.get('content-type');
+    if (!contentType || !contentType.includes('application/json')) {
+      return NextResponse.json({ error: 'Content-Type must be application/json' }, { status: 400 });
+    }
+
+    // Try to parse body with error handling
+    let body;
+    try {
+      body = await request.json();
+    } catch (parseError: any) {
+      console.error('PUT /api/system/rooms - JSON parse error:', parseError);
+      // Check if error is due to empty body
+      if (parseError.message && parseError.message.includes('Unexpected end of JSON input')) {
+        return NextResponse.json({ error: 'Request body is required and must be valid JSON' }, { status: 400 });
+      }
+      return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 });
+    }
+
+    if (!body || typeof body !== 'object') {
+      return NextResponse.json({ error: 'Request body must be a valid JSON object' }, { status: 400 });
+    }
+
     const { id, ...updateData } = body;
     if (!id) {
       return NextResponse.json({ error: 'Room ID is required for update' }, { status: 400 });
@@ -166,11 +208,15 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ error: response.error }, { status: 500 });
   } catch (error: any) {
     console.error('PUT /api/system/rooms - Error:', error)
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: error.message || 'Internal server error' }, { status: 500 });
   }
 }
 
 export async function DELETE(request: NextRequest) {
+  // Admin only
+  if (!await isAdmin(request)) {
+    return NextResponse.json({ error: 'Unauthorized - Admin access required' }, { status: 403 })
+  }
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');

@@ -197,6 +197,8 @@ function AuthCallbackInner() {
               return '/office/dashboard';
             case 'staff':
               return '/staff/dashboard';
+            case 'security':
+              return '/user/dashboard'; // Security users go to user dashboard
             default:
               return '/user/dashboard';
           }

@@ -35,7 +35,15 @@ export async function GET() {
       .sort((a, b) => b.count - a.count)
       .slice(0, 10)
 
-    return NextResponse.json({ top })
+    // Add caching headers - cache for 30 seconds
+    return NextResponse.json(
+      { top },
+      {
+        headers: {
+          'Cache-Control': 'public, s-maxage=30, stale-while-revalidate=60',
+        },
+      }
+    )
   } catch (error) {
     console.error('[Dashboard Service Orders] API error:', error)
     // Return empty top list instead of error to prevent dashboard from breaking

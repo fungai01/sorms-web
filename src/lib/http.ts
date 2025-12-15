@@ -1,7 +1,7 @@
 // Unified HTTP utilities: CookieManager + authFetch interceptor
 // Centralize token/role cookie handling and authenticated fetch wrapper
 
-export type AppRole = 'admin' | 'office' | 'staff' | 'user'
+export type AppRole = 'admin' | 'office' | 'security' | 'staff' | 'user'
 
 function isBrowser() {
   return typeof window !== 'undefined' && typeof document !== 'undefined'
@@ -105,7 +105,6 @@ export async function authFetch(input: string | URL | Request, init?: AuthFetchO
   }
 
   if (!init?.skipAuth) {
-    // Check if this is a public endpoint that doesn't require auth
     const urlString = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
     const publicEndpoints = [
       '/auth/outbound/authentication',
@@ -115,80 +114,46 @@ export async function authFetch(input: string | URL | Request, init?: AuthFetchO
     ]
     const isPublicEndpoint = publicEndpoints.some(publicPath => urlString.includes(publicPath))
     
-    // Check if Authorization header already exists from options
     if (!headers.has('Authorization') && !headers.has('authorization')) {
       if (!isPublicEndpoint) {
-        // Only try to add token for non-public endpoints
-        // Priority 1: Token từ accountInfo trong cookie
         let token: string | null = null
         try {
           const userInfo = cookieManager.getUserInfo()
           if (userInfo && (userInfo as any).token) {
             token = (userInfo as any).token
-            console.log('[authFetch] Token from accountInfo in cookie')
           }
         } catch {}
         
-        // Priority 2: Token từ cookie
         if (!token) {
           token = cookieManager.getAccessToken()
-          if (token) {
-            console.log('[authFetch] Token from cookie')
-          }
         }
         
-        // Priority 3: Token từ localStorage
         if (!token && typeof window !== 'undefined') {
           try {
-            // Thử lấy từ accountInfo trong localStorage trước
             const userInfoStr = localStorage.getItem('auth_user_info')
             if (userInfoStr) {
               const userInfo = JSON.parse(userInfoStr)
               if (userInfo && userInfo.token) {
                 token = userInfo.token
-                console.log('[authFetch] Token from accountInfo in localStorage')
               }
             }
           } catch {}
           
-          // Fallback: Lấy từ localStorage trực tiếp
           if (!token) {
             token = localStorage.getItem('auth_access_token')
-            if (token) {
-              console.log('[authFetch] Token from localStorage')
-            }
           }
         }
         
         if (token) {
           headers.set('Authorization', `Bearer ${token}`)
-          console.log('[authFetch] Added Authorization header')
-        } else {
-          console.warn('[authFetch] No token found in cookie, localStorage, or accountInfo (server-side or no token)')
         }
-      } else {
-        console.log('[authFetch] Public endpoint, skipping token addition:', urlString)
       }
-    } else {
-      const authValue = headers.get('Authorization') || headers.get('authorization')
-      console.log('[authFetch] Authorization header already exists from options:', authValue ? `${authValue.substring(0, 30)}...` : 'empty')
     }
   }
 
   if (!headers.has('Content-Type')) {
     const hasBody = options.body !== undefined && options.method && options.method !== 'GET'
     if (hasBody) headers.set('Content-Type', 'application/json')
-  }
-
-  // Log final headers for debugging (only in development)
-  if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
-    const authHeader = headers.get('Authorization') || headers.get('authorization')
-    console.log('[authFetch] Final request headers:', {
-      url: typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url,
-      hasAuthorization: !!authHeader,
-      authorizationPrefix: authHeader ? authHeader.substring(0, 30) + '...' : 'none',
-      allHeaders: Array.from(headers.entries()).map(([k, v]) => ({ key: k, value: k.toLowerCase().includes('auth') ? v.substring(0, 30) + '...' : v }))
-    })
   }
 
   options.headers = headers

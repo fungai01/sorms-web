@@ -28,11 +28,12 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
   const isOffice = pathname.startsWith('/office');
   const isLecturer = false; // merged into /user
   const isStaff = pathname.startsWith('/staff');
+  const isSecurity = pathname.startsWith('/security');
   const isGuest = false; // merged into /user
   
   // Check if user is logged in (on protected pages)
   const isUser = pathname.startsWith('/user');
-  const isLoggedIn = isAdmin || isOffice || isStaff || isUser;
+  const isLoggedIn = isAdmin || isOffice || isStaff || isSecurity || isUser;
   const role = useCurrentRole();
 
   // Auto-detect user role based on path and localStorage
@@ -40,23 +41,31 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
     name: string;
     email: string;
     role: string;
+    avatarUrl?: string;
   } | null>(null);
 
   // Load notifications and listen for updates
   useEffect(() => {
     const getUserRole = () => {
       if (typeof window !== 'undefined') {
-        return sessionStorage.getItem('userRole') || 'user';
+        if (isAdmin) return 'admin';
+        if (isOffice) return 'office';
+        if (isStaff) return 'staff';
+        if (isSecurity) return 'security';
+        if (isUser) return 'user';
+        return (sessionStorage.getItem('userRole') as string) || 'user';
       }
       return 'user';
     };
     
-    const userRole = getUserRole() as 'admin' | 'office' | 'staff' | 'user';
+    const userRole = getUserRole() as 'admin' | 'office' | 'staff' | 'security' | 'user';
     setNotifications(getNotificationsByRole(userRole));
 
     // Listen for notification updates
     const handleNotificationUpdate = (event: CustomEvent) => {
-      setNotifications(getNotificationsByRole(userRole));
+      // Re-evaluate role in case route changed
+      const currentRole = getUserRole() as 'admin' | 'office' | 'staff' | 'security' | 'user';
+      setNotifications(getNotificationsByRole(currentRole));
     };
 
     if (typeof window !== 'undefined') {
@@ -68,29 +77,76 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
         window.removeEventListener('notificationsUpdated', handleNotificationUpdate as EventListener);
       }
     };
-  }, []);
+  }, [isAdmin, isOffice, isStaff, isSecurity, isUser]);
 
-  useEffect(() => {
+  // Function to load user info including avatar
+  const loadUserInfo = () => {
     if (typeof window !== 'undefined') {
       const storedName = localStorage.getItem('userName');
       const storedEmail = localStorage.getItem('userEmail');
       const storedRole = (role || localStorage.getItem('userRole')) as string | null;
       
+      // Get avatar from userInfo in localStorage (from auth-service)
+      let avatarUrl: string | undefined;
+      try {
+        const userInfoStr = localStorage.getItem('auth_user_info');
+        if (userInfoStr) {
+          const userInfo = JSON.parse(userInfoStr);
+          avatarUrl = userInfo.avatarUrl || userInfo.picture;
+        }
+      } catch (e) {
+        console.error('Error parsing userInfo:', e);
+      }
+      
+      // Fallback: try to get from localStorage directly
+      if (!avatarUrl) {
+        avatarUrl = localStorage.getItem('userAvatar') || undefined;
+      }
+      
       if (storedName && storedRole) {
         const roleMap = {
-          'admin': 'Administrator',
-          'office': 'Office Staff',
-          'lecturer': 'Lecturer',
+          'admin': 'Admin System',
+          'office': 'Administrative',
           'staff': 'Staff',
-          'guest': 'Guest'
+          'security': 'Security',
+          'user': 'User'
         };
         setDetectedUser({
           name: storedName,
           email: storedEmail || '',
-          role: roleMap[storedRole as keyof typeof roleMap] || storedRole
+          role: roleMap[storedRole as keyof typeof roleMap] || storedRole,
+          avatarUrl: avatarUrl
         });
       }
     }
+  };
+
+  useEffect(() => {
+    loadUserInfo();
+    
+    // Listen for storage changes (when avatar is updated in profile page)
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'auth_user_info' || e.key === 'userAvatar') {
+        loadUserInfo();
+      }
+    };
+    
+    // Listen for custom event (when avatar is updated via API)
+    const handleAvatarUpdate = () => {
+      loadUserInfo();
+    };
+    
+    if (typeof window !== 'undefined') {
+      window.addEventListener('storage', handleStorageChange);
+      window.addEventListener('avatarUpdated', handleAvatarUpdate as EventListener);
+    }
+    
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('storage', handleStorageChange);
+        window.removeEventListener('avatarUpdated', handleAvatarUpdate as EventListener);
+      }
+    };
   }, [isAdmin, isOffice, isLecturer, isStaff, isGuest, role]);
 
   // Close menus when clicking outside
@@ -164,10 +220,10 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
     window.location.href = '/login';
   };
 
-  // Mark notification as read and navigate to notifications page
-  const handleNotificationClick = (id: number) => {
+  // Mark notification as read and navigate to appropriate page
+  const handleNotificationClick = (notification: Notification) => {
     // Mark as read using the notification system
-    markAsRead(id);
+    markAsRead(notification.id);
 
     // Close notification dropdown
     setNotificationMenuOpen(false);
@@ -177,8 +233,20 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
       sessionStorage.setItem('previousPage', window.location.pathname);
     }
     
-    // Navigate to notifications page
-    router.push('/notifications');
+    // Navigate based on notification category
+    if (notification.category === 'booking') {
+      // Navigate to bookings page based on role
+      if (isAdmin) {
+        router.push('/admin/bookings');
+      } else if (isOffice) {
+        router.push('/office/bookings');
+      } else {
+        router.push('/notifications');
+      }
+    } else {
+      // For other notification types, go to notifications page
+      router.push('/notifications');
+    }
   };
 
   const unreadCount = notifications.filter(n => n.unread).length;
@@ -246,7 +314,7 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
                     {notifications.map((notification) => (
                       <div
                         key={notification.id}
-                        onClick={() => handleNotificationClick(notification.id)}
+                        onClick={() => handleNotificationClick(notification)}
                         className={`p-4 border-b border-gray-100 hover:bg-gray-50 cursor-pointer transition-colors ${
                           notification.unread ? 'bg-blue-50 border-l-4 border-l-blue-500' : ''
                         }`}
@@ -310,10 +378,31 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
                   variant="ghost"
                   className="flex items-center space-x-1 sm:space-x-2 hover:bg-gray-100 rounded-md p-1.5 sm:p-2"
                 >
-                  <div className="w-6 h-6 sm:w-8 sm:h-8 bg-gray-200 rounded-md flex items-center justify-center">
-                    <span className="text-gray-700 text-xs sm:text-sm font-medium">
-                      {detectedUser.name?.charAt(0) || 'A'}
-                    </span>
+                  <div className="w-6 h-6 sm:w-8 sm:h-8 bg-gray-200 rounded-md flex items-center justify-center overflow-hidden">
+                    {detectedUser.avatarUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img 
+                        src={detectedUser.avatarUrl} 
+                        alt={detectedUser.name}
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          // Fallback to initial if image fails to load
+                          const target = e.target as HTMLImageElement;
+                          target.style.display = 'none';
+                          const parent = target.parentElement;
+                          if (parent) {
+                            const fallback = document.createElement('span');
+                            fallback.className = 'text-gray-700 text-xs sm:text-sm font-medium';
+                            fallback.textContent = detectedUser.name?.charAt(0) || 'A';
+                            parent.appendChild(fallback);
+                          }
+                        }}
+                      />
+                    ) : (
+                      <span className="text-gray-700 text-xs sm:text-sm font-medium">
+                        {detectedUser.name?.charAt(0) || 'A'}
+                      </span>
+                    )}
                   </div>
                   <div className="hidden md:block text-left">
                     <div className="text-sm font-medium text-gray-900">
@@ -332,10 +421,31 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
                     {/* User Info Header */}
                       <div className="px-4 py-3 border-b border-gray-100">
                       <div className="flex items-center space-x-3">
-                        <div className="w-10 h-10 bg-gray-200 rounded-md flex items-center justify-center">
-                          <span className="text-gray-700 font-medium">
-                            {detectedUser.name?.charAt(0) || 'A'}
-                          </span>
+                        <div className="w-10 h-10 bg-gray-200 rounded-md flex items-center justify-center overflow-hidden">
+                          {detectedUser.avatarUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img 
+                              src={detectedUser.avatarUrl} 
+                              alt={detectedUser.name}
+                              className="w-full h-full object-cover"
+                              onError={(e) => {
+                                // Fallback to initial if image fails to load
+                                const target = e.target as HTMLImageElement;
+                                target.style.display = 'none';
+                                const parent = target.parentElement;
+                                if (parent) {
+                                  const fallback = document.createElement('span');
+                                  fallback.className = 'text-gray-700 font-medium';
+                                  fallback.textContent = detectedUser.name?.charAt(0) || 'A';
+                                  parent.appendChild(fallback);
+                                }
+                              }}
+                            />
+                          ) : (
+                            <span className="text-gray-700 font-medium">
+                              {detectedUser.name?.charAt(0) || 'A'}
+                            </span>
+                          )}
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="text-sm font-medium text-gray-900 truncate">{detectedUser.name}</div>

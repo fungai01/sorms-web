@@ -27,10 +27,8 @@ export async function GET(req: NextRequest) {
     
     if (!response.success) {
       console.error('[Dashboard API] Failed to fetch bookings:', response.error)
-      return NextResponse.json(
-        { error: response.error || 'Failed to fetch bookings data' }, 
-        { status: 500 }
-      )
+      // Return empty data instead of error to prevent dashboard crash
+      return NextResponse.json({ pending: 0, series: [] })
     }
 
     interface Booking {
@@ -39,7 +37,19 @@ export async function GET(req: NextRequest) {
       // Add other properties if needed
     }
 
-    const bookings: Booking[] = Array.isArray(response.data) ? response.data : []
+    // Normalize response data - handle different response formats
+    const raw: any = response.data
+    const bookings: Booking[] = Array.isArray(raw?.items)
+      ? raw.items
+      : Array.isArray(raw?.content)
+        ? raw.content
+        : Array.isArray(raw?.data?.content)
+          ? raw.data.content
+          : Array.isArray(raw?.data?.items)
+            ? raw.data.items
+            : Array.isArray(raw)
+              ? raw
+              : []
     const pending = bookings.filter((b) => b.status === 'PENDING').length
 
     // Generate simple time series data
@@ -61,7 +71,15 @@ export async function GET(req: NextRequest) {
     
     console.log('[Dashboard API] Bookings processed:', { pending, seriesCount: series.length })
     
-    return NextResponse.json({ pending, series })
+    // Add caching headers - cache for 30 seconds
+    return NextResponse.json(
+      { pending, series },
+      {
+        headers: {
+          'Cache-Control': 'public, s-maxage=30, stale-while-revalidate=60',
+        },
+      }
+    )
   } catch (error) {
     console.error('[Dashboard API] Bookings error:', error)
     return NextResponse.json(

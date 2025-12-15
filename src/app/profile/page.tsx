@@ -539,33 +539,43 @@ export default function ProfilePage() {
     const wardName = wards.find((w) => w.code === String(selectedWard))?.name;
     const composedAddress = [wardName, addressDetail || editForm.address].filter(Boolean).join(", ");
 
+    // Always use the authenticated user's own ID (profile > auth user > form)
+    const safeIdRaw = profile?.id ?? profile?.userProfileId ?? (user as any)?.id ?? editForm.id;
+    const safeId = safeIdRaw ? String(safeIdRaw) : '';
+    if (!safeId) {
+      setFlash({ type: "error", text: "Không tìm thấy ID người dùng để cập nhật." });
+      return;
+    }
+
     try {
       setLoading(true);
       const payload = {
-        id: editForm.id,
-        fullName: editForm.fullName,
-        email: editForm.email,
-        phoneNumber: editForm.phoneNumber,
-        firstName: editForm.firstName,
-        lastName: editForm.lastName,
-        dateOfBirth: editForm.dateOfBirth || undefined,
-        gender: editForm.gender || undefined,
-        address: composedAddress || editForm.address || undefined,
-        city: wardName || editForm.city || undefined,
+        id: safeId,
+        fullName: editForm.fullName || "",
+        email: editForm.email || "",
+        phoneNumber: editForm.phoneNumber || "",
+        firstName: editForm.firstName || "",
+        lastName: editForm.lastName || "",
+        dateOfBirth: editForm.dateOfBirth || "",
+        gender: editForm.gender || "",
+        address: composedAddress || editForm.address || "",
+        city: wardName || editForm.city || "",
         state: provinceName || "Việt Nam",
-        postalCode: editForm.postalCode || undefined,
+        postalCode: editForm.postalCode || "",
         country: "Việt Nam",
-        avatarUrl: editForm.avatarUrl || undefined,
-        bio: editForm.bio || undefined,
-        preferredLanguage: editForm.preferredLanguage || undefined,
-        timezone: editForm.timezone || undefined,
-        emergencyContactName: editForm.emergencyContactName || undefined,
-        emergencyContactPhone: editForm.emergencyContactPhone || undefined,
-        emergencyContactRelationship: editForm.emergencyContactRelationship || undefined,
-        idCardNumber: editForm.idCardNumber || undefined,
-        idCardIssueDate: editForm.idCardIssueDate || undefined,
-        idCardIssuePlace: editForm.idCardIssuePlace || undefined,
+        avatarUrl: editForm.avatarUrl || "",
+        bio: editForm.bio || "",
+        preferredLanguage: editForm.preferredLanguage || "",
+        timezone: editForm.timezone || "",
+        emergencyContactName: editForm.emergencyContactName || "",
+        emergencyContactPhone: editForm.emergencyContactPhone || "",
+        emergencyContactRelationship: editForm.emergencyContactRelationship || "",
+        idCardNumber: editForm.idCardNumber || "",
+        idCardIssueDate: editForm.idCardIssueDate || "",
+        idCardIssuePlace: editForm.idCardIssuePlace || "",
       };
+
+      console.log("[Profile] PUT /api/system/users payload:", payload);
 
       const res = await fetch("/api/system/users", {
         method: "PUT",
@@ -578,8 +588,15 @@ export default function ProfilePage() {
       });
 
       if (!res.ok) {
-        const data = await res.json().catch(() => ({ error: "Có lỗi xảy ra" }));
-        setFlash({ type: "error", text: data.error || "Cập nhật thất bại" });
+        const text = await res.text().catch(() => "");
+        let data: any = {};
+        try { data = text ? JSON.parse(text) : {}; } catch { data = { error: text }; }
+
+        const detail = data.error || data.message || text || "Cập nhật thất bại";
+        const code = data.responseCode ? ` [code: ${data.responseCode}]` : "";
+        const backend = data.backendStatus ? ` [backend: ${data.backendStatus}]` : "";
+        setFlash({ type: "error", text: `${detail}${code}${backend}` });
+        console.error("[Profile] Update failed:", { status: res.status, detail, responseCode: data.responseCode, backendStatus: data.backendStatus, raw: text });
         return;
       }
 

@@ -1,91 +1,161 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { apiClient } from '@/lib/api-client'
+import { verifyToken, isAdmin } from '@/lib/auth-utils'
 
-// Simple in-memory store for demo purposes
-type TaskStatus = 'TODO' | 'IN_PROGRESS' | 'DONE' | 'CANCELLED'
-type TaskPriority = 'LOW' | 'MEDIUM' | 'HIGH'
-type StaffTask = {
-  id: number
-  title: string
-  assignee: string
-  due_date?: string
-  priority: TaskPriority
-  status: TaskStatus
-  description?: string
-  created_at: string
-  isActive: boolean
-}
-
-let tasks: StaffTask[] = []
-
-const nextId = () => (tasks.length ? Math.max(...tasks.map(t => t.id)) + 1 : 1)
-
+// GET - Lấy danh sách staff tasks hoặc task theo ID
 export async function GET(req: NextRequest) {
-  // Only return active tasks by default
-  const { searchParams } = new URL(req.url)
-  const showInactive = searchParams.get('showInactive') === 'true'
-  const filteredTasks = showInactive ? tasks : tasks.filter(t => t.isActive)
-  
-  // Return in consistent format with items array
-  return NextResponse.json({ items: filteredTasks, total: filteredTasks.length })
+  try {
+    const { searchParams } = new URL(req.url)
+    const id = searchParams.get('id')
+    const assignedTo = searchParams.get('assignedTo')
+    const status = searchParams.get('status')
+    const relatedType = searchParams.get('relatedType')
+    const relatedId = searchParams.get('relatedId')
+
+    // Lấy task theo ID
+    if (id) {
+      const taskId = parseInt(id)
+      if (isNaN(taskId)) {
+        return NextResponse.json({ error: 'Invalid task ID' }, { status: 400 })
+      }
+      const response = await apiClient.getStaffTask(taskId)
+      if (response.success) {
+        return NextResponse.json(response.data)
+      }
+      return NextResponse.json({ error: response.error }, { status: 500 })
+    }
+
+    // Lấy tasks theo assignee
+    if (assignedTo) {
+      const assigneeId = parseInt(assignedTo)
+      if (isNaN(assigneeId)) {
+        return NextResponse.json({ error: 'Invalid assignee ID' }, { status: 400 })
+      }
+      const response = await apiClient.getStaffTasksByAssignee(assigneeId)
+      if (response.success) {
+        const data: any = response.data
+        const items = Array.isArray(data) ? data : []
+        return NextResponse.json({ items, total: items.length })
+      }
+      return NextResponse.json({ error: response.error }, { status: 500 })
+    }
+
+    // Lấy tasks theo status
+    if (status) {
+      const response = await apiClient.getStaffTasksByStatus(status)
+      if (response.success) {
+        const data: any = response.data
+        const items = Array.isArray(data) ? data : []
+        return NextResponse.json({ items, total: items.length })
+      }
+      return NextResponse.json({ error: response.error }, { status: 500 })
+    }
+
+    // Lấy tasks theo related entity
+    if (relatedType && relatedId) {
+      const relatedIdNum = parseInt(relatedId)
+      if (isNaN(relatedIdNum)) {
+        return NextResponse.json({ error: 'Invalid related ID' }, { status: 400 })
+      }
+      const response = await apiClient.getStaffTasksByRelated(relatedType, relatedIdNum)
+      if (response.success) {
+        const data: any = response.data
+        const items = Array.isArray(data) ? data : []
+        return NextResponse.json({ items, total: items.length })
+      }
+      return NextResponse.json({ error: response.error }, { status: 500 })
+    }
+
+    // Lấy tất cả tasks
+    const response = await apiClient.getStaffTasks()
+    if (response.success) {
+      const data: any = response.data
+      const items = Array.isArray(data) ? data : []
+      return NextResponse.json({ items, total: items.length })
+    }
+
+    return NextResponse.json({ error: response.error }, { status: 500 })
+  } catch (error: any) {
+    console.error('GET /api/system/tasks error:', error)
+    return NextResponse.json({ error: error.message || 'Internal server error' }, { status: 500 })
+  }
 }
 
+// POST - Tạo staff task mới
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const item: StaffTask = {
-      id: nextId(),
-      title: String(body.title || ''),
-      assignee: String(body.assignee || ''),
-      due_date: body.due_date || undefined,
-      priority: (body.priority || 'MEDIUM') as TaskPriority,
-      status: (body.status || 'TODO') as TaskStatus,
-      description: (body.description || undefined),
-      created_at: new Date().toISOString(),
-      isActive: true,
+
+    // Lấy user info từ token để set createdBy nếu không có
+    try {
+      const userInfo = await verifyToken(req)
+      if (userInfo?.id && !body.createdBy) {
+        body.createdBy = userInfo.id
+      }
+    } catch (e) {
+      console.warn('Could not get user info from token:', e)
     }
-    if (!item.title.trim() || !item.assignee.trim()) {
-      return NextResponse.json({ error: 'Thiếu tiêu đề hoặc người phụ trách' }, { status: 400 })
+
+    const response = await apiClient.createStaffTask(body)
+
+    if (response.success) {
+      return NextResponse.json(response.data, { status: 201 })
     }
-    tasks.push(item)
-    return NextResponse.json(item, { status: 201 })
-  } catch (e) {
-    return NextResponse.json({ error: 'Invalid payload' }, { status: 400 })
+
+    return NextResponse.json({ error: response.error }, { status: 500 })
+  } catch (error: any) {
+    console.error('POST /api/system/tasks error:', error)
+    return NextResponse.json({ error: error.message || 'Internal server error' }, { status: 500 })
   }
 }
 
+// PUT - Cập nhật staff task
 export async function PUT(req: NextRequest) {
   try {
     const body = await req.json()
-    const id = Number(body.id)
-    if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
-    const idx = tasks.findIndex(t => t.id === id)
-    if (idx === -1) return NextResponse.json({ error: 'Not found' }, { status: 404 })
-    const prev = tasks[idx]
-    const updated: StaffTask = {
-      ...prev,
-      title: body.title ?? prev.title,
-      assignee: body.assignee ?? prev.assignee,
-      due_date: body.due_date ?? prev.due_date,
-      priority: (body.priority ?? prev.priority) as TaskPriority,
-      status: (body.status ?? prev.status) as TaskStatus,
-      description: body.description ?? prev.description,
-      isActive: body.isActive ?? prev.isActive,
+    const { id, ...updateData } = body
+
+    if (!id) {
+      return NextResponse.json({ error: 'Task ID is required' }, { status: 400 })
     }
-    tasks[idx] = updated
-    return NextResponse.json(updated)
-  } catch (e) {
-    return NextResponse.json({ error: 'Invalid payload' }, { status: 400 })
+
+    const response = await apiClient.updateStaffTask(id, updateData)
+
+    if (response.success) {
+      return NextResponse.json(response.data)
+    }
+
+    return NextResponse.json({ error: response.error }, { status: 500 })
+  } catch (error: any) {
+    console.error('PUT /api/system/tasks error:', error)
+    return NextResponse.json({ error: error.message || 'Internal server error' }, { status: 500 })
   }
 }
 
+// DELETE - Xóa staff task
 export async function DELETE(req: NextRequest) {
-  const idParam = req.nextUrl.searchParams.get('id')
-  const id = idParam ? Number(idParam) : 0
-  if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
-  const idx = tasks.findIndex(t => t.id === id)
-  if (idx === -1) return NextResponse.json({ error: 'Not found' }, { status: 404 })
-  // Soft delete: set isActive to false instead of removing from array
-  tasks[idx].isActive = false
-  return NextResponse.json({ ok: true })
-}
+  try {
+    const { searchParams } = new URL(req.url)
+    const id = searchParams.get('id')
 
+    if (!id) {
+      return NextResponse.json({ error: 'Task ID is required' }, { status: 400 })
+    }
+
+    const taskId = parseInt(id)
+    if (isNaN(taskId)) {
+      return NextResponse.json({ error: 'Invalid task ID' }, { status: 400 })
+    }
+
+    const response = await apiClient.deleteStaffTask(taskId)
+
+    if (response.success) {
+      return NextResponse.json({ message: 'Task deleted successfully' })
+    }
+
+    return NextResponse.json({ error: response.error }, { status: 500 })
+  } catch (error: any) {
+    console.error('DELETE /api/system/tasks error:', error)
+    return NextResponse.json({ error: error.message || 'Internal server error' }, { status: 500 })
+  }
+}

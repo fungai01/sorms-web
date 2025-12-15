@@ -11,7 +11,15 @@ export async function GET(req: NextRequest) {
     const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS)
 
     try {
-      const res = await fetch(ADDRESS_KIT_API, {
+      const { searchParams } = new URL(req.url)
+      const q = searchParams.get('q') || ''
+      const size = searchParams.get('size') || '50'
+
+      const url = new URL(ADDRESS_KIT_API)
+      if (q) url.searchParams.set('q', q)
+      if (size) url.searchParams.set('size', size)
+
+      const res = await fetch(url.toString(), {
         signal: controller.signal,
         headers: {
           'Accept': 'application/json',
@@ -90,4 +98,9 @@ export async function GET(req: NextRequest) {
     )
   }
 }
+
+
+
+
+
 

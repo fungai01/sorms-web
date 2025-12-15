@@ -1,22 +1,74 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import Input from "@/components/ui/Input";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import Modal from "@/components/ui/Modal";
 import { StaffProfile } from "@/lib/types";
-import { useStaffProfiles } from "@/hooks/useApi";
+import { useStaffProfilesFiltered, useRoles } from "@/hooks/useApi";
 
 type StatusFilter = "ALL" | "ACTIVE" | "INACTIVE";
 
+type RoleItem = { id?: number; code: string; name: string; description?: string; isActive?: boolean }
+
 export default function StaffProfilesPage() {
-  const { data, refetch } = useStaffProfiles();
   const [rows, setRows] = useState<StaffProfile[]>([]);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
   const [departmentFilter, setDepartmentFilter] = useState<string>("ALL");
+  
+  // Refs to prevent spam requests
+  const isInitialLoadRef = useRef(false)
+  const filterDebounceRef = useRef<NodeJS.Timeout | null>(null)
+  const isProcessingRef = useRef(false)
+  
+  // Debounced filters
+  const [debouncedStatusFilter, setDebouncedStatusFilter] = useState<StatusFilter>("ALL");
+  const [debouncedDepartmentFilter, setDebouncedDepartmentFilter] = useState<string>("ALL");
+  
+  // Memoize filter values to prevent unnecessary re-fetches
+  const statusFilterValue = useMemo(() => 
+    debouncedStatusFilter !== 'ALL' ? (debouncedStatusFilter === 'ACTIVE' ? 'ACTIVE' : 'INACTIVE') : undefined,
+    [debouncedStatusFilter]
+  );
+  const departmentFilterValue = useMemo(() => 
+    debouncedDepartmentFilter !== 'ALL' ? debouncedDepartmentFilter : undefined,
+    [debouncedDepartmentFilter]
+  );
+  
+  const { data, refetch } = useStaffProfilesFiltered(statusFilterValue, departmentFilterValue);
+  
+  // Debounce filter changes - only update if values actually changed 
+  useEffect(() => {
+    if (!isInitialLoadRef.current) {
+      isInitialLoadRef.current = true
+      setDebouncedStatusFilter(statusFilter)
+      setDebouncedDepartmentFilter(departmentFilter)
+      return
+    }
+    
+    // Skip if values haven't changed
+    if (statusFilter === debouncedStatusFilter && departmentFilter === debouncedDepartmentFilter) {
+      return
+    }
+    
+    if (filterDebounceRef.current) {
+      clearTimeout(filterDebounceRef.current)
+    }
+    
+    filterDebounceRef.current = setTimeout(() => {
+      setDebouncedStatusFilter(statusFilter)
+      setDebouncedDepartmentFilter(departmentFilter)
+    }, 500)
+    
+    return () => {
+      if (filterDebounceRef.current) {
+        clearTimeout(filterDebounceRef.current)
+      }
+    }
+  }, [statusFilter, departmentFilter, debouncedStatusFilter, debouncedDepartmentFilter])
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(10);
   const [flash, setFlash] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -28,10 +80,22 @@ export default function StaffProfilesPage() {
   const [edit, setEdit] = useState<Partial<StaffProfile>>({});
   const [isSaving, setIsSaving] = useState(false);
   const [submitted, setSubmitted] = useState(false);
-  const [openBasic, setOpenBasic] = useState(true);
-  const [openJob, setOpenJob] = useState(true);
-  const [openReview, setOpenReview] = useState(true);
-  const [openSkills, setOpenSkills] = useState(true);
+
+  // Search user modal
+  const [searchUserOpen, setSearchUserOpen] = useState(false);
+  const [searchKeyword, setSearchKeyword] = useState("");
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+
+  // Multi-roles selection for user assignment - memoize params to prevent re-fetch
+  const rolesParams = useMemo(() => ({ page: 0, size: 100 }), []);
+  const { data: rolesData } = useRoles(rolesParams);
+  const roles: RoleItem[] = useMemo(() => {
+    return Array.isArray((rolesData as any)?.items) 
+      ? (rolesData as any).items 
+      : (Array.isArray(rolesData as any) ? rolesData as any : []);
+  }, [rolesData]);
+  const [selectedRoles, setSelectedRoles] = useState<string[]>([]);
 
   const formatCurrency = (value?: number | null) =>
     typeof value === "number" && !Number.isNaN(value) ? `${value.toLocaleString("vi-VN")} VND` : "—";
@@ -40,8 +104,20 @@ export default function StaffProfilesPage() {
     typeof value === "number" && !Number.isNaN(value) ? value : "—";
 
   useEffect(() => {
-    if (data && Array.isArray(data)) {
-      setRows(data as StaffProfile[]);
+    if (data) {
+      // Handle both { items: [...] } and direct array response
+      const items = (data as any)?.items ?? (Array.isArray(data) ? data : []);
+      // Only update if data actually changed
+      setRows((prevRows) => {
+        const newRows = items as StaffProfile[];
+        // Quick check: if length and first item are same, likely same data
+        if (prevRows.length === newRows.length && 
+            prevRows.length > 0 && 
+            prevRows[0]?.id === newRows[0]?.id) {
+          return prevRows;
+        }
+        return newRows;
+      });
     }
   }, [data]);
 
@@ -60,49 +136,165 @@ export default function StaffProfilesPage() {
   }, [rows]);
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return rows
-      .filter((r) => {
-        if (statusFilter === "ACTIVE" && !r.isActive) return false;
-        if (statusFilter === "INACTIVE" && r.isActive) return false;
-        if (departmentFilter !== "ALL" && r.department !== departmentFilter) return false;
-        if (!q) return true;
-        return (
-          r.employeeId.toLowerCase().includes(q) ||
-          (r.jobTitle || "").toLowerCase().includes(q) ||
-          (r.position || "").toLowerCase().includes(q) ||
-          (r.department || "").toLowerCase().includes(q) ||
-          (r.workEmail || "").toLowerCase().includes(q)
-        );
-      })
-      .sort((a, b) => a.employeeId.localeCompare(b.employeeId));
-  }, [rows, query, statusFilter, departmentFilter]);
+    // Rely on backend-side filters (status, department). Only sort on client.
+    return [...rows].sort((a, b) => a.employeeId.localeCompare(b.employeeId));
+  }, [rows]);
+  
+  // Memoize paginated data to prevent recalculation
+  const paginatedData = useMemo(() => {
+    return filtered.slice((page - 1) * size, page * size);
+  }, [filtered, page, size]);
 
-  function openCreate() {
+  // Tạo mã nhân viên tự động EMP-001, EMP-002...
+  function generateEmployeeId(): string {
+    const existingIds = rows.map(r => r.employeeId).filter(id => id.startsWith("EMP-"));
+    let maxNum = 0;
+    existingIds.forEach(id => {
+      const num = parseInt(id.replace("EMP-", ""), 10);
+      if (!isNaN(num) && num > maxNum) maxNum = num;
+    });
+    const nextNum = maxNum + 1;
+    return `EMP-${String(nextNum).padStart(3, "0")}`;
+  }
+
+  // Tìm kiếm user theo email hoặc tên
+  async function searchUsers() {
+    if (!searchKeyword.trim()) return;
+    setIsSearching(true);
+    try {
+      // Tìm theo email hoặc fullName
+      const params = new URLSearchParams();
+      params.set("page", "0");
+      params.set("size", "20");
+      // Gửi cả email và fullName để backend tìm
+      if (searchKeyword.includes("@")) {
+        params.set("email", searchKeyword);
+      } else {
+        params.set("fullName", searchKeyword);
+      }
+      const res = await fetch(`/api/system/users/search?${params.toString()}`, {
+        credentials: "include", // Gửi cookies kèm theo để API route lấy được token
+      });
+      const data = await res.json();
+      setSearchResults(data.items || []);
+    } catch {
+      setSearchResults([]);
+    } finally {
+      setIsSearching(false);
+    }
+  }
+
+  // Chọn user từ kết quả tìm kiếm và điền vào form
+  function selectUser(user: any) {
+    // Lấy ID của user - convert sang number nếu có thể
+    // Nếu là UUID (string) thì cần xử lý khác, nhưng tạm thời chỉ lấy số
+    let userId: number | undefined;
+    if (typeof user.id === 'number') {
+      userId = user.id;
+    } else if (typeof user.id === 'string') {
+      // Nếu là số dạng string thì convert
+      const numId = Number(user.id);
+      if (!isNaN(numId)) {
+        userId = numId;
+      } else {
+        // Nếu là UUID, có thể cần lấy từ field khác hoặc bỏ qua
+        // Tạm thời để undefined và user sẽ phải nhập thủ công
+        console.warn('User ID là UUID, không thể convert sang number:', user.id);
+        userId = undefined;
+      }
+    }
+    
     setEdit({
-      employeeId: "",
-      department: "",
-      position: "",
-      jobTitle: "",
-      employmentType: "",
-      workSchedule: "",
-      salary: 0,
-      hourlyRate: 0,
-      officeLocation: "",
-      workPhone: "",
-      workEmail: "",
+      accountId: userId,
+      employeeId: generateEmployeeId(),
+      workEmail: user.email || "",
+      workPhone: user.phoneNumber || "",
+      officeLocation: user.address || "",
       hireDate: new Date().toISOString().slice(0, 10),
       isActive: true,
+      role: "STAFF" as any,
+      department: "Nhân viên",
+      position: "Nhân viên",
+      jobTitle: "Nhân viên",
     } as Partial<StaffProfile>);
+    setSearchUserOpen(false);
+    setSearchKeyword("");
+    setSearchResults([]);
+    setSelectedRoles([]);
+    setSubmitted(false);
+    setEditOpen(true);
+  }
+
+  function openCreate() {
+    // Mở modal tìm kiếm user trước
+    setSearchKeyword("");
+    setSearchResults([]);
+    setSearchUserOpen(true);
+  }
+
+  // Tạo mới không cần tìm user
+  function openCreateManual() {
+    const defaultStaffData = {
+      employeeId: generateEmployeeId(),
+      role: "STAFF" as any,
+      department: "Nhân viên",
+      position: "Nhân viên",
+      jobTitle: "Nhân viên",
+    } as Partial<StaffProfile>;
+    setEdit(defaultStaffData);
+    setSelectedRoles([]);
+    setSubmitted(false);
+    setSearchUserOpen(false);
     setEditOpen(true);
   }
 
   function openEdit(row: StaffProfile) {
-    setEdit({ ...row });
+    // Auto-fill nếu role là STAFF và các trường chưa có giá trị
+    const editData = { ...row };
+    if ((editData as any).role === "STAFF" || !(editData as any).role) {
+      if (!editData.department) editData.department = "Nhân viên";
+      if (!editData.position) editData.position = "Nhân viên";
+      if (!editData.jobTitle) editData.jobTitle = "Nhân viên";
+      (editData as any).role = "STAFF";
+    }
+    setEdit(editData);
     setEditOpen(true);
   }
 
+  // Auto-fill dựa trên vai trò hệ thống
+  function handleRoleChange(role: string) {
+    const roleDefaults: Record<string, { department: string; position: string; jobTitle: string }> = {
+      "STAFF": { department: "Nhân viên", position: "Nhân viên", jobTitle: "Nhân viên" },
+    };
+    const defaults = roleDefaults[role] || {};
+    setEdit((prev) => ({
+      ...prev,
+      role,
+      // Tự động fill các trường khi chọn role STAFF
+      department: defaults.department || prev.department || "",
+      position: defaults.position || prev.position || "",
+      jobTitle: defaults.jobTitle || prev.jobTitle || "",
+    }));
+  }
+
+  // Auto-fill khi form mở và role là STAFF
+  useEffect(() => {
+    if (editOpen && ((edit as any).role === "STAFF" || !(edit as any).role)) {
+      const needsUpdate = !edit.department || !edit.position || !edit.jobTitle;
+      if (needsUpdate) {
+        setEdit((prev) => ({
+          ...prev,
+          role: "STAFF" as any,
+          department: prev.department || "Nhân viên",
+          position: prev.position || "Nhân viên",
+          jobTitle: prev.jobTitle || "Nhân viên",
+        }));
+      }
+    }
+  }, [editOpen, edit.department, edit.position, edit.jobTitle]);
+
   function isValidEdit() {
+    if (edit.accountId === undefined || edit.accountId === null) return false;
     if (!edit.employeeId || !edit.employeeId.trim()) return false;
     if (!edit.department || !edit.department.trim()) return false;
     if (!edit.jobTitle || !edit.jobTitle.trim()) return false;
@@ -113,7 +305,6 @@ export default function StaffProfilesPage() {
   async function save() {
     setSubmitted(true);
     if (!isValidEdit()) {
-      setFlash({ type: "error", text: "Vui lòng nhập đủ Employee ID, Department, Job Title và Work Email." });
       return;
     }
     setIsSaving(true);
@@ -121,6 +312,7 @@ export default function StaffProfilesPage() {
       const payload: any = {
         accountId: edit.accountId ?? 0,
         employeeId: edit.employeeId,
+        role: (edit as any).role || "STAFF",
         department: edit.department,
         position: edit.position || "",
         jobTitle: edit.jobTitle,
@@ -164,11 +356,28 @@ export default function StaffProfilesPage() {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || "Lưu hồ sơ nhân viên thất bại");
       }
+      // Sau khi lưu hồ sơ, nếu có chọn vai trò thì gán roles cho user theo email công việc
+      if ((selectedRoles || []).length > 0 && (edit.workEmail || payload.workEmail)) {
+        try {
+          const email = (edit.workEmail || payload.workEmail) as string
+          const assignRes = await fetch('/api/system/users/roles', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userEmail: email, roles: selectedRoles })
+          })
+          if (!assignRes.ok) {
+            // Silent fail for role assignment
+          }
+        } catch {
+          // Silent fail for role assignment
+        }
+      }
       setEditOpen(false);
+      setSubmitted(false);
       setFlash({ type: "success", text: edit.id ? "Đã cập nhật hồ sơ nhân viên." : "Đã tạo hồ sơ nhân viên mới." });
       await refetch();
-    } catch (e: any) {
-      setFlash({ type: "error", text: e?.message || "Có lỗi xảy ra khi lưu." });
+    } catch {
+      // Silent fail - validation messages shown inline
     } finally {
       setIsSaving(false);
     }
@@ -180,13 +389,12 @@ export default function StaffProfilesPage() {
     try {
       const res = await fetch(`/api/system/staff-profiles?id=${id}`, { method: "DELETE" });
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || "Xóa hồ sơ nhân viên thất bại");
+        return;
       }
       setFlash({ type: "success", text: "Đã xóa hồ sơ nhân viên." });
       await refetch();
-    } catch (e: any) {
-      setFlash({ type: "error", text: e?.message || "Có lỗi xảy ra khi xóa." });
+    } catch {
+      // Silent fail
     }
   }
 
@@ -194,21 +402,9 @@ export default function StaffProfilesPage() {
     <>
       <div className="bg-white border-b border-gray-200 px-4 py-3">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
-              <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M5.121 17.804A4 4 0 018 17h8a4 4 0 012.879 1.196M15 11a3 3 0 11-6 0 3 3 0 016 0z"
-                />
-              </svg>
-            </div>
-            <div>
-              <h1 className="text-lg font-bold text-gray-900">Quản lý hồ sơ nhân viên</h1>
-              <p className="text-xs text-gray-500">{filtered.length} hồ sơ</p>
-            </div>
+          <div>
+            <h1 className="text-lg font-bold text-gray-900">Quản lý hồ sơ nhân viên</h1>
+            <p className="text-xs text-gray-500">{filtered.length} hồ sơ</p>
           </div>
           <Button onClick={openCreate} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 text-sm">
             Thêm hồ sơ
@@ -216,12 +412,8 @@ export default function StaffProfilesPage() {
         </div>
       </div>
 
-      {flash && (
-        <div
-          className={`px-4 py-2 text-sm ${
-            flash.type === "success" ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800"
-          }`}
-        >
+      {flash && flash.type === "success" && (
+        <div className="px-4 py-2 text-sm bg-green-50 text-green-800 border-b border-green-200">
           {flash.text}
         </div>
       )}
@@ -576,8 +768,9 @@ export default function StaffProfilesPage() {
         open={editOpen}
         onClose={() => setEditOpen(false)}
         title={edit.id ? "Sửa hồ sơ nhân viên" : "Thêm hồ sơ nhân viên"}
+        size="xl"
         footer={
-          <div className="flex justify-end gap-2">
+          <div className="flex justify-end gap-3 pt-2">
             <Button variant="secondary" onClick={() => setEditOpen(false)}>
               Hủy
             </Button>
@@ -587,331 +780,424 @@ export default function StaffProfilesPage() {
           </div>
         }
       >
-        <div className="p-1 space-y-5">
-          {/* Nhóm: Thông tin cơ bản */}
-          <div className="space-y-3 rounded-lg border border-gray-200 bg-gray-50/40 px-3 py-3">
-            <button
-              type="button"
-              className="flex w-full items-center justify-between text-sm font-semibold text-gray-800"
-              onClick={() => setOpenBasic(v => !v)}
-            >
-              <span>Thông tin cơ bản</span>
-              <svg
-                className={`w-4 h-4 text-gray-500 transition-transform ${openBasic ? "rotate-0" : "-rotate-90"}`}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        <div className="p-6 space-y-6">
+          {/* NHÓM 1: Thông tin cơ bản */}
+          <div className="rounded-xl border border-blue-200 bg-blue-50/30 p-5">
+            <h3 className="text-base font-semibold text-blue-700 mb-4 flex items-center gap-2">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
               </svg>
-            </button>
-            {openBasic && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              Thông tin cơ bản
+            </h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Mã nhân viên *</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Account ID <span className="text-red-500">*</span></label>
                 <Input
-                  value={edit.employeeId || ""}
-                  onChange={(e) => setEdit((prev) => ({ ...prev, employeeId: e.target.value }))}
+                  type="number"
+                  min="0"
+                  placeholder="Nhập Account ID (số)"
+                  value={edit.accountId ?? ""}
+                  onChange={(e) => setEdit((prev) => ({ ...prev, accountId: e.target.value === "" ? undefined : Number(e.target.value) }))}
+                  className="h-11"
                 />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Chức danh công việc *</label>
-                <Input
-                  value={edit.jobTitle || ""}
-                  onChange={(e) => setEdit((prev) => ({ ...prev, jobTitle: e.target.value }))}
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Vị trí</label>
-                <Input
-                  value={edit.position || ""}
-                  onChange={(e) => setEdit((prev) => ({ ...prev, position: e.target.value }))}
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Phòng ban *</label>
-                <Input
-                  value={edit.department || ""}
-                  onChange={(e) => setEdit((prev) => ({ ...prev, department: e.target.value }))}
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Email công việc *</label>
-                <Input
-                  type="email"
-                  value={edit.workEmail || ""}
-                  onChange={(e) => setEdit((prev) => ({ ...prev, workEmail: e.target.value }))}
-                />
-                {submitted && (!edit.workEmail || !edit.workEmail.trim()) && (
-                  <p className="mt-1 text-xs text-red-600">Email công việc là bắt buộc.</p>
+                {submitted && (edit.accountId === undefined || edit.accountId === null) && (
+                  <p className="mt-1 text-xs text-red-500">Vui lòng nhập Account ID</p>
                 )}
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Số điện thoại công việc</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Mã nhân viên <span className="text-red-500">*</span></label>
                 <Input
-                  value={edit.workPhone || ""}
-                  onChange={(e) => setEdit((prev) => ({ ...prev, workPhone: e.target.value }))}
+                  placeholder="VD: EMP-001"
+                  value={edit.employeeId || ""}
+                  onChange={(e) => setEdit((prev) => ({ ...prev, employeeId: e.target.value }))}
+                  className="h-11"
+                  readOnly
+                />
+                {submitted && (!edit.employeeId || !edit.employeeId.trim()) && (
+                  <p className="mt-1 text-xs text-red-500">Vui lòng nhập mã nhân viên</p>
+                )}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Vai trò hệ thống <span className="text-red-500">*</span></label>
+                <select
+                  value={(edit as any).role || "STAFF"}
+                  onChange={(e) => handleRoleChange(e.target.value)}
+                  className="w-full h-11 px-4 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                  disabled
+                >
+                  <option value="STAFF">Nhân viên</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Phòng ban <span className="text-red-500">*</span></label>
+                <select
+                  value={edit.department || ""}
+                  onChange={(e) => setEdit((prev) => ({ ...prev, department: e.target.value }))}
+                  className="w-full h-11 px-4 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                >
+                  <option value="">-- Chọn phòng ban --</option>
+                  <option value="Quản lý hệ thống">Quản lý hệ thống</option>
+                  <option value="Hành chính">Hành chính</option>
+                  <option value="Nhân viên">Nhân viên</option>
+                  <option value="Bảo vệ">Bảo vệ</option>
+                  <option value="Khác">Khác</option>
+                </select>
+                {submitted && (!edit.department || !edit.department.trim()) && (
+                  <p className="mt-1 text-xs text-red-500">Vui lòng chọn phòng ban</p>
+                )}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Vị trí</label>
+                <Input
+                  placeholder="VD: Trưởng phòng"
+                  value={edit.position || ""}
+                  onChange={(e) => setEdit((prev) => ({ ...prev, position: e.target.value }))}
+                  className="h-11"
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Ngày vào làm</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Chức danh <span className="text-red-500">*</span></label>
+                <Input
+                  placeholder="VD: Kỹ sư phần mềm"
+                  value={edit.jobTitle || ""}
+                  onChange={(e) => setEdit((prev) => ({ ...prev, jobTitle: e.target.value }))}
+                  className="h-11"
+                />
+                {submitted && (!edit.jobTitle || !edit.jobTitle.trim()) && (
+                  <p className="mt-1 text-xs text-red-500">Vui lòng nhập chức danh</p>
+                )}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Ngày vào làm</label>
                 <Input
                   type="date"
                   value={edit.hireDate || ""}
                   onChange={(e) => setEdit((prev) => ({ ...prev, hireDate: e.target.value }))}
+                  className="h-11"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* NHÓM 2: Thông tin liên hệ */}
+          <div className="rounded-xl border border-green-200 bg-green-50/30 p-5">
+            <h3 className="text-base font-semibold text-green-700 mb-4 flex items-center gap-2">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+              </svg>
+              Thông tin liên hệ
+            </h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Email công việc <span className="text-red-500">*</span></label>
+                <Input
+                  type="email"
+                  placeholder="email@company.com"
+                  value={edit.workEmail || ""}
+                  onChange={(e) => setEdit((prev) => ({ ...prev, workEmail: e.target.value }))}
+                  className="h-11"
+                />
+                {submitted && (!edit.workEmail || !edit.workEmail.trim()) && (
+                  <p className="mt-1 text-xs text-red-500">Vui lòng nhập email công việc</p>
+                )}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Số điện thoại</label>
+                <Input
+                  placeholder="0123 456 789"
+                  value={edit.workPhone || ""}
+                  onChange={(e) => setEdit((prev) => ({ ...prev, workPhone: e.target.value }))}
+                  className="h-11"
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Văn phòng / Địa điểm làm việc</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Địa điểm làm việc</label>
                 <Input
+                  placeholder="VD: Tòa nhà A, Tầng 5"
                   value={edit.officeLocation || ""}
                   onChange={(e) => setEdit((prev) => ({ ...prev, officeLocation: e.target.value }))}
+                  className="h-11"
                 />
               </div>
             </div>
-            )}
           </div>
 
-          {/* Nhóm: Công việc & lương */}
-          <div className="space-y-3 rounded-lg border border-gray-200 bg-gray-50/40 px-3 py-3">
-            <button
-              type="button"
-              className="flex w-full items-center justify-between text-sm font-semibold text-gray-800"
-              onClick={() => setOpenJob(v => !v)}
-            >
-              <span>Thông tin công việc & lương</span>
-              <svg
-                className={`w-4 h-4 text-gray-500 transition-transform ${openJob ? "rotate-0" : "-rotate-90"}`}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
+          {/* Hợp đồng & Lương */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Loại hợp đồng</label>
+              <select
+                value={edit.employmentType || ""}
+                onChange={(e) => setEdit((prev) => ({ ...prev, employmentType: e.target.value }))}
+                className="w-full h-10 px-3 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
-            {openJob && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Loại hợp đồng</label>
-                <Input
-                  value={edit.employmentType || ""}
-                  onChange={(e) => setEdit((prev) => ({ ...prev, employmentType: e.target.value }))}
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Lịch làm việc</label>
-                <Input
-                  value={edit.workSchedule || ""}
-                  onChange={(e) => setEdit((prev) => ({ ...prev, workSchedule: e.target.value }))}
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Mức lương (theo tháng)</label>
-                <Input
-                  type="number"
-                  min="0"
-                  value={edit.salary ?? ""}
-                  onChange={(e) =>
-                    setEdit((prev) => ({
-                      ...prev,
-                      salary: e.target.value === "" ? undefined : Number(e.target.value),
-                    }))
-                  }
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Lương theo giờ</label>
-                <Input
-                  type="number"
-                  min="0"
-                  value={edit.hourlyRate ?? ""}
-                  onChange={(e) =>
-                    setEdit((prev) => ({
-                      ...prev,
-                      hourlyRate: e.target.value === "" ? undefined : Number(e.target.value),
-                    }))
-                  }
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Mã quản lý trực tiếp</label>
-                <Input
-                  type="number"
-                  min="0"
-                  value={edit.managerId ?? ""}
-                  onChange={(e) =>
-                    setEdit((prev) => ({
-                      ...prev,
-                      managerId: e.target.value === "" ? undefined : Number(e.target.value),
-                    }))
-                  }
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Đánh giá hiệu suất (0 - 10)</label>
-                <Input
-                  type="number"
-                  min="0"
-                  max="10"
-                  value={edit.performanceRating ?? ""}
-                  onChange={(e) =>
-                    setEdit((prev) => ({
-                      ...prev,
-                      performanceRating: e.target.value === "" ? undefined : Number(e.target.value),
-                    }))
-                  }
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Số ngày nghỉ phép còn lại</label>
-                <Input
-                  type="number"
-                  min="0"
-                  value={edit.vacationDaysRemaining ?? ""}
-                  onChange={(e) =>
-                    setEdit((prev) => ({
-                      ...prev,
-                      vacationDaysRemaining: e.target.value === "" ? undefined : Number(e.target.value),
-                    }))
-                  }
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Số ngày nghỉ ốm còn lại</label>
-                <Input
-                  type="number"
-                  min="0"
-                  value={edit.sickDaysRemaining ?? ""}
-                  onChange={(e) =>
-                    setEdit((prev) => ({
-                      ...prev,
-                      sickDaysRemaining: e.target.value === "" ? undefined : Number(e.target.value),
-                    }))
-                  }
-                />
-              </div>
-            </div>
-            )}
-          </div>
-
-          {/* Nhóm: Đánh giá & ngày nghỉ, nghỉ việc */}
-          <div className="space-y-3 rounded-lg border border-gray-200 bg-gray-50/40 px-3 py-3">
-            <button
-              type="button"
-              className="flex w-full items-center justify-between text-sm font-semibold text-gray-800"
-              onClick={() => setOpenReview(v => !v)}
-            >
-              <span>Đánh giá hiệu suất & nghỉ phép / Nghỉ việc</span>
-              <svg
-                className={`w-4 h-4 text-gray-500 transition-transform ${openReview ? "rotate-0" : "-rotate-90"}`}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
-            {openReview && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3" title="Quản lý lịch đánh giá hiệu suất, ngày phép còn lại và thông tin nghỉ việc (nếu có).">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Ngày đánh giá gần nhất</label>
-                <Input
-                  type="date"
-                  value={edit.lastReviewDate || ""}
-                  onChange={(e) => setEdit((prev) => ({ ...prev, lastReviewDate: e.target.value || null }))}
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Ngày đánh giá kế tiếp</label>
-                <Input
-                  type="date"
-                  value={edit.nextReviewDate || ""}
-                  onChange={(e) => setEdit((prev) => ({ ...prev, nextReviewDate: e.target.value || null }))}
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Ngày nghỉ việc</label>
-                <Input
-                  type="date"
-                  value={edit.terminationDate || ""}
-                  onChange={(e) => setEdit((prev) => ({ ...prev, terminationDate: e.target.value || null }))}
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Lý do nghỉ việc</label>
-                <Input
-                  value={edit.terminationReason || ""}
-                  onChange={(e) => setEdit((prev) => ({ ...prev, terminationReason: e.target.value }))}
-                />
-              </div>
-            </div>
-            )}
-          </div>
-
-          {/* Nhóm: Kỹ năng & chứng chỉ + Trạng thái + Ghi chú */}
-          <div className="space-y-3 rounded-lg border border-gray-200 bg-gray-50/40 px-3 py-3">
-            <button
-              type="button"
-              className="flex w-full items-center justify-between text-sm font-semibold text-gray-800"
-              onClick={() => setOpenSkills(v => !v)}
-            >
-              <span>Kỹ năng & chứng chỉ / Trạng thái</span>
-              <svg
-                className={`w-4 h-4 text-gray-500 transition-transform ${openSkills ? "rotate-0" : "-rotate-90"}`}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
-            {openSkills && (
-            <div
-              className="space-y-3"
-              title="Kỹ năng, chứng chỉ liên quan và trạng thái đang làm việc của nhân viên."
-            >
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Kỹ năng</label>
-                <textarea
-                  value={edit.skills || ""}
-                  onChange={(e) => setEdit((prev) => ({ ...prev, skills: e.target.value }))}
-                  rows={2}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Chứng chỉ</label>
-                <textarea
-                  value={edit.certifications || ""}
-                  onChange={(e) => setEdit((prev) => ({ ...prev, certifications: e.target.value }))}
-                  rows={2}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-            </div>
-            )}
-            <div className="flex items-center gap-2 mt-1">
-              <input
-                id="isActive"
-                type="checkbox"
-                className="h-4 w-4 rounded border-gray-300 text-green-600 focus:ring-green-500"
-                checked={edit.isActive ?? true}
-                onChange={(e) => setEdit((prev) => ({ ...prev, isActive: e.target.checked }))}
-              />
-              <label htmlFor="isActive" className="inline-flex items-center rounded-full bg-green-50 px-3 py-1 text-xs font-semibold text-green-700 border border-green-200">
-                Đang làm việc
-              </label>
+                <option value="">-- Chọn loại --</option>
+                <option value="FULL_TIME">Toàn thời gian</option>
+                <option value="PART_TIME">Bán thời gian</option>
+                <option value="CONTRACT">Hợp đồng</option>
+                <option value="INTERN">Thực tập</option>
+              </select>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Ghi chú</label>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Lịch làm việc</label>
+              <select
+                value={edit.workSchedule || ""}
+                onChange={(e) => setEdit((prev) => ({ ...prev, workSchedule: e.target.value }))}
+                className="w-full h-10 px-3 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">-- Chọn ca --</option>
+                <option value="DAY">Ca ngày (8h-17h)</option>
+                <option value="NIGHT">Ca đêm (22h-6h)</option>
+                <option value="SHIFT">Ca xoay</option>
+                <option value="FLEXIBLE">Linh hoạt</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Lương tháng</label>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  min="0"
+                  placeholder="VD: 15000"
+                  value={edit.salary ?? ""}
+                  onChange={(e) => setEdit((prev) => ({ ...prev, salary: e.target.value === "" ? undefined : Number(e.target.value) }))}
+                  className="flex-1"
+                />
+                <span className="text-sm font-medium text-gray-600 whitespace-nowrap bg-gray-100 px-3 py-2 rounded-lg border border-gray-300">.000 VNĐ</span>
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Lương giờ</label>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  min="0"
+                  placeholder="VD: 50"
+                  value={edit.hourlyRate ?? ""}
+                  onChange={(e) => setEdit((prev) => ({ ...prev, hourlyRate: e.target.value === "" ? undefined : Number(e.target.value) }))}
+                  className="flex-1"
+                />
+                <span className="text-sm font-medium text-gray-600 whitespace-nowrap bg-gray-100 px-3 py-2 rounded-lg border border-gray-300">.000 VNĐ</span>
+              </div>
+            </div>
+          </div>
+
+          <hr className="border-gray-200" />
+
+          {/* Đánh giá */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Điểm đánh giá (0-10)</label>
+              <Input
+                type="number"
+                min="0"
+                max="10"
+                placeholder="0"
+                value={edit.performanceRating ?? ""}
+                onChange={(e) => setEdit((prev) => ({ ...prev, performanceRating: e.target.value === "" ? undefined : Number(e.target.value) }))}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Đánh giá gần nhất</label>
+              <Input
+                type="date"
+                value={edit.lastReviewDate || ""}
+                onChange={(e) => setEdit((prev) => ({ ...prev, lastReviewDate: e.target.value || null }))}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Đánh giá tiếp theo</label>
+              <Input
+                type="date"
+                value={edit.nextReviewDate || ""}
+                onChange={(e) => setEdit((prev) => ({ ...prev, nextReviewDate: e.target.value || null }))}
+              />
+            </div>
+          </div>
+
+          <hr className="border-gray-200" />
+
+          {/* Ngày phép */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Ngày phép còn lại</label>
+              <Input
+                type="number"
+                min="0"
+                placeholder="0"
+                value={edit.vacationDaysRemaining ?? ""}
+                onChange={(e) => setEdit((prev) => ({ ...prev, vacationDaysRemaining: e.target.value === "" ? undefined : Number(e.target.value) }))}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Ngày ốm còn lại</label>
+              <Input
+                type="number"
+                min="0"
+                placeholder="0"
+                value={edit.sickDaysRemaining ?? ""}
+                onChange={(e) => setEdit((prev) => ({ ...prev, sickDaysRemaining: e.target.value === "" ? undefined : Number(e.target.value) }))}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Ngày nghỉ việc</label>
+              <Input
+                type="date"
+                value={edit.terminationDate || ""}
+                onChange={(e) => setEdit((prev) => ({ ...prev, terminationDate: e.target.value || null }))}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Lý do nghỉ việc</label>
+              <Input
+                placeholder="Nếu có"
+                value={edit.terminationReason || ""}
+                onChange={(e) => setEdit((prev) => ({ ...prev, terminationReason: e.target.value }))}
+              />
+            </div>
+          </div>
+
+          {/* Kỹ năng & Chứng chỉ */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Kỹ năng</label>
               <textarea
-                value={edit.notes || ""}
-                onChange={(e) => setEdit((prev) => ({ ...prev, notes: e.target.value }))}
-                rows={3}
+                placeholder="VD: Java, React, SQL..."
+                value={edit.skills || ""}
+                onChange={(e) => setEdit((prev) => ({ ...prev, skills: e.target.value }))}
+                rows={2}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Chứng chỉ</label>
+              <textarea
+                placeholder="VD: AWS Certified, PMP..."
+                value={edit.certifications || ""}
+                onChange={(e) => setEdit((prev) => ({ ...prev, certifications: e.target.value }))}
+                rows={2}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
           </div>
+
+          <hr className="border-gray-200" />
+
+          {/* Ghi chú & Trạng thái */}
+          <div className="space-y-3">
+            {/* ID Quản lý - đã ẩn */}
+            {/* <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">ID Quản lý</label>
+              <Input
+                type="number"
+                min="0"
+                placeholder="ID người quản lý (mặc định: 1 - Admin)"
+                value={edit.managerId ?? ""}
+                onChange={(e) => setEdit((prev) => ({ ...prev, managerId: e.target.value === "" ? undefined : Number(e.target.value) }))}
+              />
+            </div> */}
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Ghi chú</label>
+              <textarea
+                placeholder="Ghi chú thêm về nhân viên..."
+                value={edit.notes || ""}
+                onChange={(e) => setEdit((prev) => ({ ...prev, notes: e.target.value }))}
+                rows={2}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div className="flex items-center gap-3">
+              <input
+                id="isActive"
+                type="checkbox"
+                className="h-5 w-5 rounded border-gray-300 text-green-600 focus:ring-green-500"
+                checked={edit.isActive ?? true}
+                onChange={(e) => setEdit((prev) => ({ ...prev, isActive: e.target.checked }))}
+              />
+              <label htmlFor="isActive" className="text-sm font-medium text-gray-700">
+                Đang làm việc
+              </label>
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Modal tìm kiếm User */}
+      <Modal
+        open={searchUserOpen}
+        onClose={() => setSearchUserOpen(false)}
+        title="Tìm kiếm người dùng"
+        size="lg"
+        footer={
+          <div className="flex justify-between w-full">
+            <Button variant="secondary" onClick={openCreateManual}>
+              Tạo mới không cần tìm
+            </Button>
+            <Button variant="secondary" onClick={() => setSearchUserOpen(false)}>
+              Đóng
+            </Button>
+          </div>
+        }
+      >
+        <div className="p-4 space-y-4">
+          <div className="flex gap-2">
+            <Input
+              placeholder="Nhập email hoặc tên để tìm kiếm..."
+              value={searchKeyword}
+              onChange={(e) => setSearchKeyword(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && searchUsers()}
+              className="flex-1"
+            />
+            <Button onClick={searchUsers} disabled={isSearching}>
+              {isSearching ? "Đang tìm..." : "Tìm kiếm"}
+            </Button>
+          </div>
+
+          {searchResults.length > 0 && (
+            <div className="border rounded-lg overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-2 text-left font-medium text-gray-700">ID</th>
+                    <th className="px-4 py-2 text-left font-medium text-gray-700">Email</th>
+                    <th className="px-4 py-2 text-left font-medium text-gray-700">Họ tên</th>
+                    <th className="px-4 py-2 text-left font-medium text-gray-700">SĐT</th>
+                    <th className="px-4 py-2 text-center font-medium text-gray-700">Chọn</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {searchResults.map((user) => (
+                    <tr key={user.id} className="border-t hover:bg-gray-50">
+                      <td className="px-4 py-2 text-gray-900">{user.id}</td>
+                      <td className="px-4 py-2 text-gray-700">{user.email}</td>
+                      <td className="px-4 py-2 text-gray-700">{user.fullName || "—"}</td>
+                      <td className="px-4 py-2 text-gray-700">{user.phoneNumber || "—"}</td>
+                      <td className="px-4 py-2 text-center">
+                        <Button
+                          className="h-8 px-3 text-xs"
+                          onClick={() => selectUser(user)}
+                        >
+                          Chọn
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {searchResults.length === 0 && searchKeyword && !isSearching && (
+            <div className="text-center py-8 text-gray-500">
+              Không tìm thấy người dùng nào
+            </div>
+          )}
+
+          {!searchKeyword && (
+            <div className="text-center py-8 text-gray-400">
+              Nhập email hoặc tên để tìm kiếm người dùng
+            </div>
+          )}
         </div>
       </Modal>
     </>

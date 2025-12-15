@@ -24,6 +24,8 @@ export default function RoomTypesPage() {
   const [editOpen, setEditOpen] = useState(false)
   const [edit, setEdit] = useState<{ id?: number, code: string, name: string, basePrice: number, maxOccupancy: number, description: string }>({ code: "", name: "", basePrice: 0, maxOccupancy: 1, description: "" })
   const [confirmOpen, setConfirmOpen] = useState<{ open: boolean, id?: number }>({ open: false })
+  const [codeError, setCodeError] = useState<string | null>(null)
+  const [nameError, setNameError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!flash) return
@@ -31,12 +33,15 @@ export default function RoomTypesPage() {
     return () => clearTimeout(t)
   }, [flash])
 
-  // Keyboard shortcuts for edit modal
+  // Keyboard shortcuts for edit modal: Enter = Save, Esc = Close (avoid Enter in textarea)
   useEffect(() => {
     if (!editOpen) return
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      const tag = (e.target as HTMLElement | null)?.tagName?.toLowerCase()
+      const isTextarea = tag === 'textarea'
+
+      if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !isTextarea) {
         e.preventDefault()
         save()
       } else if (e.key === 'Escape') {
@@ -48,6 +53,20 @@ export default function RoomTypesPage() {
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [editOpen, edit])
+
+  // Global Escape handler: ESC closes any open modal on this page
+  useEffect(() => {
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setEditOpen(false)
+        setDetailOpen(false)
+        setConfirmOpen({ open: false })
+      }
+    }
+    document.addEventListener('keydown', onEsc)
+    return () => document.removeEventListener('keydown', onEsc)
+  }, [])
 
   // Sync with hooks data
   useEffect(() => {
@@ -68,16 +87,42 @@ export default function RoomTypesPage() {
     })
   }, [rows, query, sortKey, sortOrder])
 
-  function openCreate() {
-    // Tính mã tiếp theo: ưu tiên parse từ code nếu là số, nếu không dùng id
-    const numbers = rows.map(r => {
-      const n = parseInt(r.code, 10)
-      return Number.isNaN(n) ? r.id : n
-    })
-    const maxNum = numbers.length ? Math.max(...numbers) : 0
-    const nextCode = String(maxNum + 1)
-    setEdit({ code: nextCode, name: "", basePrice: 0, maxOccupancy: 1, description: "" })
-    setEditOpen(true)
+  async function openCreate() {
+    // Luôn lấy dữ liệu mới nhất từ DB rồi mới sinh mã mới
+    try {
+      const res = await fetch('/api/system/room-types', { credentials: 'include' })
+      const data = await res.json()
+      const items: any[] = Array.isArray(data?.items)
+        ? data.items
+        : Array.isArray(data?.data?.content)
+          ? data.data.content
+          : Array.isArray(data?.content)
+            ? data.content
+            : Array.isArray(data)
+              ? data
+              : []
+
+      const numbers = items.map((r: any) => {
+        const n = parseInt(String(r.code ?? ''), 10)
+        return Number.isNaN(n) ? Number(r.id ?? 0) : n
+      })
+      const maxNum = numbers.length ? Math.max(...numbers) : 0
+      const nextCode = String(maxNum + 1)
+      setEdit({ code: nextCode, name: "", basePrice: 0, maxOccupancy: 1, description: "" })
+    } catch (e) {
+      // Fallback tính từ dữ liệu hiện có trên UI nếu fetch thất bại
+      const numbers = rows.map(r => {
+        const n = parseInt(r.code, 10)
+        return Number.isNaN(n) ? r.id : n
+      })
+      const maxNum = numbers.length ? Math.max(...numbers) : 0
+      const nextCode = String(maxNum + 1)
+      setEdit({ code: nextCode, name: "", basePrice: 0, maxOccupancy: 1, description: "" })
+    } finally {
+      setCodeError(null)
+      setNameError(null)
+      setEditOpen(true)
+    }
   }
 
   function openEdit(rt: RoomType) {
@@ -89,12 +134,15 @@ export default function RoomTypesPage() {
       maxOccupancy: rt.maxOccupancy, 
       description: rt.description || "" 
     })
+    setCodeError(null)
+    setNameError(null)
     setEditOpen(true)
   }
 
   async function save() {
     if (!edit.code.trim() || !edit.name.trim()) {
-      setFlash({ type: 'error', text: 'Vui lòng nhập Code và Tên loại phòng.' })
+      if (!edit.code.trim()) setCodeError('Vui lòng nhập Code.')
+      if (!edit.name.trim()) setNameError('Vui lòng nhập Dãy Tòa nhà công vụ.')
       return
     }
     if (edit.basePrice < 0) {
@@ -112,6 +160,38 @@ export default function RoomTypesPage() {
       maxOccupancy: edit.maxOccupancy,
       description: edit.description.trim() || "",
     }
+
+    // helper: suggest next available code from DB
+    const suggestNextCode = async () => {
+      try {
+        const res = await fetch('/api/system/room-types', { credentials: 'include' })
+        const data = await res.json()
+        const items: any[] = Array.isArray(data?.items)
+          ? data.items
+          : Array.isArray(data?.data?.content)
+            ? data.data.content
+            : Array.isArray(data?.content)
+              ? data.content
+              : Array.isArray(data)
+                ? data
+                : []
+        const numbers = items.map((r: any) => {
+          const n = parseInt(String(r.code ?? ''), 10)
+          return Number.isNaN(n) ? Number(r.id ?? 0) : n
+        })
+        const maxNum = numbers.length ? Math.max(...numbers) : 0
+        return String(maxNum + 1)
+      } catch {
+        // fallback from current rows
+        const numbers = rows.map(r => {
+          const n = parseInt(r.code, 10)
+          return Number.isNaN(n) ? r.id : n
+        })
+        const maxNum = numbers.length ? Math.max(...numbers) : 0
+        return String(maxNum + 1)
+      }
+    }
+
     if (edit.id) {
       const response = await fetch('/api/system/room-types', {
         method: 'PUT',
@@ -120,12 +200,45 @@ export default function RoomTypesPage() {
       })
       if (response.ok) {
         await refetchRoomTypes()
-        setFlash({ type: 'success', text: 'Đã cập nhật loại phòng.' })
+        setFlash({ type: 'success', text: 'Đã cập nhật Dãy Tòa nhà công vụ.' })
+        setEditOpen(false)
       } else {
-        const errorData = await response.json()
-        setFlash({ type: 'error', text: errorData.error || 'Có lỗi xảy ra khi cập nhật.' })
+        const errorData = await response.json().catch(() => ({}))
+        const errText = (errorData && (errorData.error || errorData.message)) || 'Có lỗi xảy ra khi cập nhật.'
+        setFlash({ type: 'error', text: errText })
       }
     } else {
+      // Pre-check duplicate code trước khi gọi API
+      const codeLower = payload.code.toLowerCase()
+      const existsLocal = rows.some(r => r.code.toLowerCase() === codeLower)
+      if (existsLocal) {
+        const next = await suggestNextCode()
+        setEdit(prev => ({ ...prev, code: next }))
+        setCodeError(`Mã (code) đã tồn tại. Đã tự động đặt thành ${next}.`)
+        setFlash({ type: 'error', text: `Mã (code) đã tồn tại. Đã tự động đặt thành ${next}. Vui lòng kiểm tra lại.` })
+        return
+      }
+      try {
+        const resList = await fetch('/api/system/room-types', { credentials: 'include' })
+        const data = await resList.json().catch(() => ({}))
+        const items: any[] = Array.isArray(data?.items)
+          ? data.items
+          : Array.isArray(data?.data?.content)
+            ? data.data.content
+            : Array.isArray(data?.content)
+              ? data.content
+              : Array.isArray(data)
+                ? data
+                : []
+        if (items.some((r: any) => String(r.code ?? '').toLowerCase() === codeLower)) {
+          const next = await suggestNextCode()
+          setEdit(prev => ({ ...prev, code: next }))
+          setCodeError(`Mã (code) đã tồn tại. Đã tự động đặt thành ${next}.`)
+          setFlash({ type: 'error', text: `Mã (code) đã tồn tại. Đã tự động đặt thành ${next}. Vui lòng kiểm tra lại.` })
+          return
+        }
+      } catch {}
+
       const response = await fetch('/api/system/room-types', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -133,13 +246,22 @@ export default function RoomTypesPage() {
       })
       if (response.ok) {
         await refetchRoomTypes()
-        setFlash({ type: 'success', text: 'Đã tạo loại phòng mới.' })
+        setFlash({ type: 'success', text: 'Đã tạo Dãy Tòa nhà công vụ mới.' })
+        setEditOpen(false)
       } else {
-        const errorData = await response.json()
-        setFlash({ type: 'error', text: errorData.error || 'Có lỗi xảy ra khi tạo mới.' })
+        const status = response.status
+        const errorData = await response.json().catch(() => ({}))
+        const rawMsg = (errorData && (errorData.error || errorData.message)) || ''
+        if (status === 409 || /(exist|duplicate|already|đã tồn tại|trùng)/i.test(rawMsg)) {
+          const next = await suggestNextCode()
+          setEdit(prev => ({ ...prev, code: next }))
+          setCodeError(`Mã (code) đã tồn tại. Đã tự động đặt thành ${next}.`)
+          setFlash({ type: 'error', text: `Mã (code) đã tồn tại. Đã tự động đặt thành ${next}. Vui lòng kiểm tra lại.` })
+        } else {
+          setFlash({ type: 'error', text: rawMsg || 'Có lỗi xảy ra khi tạo mới.' })
+        }
       }
     }
-    setEditOpen(false)
   }
 
   function confirmDelete(id: number) {
@@ -151,23 +273,12 @@ export default function RoomTypesPage() {
     const response = await fetch(`/api/system/room-types?id=${confirmOpen.id}`, { method: 'DELETE' })
     if (response.ok) {
       await refetchRoomTypes()
-      setFlash({ type: 'success', text: 'Đã vô hiệu hóa loại phòng.' })
+      setFlash({ type: 'success', text: 'Đã xóa Dãy Tòa nhà công vụ thành công.' })
     } else {
       const errorData = await response.json()
-      setFlash({ type: 'error', text: errorData.error || 'Có lỗi xảy ra khi vô hiệu hóa.' })
+      setFlash({ type: 'error', text: errorData.error || 'Có lỗi xảy ra khi xóa.' })
     }
     setConfirmOpen({ open: false })
-  }
-
-  async function activateRoomType(id: number) {
-    try {
-      const resp = await fetch(`/api/system/room-types/${id}/activate`, { method: 'PUT' })
-      if (!resp.ok) throw new Error('Kích hoạt loại phòng thất bại')
-      setFlash({ type: 'success', text: 'Đã kích hoạt loại phòng thành công.' })
-      await refetchRoomTypes()
-    } catch (e) {
-      setFlash({ type: 'error', text: e instanceof Error ? e.message : 'Có lỗi xảy ra' })
-    }
   }
 
   return (
@@ -175,16 +286,9 @@ export default function RoomTypesPage() {
       {/* Header */}
       <div className="bg-white border-b border-gray-200 px-4 py-3">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3 min-w-0 flex-1">
-            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center flex-shrink-0">
-              <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-              </svg>
-            </div>
-            <div className="min-w-0 flex-1">
-              <h1 className="text-lg font-bold text-gray-900 truncate">Loại phòng</h1>
-              <p className="text-xs text-gray-500">{filtered.length} loại phòng</p>
-            </div>
+          <div className="min-w-0 flex-1">
+            <h1 className="text-lg font-bold text-gray-900 truncate">Quản lý Tòa nhà công vụ</h1>
+            <p className="text-xs text-gray-500">{filtered.length} Tòa nhà công vụ</p>
           </div>
           <Button 
             onClick={openCreate} 
@@ -193,7 +297,7 @@ export default function RoomTypesPage() {
             <svg className="w-4 h-4 sm:mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
             </svg>
-            <span className="hidden sm:inline">Thêm loại phòng</span>
+            <span className="hidden sm:inline">Thêm Tòa nhà công vụ</span>
             <span className="sm:hidden">Thêm</span>
           </Button>
         </div>
@@ -202,13 +306,9 @@ export default function RoomTypesPage() {
       {/* Content */}
       <div className="max-w-7xl mx-auto px-4 py-3">
         <div className="space-y-3">
-          {/* Flash Messages */}
-          {flash && (
-            <div className={`rounded-md border p-2 sm:p-3 text-xs sm:text-sm shadow-sm ${
-              flash.type === 'success' 
-                ? 'bg-green-50 border-green-200 text-green-800' 
-                : 'bg-red-50 border-red-200 text-red-800'
-            }`}>
+          {/* Success Messages */}
+          {flash && flash.type === 'success' && (
+            <div className={`rounded-md border p-2 sm:p-3 text-xs sm:text-sm shadow-sm bg-green-50 border-green-200 text-green-800`}>
               {flash.text}
             </div>
           )}
@@ -283,7 +383,7 @@ export default function RoomTypesPage() {
               <div className="flex-1 min-w-0">
                 <div className="relative">
                   <Input
-                    placeholder="Tìm kiếm loại phòng..."
+                    placeholder="Tìm kiếm Tòa..."
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     className="w-full pl-4 pr-10 py-2 text-sm border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
@@ -332,12 +432,12 @@ export default function RoomTypesPage() {
   <div className="grid grid-cols-2 items-center">
     {/* Cột trái */}
     <h2 className="text-lg font-bold text-gray-900 text-left">
-      Danh sách loại phòng
+      Danh sách Tòa nhà công vụ
     </h2>
 
     {/* Cột phải */}
     <span className="text-sm font-semibold text-blue-600 bg-blue-100 px-3 py-1 rounded-full text-right justify-self-end">
-      {filtered.length} loại phòng
+      {filtered.length} Dãy Tòa nhà công vụ
     </span>
   </div>
 </CardHeader>
@@ -358,7 +458,7 @@ export default function RoomTypesPage() {
                       <thead> 
                         <tr className="bg-gray-50 text-gray-700">
                           <th className="px-4 py-3 text-center font-semibold">Code</th>
-                          <th className="px-4 py-3 text-center font-semibold">Tên loại phòng</th>
+                          <th className="px-4 py-3 text-center font-semibold">Tòa</th>
                           <th className="px-4 py-3 text-center font-semibold">Giá cơ bản</th>
                           <th className="px-4 py-3 text-center font-semibold">Số người</th>
                           <th className="px-4 py-3 text-center font-semibold">Trạng thái</th>
@@ -381,15 +481,9 @@ export default function RoomTypesPage() {
                             </td>
                             <td className="px-4 py-3 text-center text-gray-700">{row.maxOccupancy}</td>
                             <td className="px-4 py-3 text-center">
-                              {row.isActive !== false ? (
-                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                  Hoạt động
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-                                  Vô hiệu
-                                </span>
-                              )}
+                              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                Hoạt động
+                              </span>
                             </td>
                             <td className="px-4 py-3 text-center">
                               <div className="flex gap-2 justify-center">
@@ -409,22 +503,13 @@ export default function RoomTypesPage() {
                                 >
                                   Sửa
                                 </Button>
-                                {row.isActive !== false ? (
-                                  <Button
-                                    variant="danger"
-                                    className="h-8 px-3 text-xs"
-                                    onClick={() => confirmDelete(row.id)}
-                                  >
-                                    Vô hiệu
-                                  </Button>
-                                ) : (
-                                  <Button
-                                    className="h-8 px-3 text-xs bg-green-600 hover:bg-green-700"
-                                    onClick={() => activateRoomType(row.id)}
-                                  >
-                                    Kích hoạt
-                                  </Button>
-                                )}
+                                <Button
+                                  variant="danger"
+                                  className="h-8 px-3 text-xs"
+                                  onClick={() => confirmDelete(row.id)}
+                                >
+                                  Xóa
+                                </Button>
                               </div>
                             </td>
                           </tr>
@@ -526,28 +611,16 @@ export default function RoomTypesPage() {
                                 Sửa
                               </Button>
 
-                              {row.isActive !== false ? (
-                                <Button
-                                  variant="danger"
-                                  className="h-10 text-xs font-medium px-2"
-                                  onClick={() => confirmDelete(row.id)}
-                                >
-                                  <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
-                                  </svg>
-                                  Vô hiệu
-                                </Button>
-                              ) : (
-                                <Button
-                                  className="h-10 text-xs font-medium px-2 bg-green-600 hover:bg-green-700"
-                                  onClick={() => activateRoomType(row.id)}
-                                >
-                                  <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                  </svg>
-                                  Kích hoạt
-                                </Button>
-                              )}
+                              <Button
+                                variant="danger"
+                                className="h-10 text-xs font-medium px-2"
+                                onClick={() => confirmDelete(row.id)}
+                              >
+                                <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                                Xóa
+                              </Button>
                             </div>
                           </div>
                         </div>
@@ -648,13 +721,13 @@ export default function RoomTypesPage() {
       </div>
 
       {/* Detail Modal */}
-      <Modal open={detailOpen} onClose={() => setDetailOpen(false)} title="Chi tiết loại phòng">
+      <Modal open={detailOpen} onClose={() => setDetailOpen(false)} title="Chi tiết Dãy Tòa">
         <div className="p-4 sm:p-6">
           {selected && (
             <div className="space-y-6">
               {/* Header với thông tin chính */}
               <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-4 sm:p-6 border border-blue-200">
-                {/* Thông tin loại phòng chính */}
+                {/* Thông tin Dãy Tòa chính */}
                 <div className="space-y-4">
                   {/* Header với icon */}
                   <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
@@ -706,9 +779,9 @@ export default function RoomTypesPage() {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                 <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-gray-200">
-                  <div className="text-xs sm:text-sm font-semibold text-gray-500 mb-1">Trạng thái hoạt động</div>
+                  <div className="text-xs sm:text-sm font-semibold text-gray-500 mb-1">Trạng thái</div>
                   <p className="text-sm font-medium text-gray-900">
-                    {selected.isActive !== false ? 'Đang sử dụng' : 'Đang vô hiệu'}
+                    Đang hoạt động
                   </p>
                 </div>
                 <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-gray-200">
@@ -745,30 +818,36 @@ export default function RoomTypesPage() {
       </Modal>
 
       {/* Edit Modal */}
-      <Modal open={editOpen} onClose={() => setEditOpen(false)} title={edit.id ? 'Sửa loại phòng' : 'Thêm loại phòng mới'}>
+      <Modal open={editOpen} onClose={() => setEditOpen(false)} title={edit.id ? 'Sửa Dãy Tòa nhà công vụ mới' : 'Thêm Dãy Tòa  nhà công vụ mới'}>
         <div className="p-4 sm:p-6">
           <div className="space-y-4">
             {/* Form */}
             <div className="space-y-3">
-              {/* Code và Tên loại phòng */}
+              {/* Code và Dãy Tòa */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Code *</label>
                   <Input
                     value={edit.code}
-                    onChange={(e) => setEdit({ ...edit, code: e.target.value })}
-                    placeholder="Nhập code loại phòng"
-                    className="w-full"
+                    onChange={(e) => { setEdit({ ...edit, code: e.target.value }); setCodeError(null); }}
+                    placeholder="Nhập code Dãy Tòa nhà công vụ mới"
+                    className={`w-full ${codeError ? 'border-red-500 focus:ring-red-500' : ''}`}
                   />
+                  {codeError && (
+                    <div className="mt-1 text-xs text-red-600">{codeError}</div>
+                  )}
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Tên loại phòng *</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Tên Dãy Tòa *</label>
                   <Input
                     value={edit.name}
-                    onChange={(e) => setEdit({ ...edit, name: e.target.value })}
-                    placeholder="Nhập tên loại phòng"
+                    onChange={(e) => { setEdit({ ...edit, name: e.target.value }); setNameError(null); }}
+                    placeholder="Nhập tên dãy Tòa nhà công vụ"
                     className="w-full"
                   />
+                  {nameError && (
+                    <div className="mt-1 text-xs text-red-600">{nameError}</div>
+                  )}
                 </div>
               </div>
 
@@ -805,7 +884,7 @@ export default function RoomTypesPage() {
                 <textarea
                   value={edit.description}
                   onChange={(e) => setEdit({ ...edit, description: e.target.value })}
-                  placeholder="Nhập mô tả loại phòng"
+                  placeholder="Nhập mô tả Dãy Tòa"
                   rows={2}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
@@ -833,18 +912,17 @@ export default function RoomTypesPage() {
       </Modal>
 
       {/* Delete Confirmation Modal */}
-      <Modal open={confirmOpen.open} onClose={() => setConfirmOpen({ open: false })} title="Xác nhận vô hiệu hóa">
+      <Modal open={confirmOpen.open} onClose={() => setConfirmOpen({ open: false })} title="Xác nhận xóa">
         <div className="p-6">
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Xác nhận vô hiệu hóa</h2>
           <p className="text-gray-600 mb-6">
-            Bạn có chắc muốn vô hiệu hóa loại phòng này? Loại phòng sẽ không bị xóa hoàn toàn và có thể được kích hoạt lại sau.
+            Bạn có chắc muốn xóa Dãy Tòa nhà công vụ này? Dãy Tòa nhà công vụ sẽ bị xóa vĩnh viễn khỏi hệ thống.
           </p>
           <div className="flex justify-end gap-3">
             <Button variant="secondary" onClick={() => setConfirmOpen({ open: false })}>
               Hủy
             </Button>
             <Button variant="danger" onClick={doDelete}>
-              Vô hiệu hóa
+              Xóa
             </Button>
           </div>
         </div>

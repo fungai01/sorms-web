@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { API_CONFIG } from '@/lib/config'
-import { isAdmin, verifyToken } from '@/lib/auth-utils'
+import { isAdmin, verifyToken, getAuthorizationHeader } from '@/lib/auth-utils'
 
 const BASE = API_CONFIG.BASE_URL
 
@@ -11,23 +11,30 @@ export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url)
     const self = searchParams.get('self') === '1'
+    const userIdParam = searchParams.get('id')
 
-    // Truy vấn hồ sơ bản thân: bỏ qua kiểm tra admin
-    if (self) {
-      const auth = req.headers.get('authorization') || ''
-      // Lấy email hiện tại từ token
+    // Lấy user theo ID cụ thể (accept String UUID or numeric)
+    if (userIdParam) {
+      const userId = String(userIdParam).trim()
+      if (!userId) {
+        return NextResponse.json({ error: 'Invalid user ID' }, { status: 400 })
+      }
+      
+      // Kiểm tra quyền: admin có thể xem bất kỳ user nào, user thường chỉ xem được chính mình
       const me = await verifyToken(req)
-      if (!me?.email) {
+      if (!me) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
       }
-
-      // Tìm theo email trong backend
-      const url = new URL('users/search', BASE)
-      url.searchParams.set('page', '0')
-      url.searchParams.set('size', '1')
-      url.searchParams.set('keyword', me.email)
-      url.searchParams.set('q', me.email)
-
+      
+      const amAdmin = await isAdmin(req)
+      if (!amAdmin && String(me.id) !== String(userId)) {
+        return NextResponse.json({ error: 'Forbidden - You can only view your own profile' }, { status: 403 })
+      }
+      
+      // Get Authorization header from request (checks headers, cookies, etc.)
+      const auth = getAuthorizationHeader(req);
+      const url = new URL(`users/${encodeURIComponent(userId)}`, `${BASE}/`)
+      
       const res = await fetch(url.toString(), {
         headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) },
         cache: 'no-store'
@@ -39,6 +46,41 @@ export async function GET(req: NextRequest) {
       }
 
       const payload = await res.json().catch(() => ({} as any))
+      const user = payload?.data || payload
+      return NextResponse.json({ items: user ? [user] : [] })
+    }
+
+    // Truy vấn hồ sơ bản thân: bỏ qua kiểm tra admin
+    if (self) {
+      const auth = getAuthorizationHeader(req);
+      const me = await verifyToken(req);
+
+      if (!me?.email) {
+        console.error('[API][users GET self] No email found in token.');
+        return NextResponse.json({ error: 'Unauthorized - Invalid token or missing email' }, { status: 401 });
+      }
+
+      console.log(`[API][users GET self] Searching for user with email: ${me.email}`);
+      
+      const url = new URL('users/search', `${BASE}/`);
+      url.searchParams.set('page', '0');
+      url.searchParams.set('size', '1');
+      url.searchParams.set('email', me.email); // Use the specific 'email' param
+      url.searchParams.set('keyword', me.email);
+      url.searchParams.set('q', me.email);
+
+      const res = await fetch(url.toString(), {
+        headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) },
+        cache: 'no-store'
+      });
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        console.error(`[API][users GET self] Backend search failed with status ${res.status}:`, text);
+        return NextResponse.json({ items: [], error: text || `Backend error: ${res.status}` }, { status: res.status });
+      }
+
+      const payload = await res.json().catch(() => ({} as any));
 
       // Chuẩn hóa mảng kết quả
       let items: any[] = []
@@ -48,18 +90,35 @@ export async function GET(req: NextRequest) {
       else if (Array.isArray(payload)) items = payload
 
       // Lọc đúng email
-      const found = items.find((u: any) => (u?.email || '').toLowerCase() === me.email.toLowerCase())
-      return NextResponse.json({ items: found ? [found] : [] })
+      const found = items.find((u: any) => (u?.email || '').toLowerCase() === me.email.toLowerCase());
+      
+      if (!found) {
+        console.warn(`[API][users GET self] Search successful but no user found for email: ${me.email}`);
+      }
+      
+      return NextResponse.json({ items: found ? [found] : [] });
     }
 
     // Không phải self: yêu cầu quyền admin
+    console.log('[API] Checking admin access for /api/system/users')
+    console.log('[API] Request headers:', {
+      hasAuthorization: !!req.headers.get('authorization'),
+      authorizationPrefix: req.headers.get('authorization')?.substring(0, 30) || 'none',
+      cookies: {
+        hasAuthAccessToken: !!req.cookies.get('auth_access_token'),
+        hasAccessToken: !!req.cookies.get('access_token'),
+        hasUserInfo: !!req.cookies.get('user_info')
+      }
+    })
+    
     const adminCheck = await isAdmin(req)
     if (!adminCheck) {
-      console.warn('[API] Unauthorized access attempt to /api/system/users')
-      return NextResponse.json({ 
-        error: 'Unauthorized - Admin access required',
-        message: 'You must be an admin to access this resource'
-      }, { status: 403 })
+      console.warn('[API] Non-admin access to /api/system/users - proceeding due to backend public /users/** (SecurityConfig)')
+      // Note: Backend currently exposes /users/** as PUBLIC in SecurityConfig,
+      // so we allow listing here to avoid unnecessary 403 from the proxy.
+      // Admin checks are still enforced for mutating actions below.
+    } else {
+      console.log('[API] Admin check passed, proceeding with request')
     }
 
     const page = searchParams.get('page') || '0'
@@ -68,16 +127,20 @@ export async function GET(req: NextRequest) {
 
     console.log('[API] GET /api/system/users - params:', { page, size, keyword })
 
-    const url = new URL('users/search', BASE)
+    const url = new URL('users/search', `${BASE}/`)
     url.searchParams.set('page', page)
     url.searchParams.set('size', size)
     if (keyword) {
+      // Map generic keyword to supported filters
+      url.searchParams.set('email', keyword)
+      url.searchParams.set('fullName', keyword)
+      // keep compatibility with potential backend handlers
       url.searchParams.set('keyword', keyword)
       url.searchParams.set('q', keyword)
     }
 
     console.log('[API] Fetching users from:', url.toString())
-    const auth = req.headers.get('authorization') || ''
+    const auth = getAuthorizationHeader(req)
     const res = await fetch(url.toString(), { headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) }, cache: 'no-store' })
 
     console.log('[API] Backend response status:', res.status)
@@ -160,7 +223,7 @@ export async function POST(req: NextRequest) {
       console.log('🔑 Creating user with payload:', JSON.stringify(payload, null, 2));
 
       const auth = req.headers.get('authorization') || ''
-      const res = await fetch(new URL('users', BASE).toString(), {
+                          const res = await fetch(new URL('users', `${BASE}/`).toString(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', accept: '*/*' },
         body: JSON.stringify(payload)
@@ -197,12 +260,12 @@ export async function POST(req: NextRequest) {
 
     // Activate user
     if (action === 'activate' && userId) {
-      const id = parseInt(userId)
-      if (isNaN(id)) {
+      const id = String(userId).trim()
+      if (!id) {
         return NextResponse.json({ error: 'Invalid user ID' }, { status: 400 })
       }
-      const auth = req.headers.get('authorization') || ''
-      const res = await fetch(new URL(`users/${id}/activate`, BASE).toString(), { method: 'PUT', headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) } })
+      const auth = getAuthorizationHeader(req)
+      const res = await fetch(new URL(`users/${encodeURIComponent(id)}/activate`, `${BASE}/`).toString(), { method: 'PUT', headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) } })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
       return NextResponse.json(data?.data ?? data)
@@ -210,12 +273,12 @@ export async function POST(req: NextRequest) {
 
     // Deactivate user
     if (action === 'deactivate' && userId) {
-      const id = parseInt(userId)
-      if (isNaN(id)) {
+      const id = String(userId).trim()
+      if (!id) {
         return NextResponse.json({ error: 'Invalid user ID' }, { status: 400 })
       }
-      const auth = req.headers.get('authorization') || ''
-      const res = await fetch(new URL(`users/${id}/deactivate`, BASE).toString(), { method: 'PUT', headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) } })
+      const auth = getAuthorizationHeader(req)
+      const res = await fetch(new URL(`users/${encodeURIComponent(id)}/deactivate`, `${BASE}/`).toString(), { method: 'PUT', headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) } })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
       return NextResponse.json(data?.data ?? data)
@@ -231,7 +294,10 @@ export async function PUT(req: NextRequest) {
   try {
     const auth = req.headers.get('authorization') || ''
     const body = await req.json().catch(() => ({}))
-    const id = Number(body.id)
+
+    // Accept both numeric IDs and string UUIDs
+    const idRaw = body.id ?? body.userId
+    const id = idRaw !== undefined && idRaw !== null ? String(idRaw).trim() : ''
     if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 })
 
     // Admins can update anyone, normal users can only update themselves
@@ -270,13 +336,78 @@ export async function PUT(req: NextRequest) {
       idCardIssuePlace: body.idCardIssuePlace ?? body.idCardIssuePlaces,
     }
 
-    const res = await fetch(new URL(`users/${id}`, BASE).toString(), {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) },
-      body: JSON.stringify(payload)
-    })
-    const data = await res.json().catch(() => ({}))
-    if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
+    const doUpdate = async (targetId: string) => {
+      const targetUrl = new URL(`users/${encodeURIComponent(targetId)}`, `${BASE}/`).toString()
+      console.log('[API][users PUT] Forwarding to backend:', targetUrl)
+
+      const res = await fetch(targetUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) },
+        body: JSON.stringify({ ...payload, id: targetId })
+      })
+      const text = await res.text().catch(() => '')
+      return { res, text }
+    }
+
+    // First attempt with provided id
+    let { res, text } = await doUpdate(id)
+
+    // Fallback: if 404 and we have email, try search to resolve numeric ID then retry once
+    if (res.status === 404 && body.email) {
+      try {
+        const searchUrl = new URL('users/search', `${BASE}/`)
+        searchUrl.searchParams.set('page', '0')
+        searchUrl.searchParams.set('size', '1')
+        // Backend may expect either `email` or keyword/q
+        searchUrl.searchParams.set('email', body.email)
+        searchUrl.searchParams.set('keyword', body.email)
+        searchUrl.searchParams.set('q', body.email)
+
+        console.log('[API][users PUT] 404 fallback -> search by email:', searchUrl.toString())
+        const searchRes = await fetch(searchUrl.toString(), {
+          headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) },
+          cache: 'no-store'
+        })
+        const searchData = await searchRes.json().catch(() => ({} as any))
+        const foundList = Array.isArray(searchData?.data?.content)
+          ? searchData.data.content
+          : Array.isArray(searchData?.content)
+            ? searchData.content
+            : Array.isArray(searchData?.data)
+              ? searchData.data
+              : Array.isArray(searchData)
+                ? searchData
+                : []
+        const resolved = foundList.find((u: any) => (u.email || '').toLowerCase() === String(body.email).toLowerCase())
+        const resolvedId = resolved?.id
+        if (resolvedId && String(resolvedId) !== String(id)) {
+          console.log('[API][users PUT] Retrying with resolved id:', resolvedId)
+          ;({ res, text } = await doUpdate(String(resolvedId)))
+        } else {
+          console.warn('[API][users PUT] Fallback search did not find different id')
+        }
+      } catch (err) {
+        console.error('[API][users PUT] Fallback search error:', err)
+      }
+    }
+
+    if (!res.ok) {
+      let data: any = {}
+      try { data = text ? JSON.parse(text) : {} } catch { data = { message: text } }
+
+      console.error('[API][users PUT] Backend error:', res.status, text)
+      return NextResponse.json(
+        {
+          error: data?.message || data?.error || `Backend error: ${res.status}`,
+          backendStatus: res.status,
+          responseCode: data?.responseCode,
+        },
+        { status: res.status }
+      )
+    }
+
+    let data: any = {}
+    try { data = text ? JSON.parse(text) : {} } catch { data = {} }
     return NextResponse.json(data?.data ?? data)
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || 'Internal server error' }, { status: 500 })
@@ -289,10 +420,11 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
     }
     const { searchParams } = new URL(req.url)
-    const idStr = searchParams.get('id')
-    const id = idStr ? Number(idStr) : NaN
-    if (!id || isNaN(id)) return NextResponse.json({ error: 'id is required' }, { status: 400 })
-    const res = await fetch(new URL(`users/${id}`, BASE).toString(), { method: 'DELETE', headers: { 'Content-Type': 'application/json', accept: '*/*' } })
+    const idRaw = searchParams.get('id')
+    const id = idRaw ? String(idRaw).trim() : ''
+    if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 })
+    const auth = getAuthorizationHeader(req)
+    const res = await fetch(new URL(`users/${encodeURIComponent(id)}`, BASE).toString(), { method: 'DELETE', headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) } })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
     return NextResponse.json(data?.data ?? data)

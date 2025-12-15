@@ -189,6 +189,27 @@ export function useRooms() {
   return useApi(() => fetchList('/api/system/rooms'))
 }
 
+// Fetch rooms with backend-side filters (status, roomTypeId)
+export function useRoomsFiltered(status?: string, roomTypeId?: number, startTime?: string, endTime?: string) {
+  const params = new URLSearchParams()
+  if (status && status !== 'ALL') params.set('status', status)
+  if (roomTypeId) params.set('roomTypeId', String(roomTypeId))
+  if (startTime) params.set('startTime', startTime)
+  if (endTime) params.set('endTime', endTime)
+  const endpoint = `/api/system/rooms${params.toString() ? `?${params.toString()}` : ''}`
+  // Always normalize list responses to an array so UI can render immediately on first load
+  return useApi(() => fetchList(endpoint), [endpoint])
+}
+
+export function useAvailableRooms(startTime?: string, endTime?: string) {
+  const params = new URLSearchParams()
+  params.set('status', 'AVAILABLE')
+  if (startTime) params.set('startTime', startTime)
+  if (endTime) params.set('endTime', endTime)
+  const endpoint = `/api/system/rooms?${params.toString()}`
+  return useApi(() => fetchFromProxy(endpoint), [endpoint])
+}
+
 export function useRoomTypes() {
   return useApi(() => fetchList('/api/system/room-types'))
 }
@@ -225,10 +246,6 @@ export function useStaffUsers() {
   return useApi(() => fetchList('/api/user/staff'))
 }
 
-export function useCheckins() {
-  return useApi(() => fetchList('/api/system/checkins'))
-}
-
 // Dashboard stats derived from real endpoints
 export function useDashboardStats() {
   return useApi(() => apiClient.getDashboardStats())
@@ -249,6 +266,14 @@ export function usePaymentStats() {
 // Staff profiles
 export function useStaffProfiles() {
   return useApi(() => apiClient.getStaffProfiles())
+}
+
+export function useStaffProfilesFiltered(status?: string, department?: string) {
+  const params = new URLSearchParams()
+  if (status && status !== 'ALL') params.set('status', status)
+  if (department && department !== 'ALL') params.set('department', department)
+  const endpoint = `/api/system/staff-profiles${params.toString() ? `?${params.toString()}` : ''}`
+  return useApi(() => fetchFromProxy(endpoint), [endpoint])
 }
 
 // Users management
