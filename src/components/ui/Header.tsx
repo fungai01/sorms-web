@@ -255,22 +255,11 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
     <header className="bg-white border-b border-gray-200 sticky top-0 z-40" suppressHydrationWarning>
       <div className="w-full px-4 sm:px-6 lg:px-8" suppressHydrationWarning>
         <div className="flex justify-between items-center h-14 sm:h-16" suppressHydrationWarning>
-          {/* Logo and Sidebar Toggle */}
+          {/* Logo */}
           <div className="flex items-center" suppressHydrationWarning>
-            {/* Sidebar Toggle Button */}
-            <button
-              onClick={onToggleSidebar}
-              className="p-1.5 sm:p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-gray-300"
-            >
-              <svg className="w-4 h-4 sm:w-5 sm:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 4a1 1 0 011-1h16a1 1 0 110 2H4a1 1 0 01-1-1zM3 12a1 1 0 011-1h16a1 1 0 110 2H4a1 1 0 01-1-1zM3 20a1 1 0 011-1h16a1 1 0 110 2H4a1 1 0 01-1-1z" />
-              </svg>
-            </button>
-
-            {/* Logo */}
             <Link
               href={isAdmin ? "/admin/dashboard" : isOffice ? "/office/dashboard" : isStaff ? "/staff/dashboard" : isUser ? "/user/dashboard" : "/"}
-              className="flex items-center space-x-2 sm:space-x-3 ml-3 sm:ml-6"
+              className="flex items-center space-x-2 sm:space-x-3"
             >
               <div className="relative w-10 h-10 sm:w-12 sm:h-12 rounded-md overflow-hidden">
                 <Image src={Logo} alt="SORMS logo" fill sizes="(max-width: 640px) 40px, 60px" className="object-cover" />

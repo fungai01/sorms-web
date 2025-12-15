@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCurrentRole } from "@/hooks/useCurrentRole";
-import Button from "./Button";
 
 interface SidebarProps {
   user?: {
@@ -273,39 +272,18 @@ export default function Sidebar({ user, isVisible = false, collapsed = true, onT
       } ${!isVisible ? 'hidden' : ''}`}
       suppressHydrationWarning
     >
-      {/* Header */}
-      <div className="p-4 border-b border-gray-100/50 bg-gradient-to-r from-gray-50 to-white" suppressHydrationWarning>
-        {sidebarCollapsed ? (
-          <div className="flex justify-center" suppressHydrationWarning>
-            <div className="w-8 h-8 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg" suppressHydrationWarning>
-              <span className="text-white font-bold text-sm">S</span>
-            </div>
-          </div>
-        ) : (
-          <div className="flex items-center justify-between" suppressHydrationWarning>
-            <div className="flex items-center space-x-3" suppressHydrationWarning>
-              <div className="w-8 h-8 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg" suppressHydrationWarning>
-                <span className="text-white font-bold text-sm">S</span>
-              </div>
-              <div className="flex flex-col">
-                <span className="text-lg font-bold text-gray-900">SORMS</span>
-                <span className="text-xs text-gray-500 font-medium">Smart Office</span>
-              </div>
-            </div>
-            <Button
-              onClick={onToggleCollapsed}
-              variant="ghost"
-              className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-xl transition-all duration-200"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
-              </svg>
-            </Button>
-          </div>
-        )}
+      {/* Toggle Button */}
+      <div className="p-3 border-b border-gray-100/50" suppressHydrationWarning>
+        <button
+          onClick={onToggleCollapsed}
+          className={`w-full flex items-center ${sidebarCollapsed ? 'justify-center' : 'justify-start'} p-3 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-xl transition-all duration-200`}
+          title={sidebarCollapsed ? "Mở rộng menu" : "Thu gọn menu"}
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
       </div>
-
-      
 
       {/* Navigation */}
       <nav className="p-3 space-y-2">
@@ -322,7 +300,7 @@ export default function Sidebar({ user, isVisible = false, collapsed = true, onT
             }}
             className={`group flex items-center px-4 py-3 rounded-xl text-sm font-semibold transition-all duration-300 ${
               item.current
-                ? 'bg-gradient-to-r from-blue-100 to-indigo-100 text-blue-900 border-l-4 border-blue-500 shadow-lg transform scale-105'
+                ? 'bg-gradient-to-r from-blue-100 to-indigo-100 text-blue-900 shadow-lg transform scale-105'
                 : 'text-gray-700 hover:text-blue-900 hover:bg-gradient-to-r hover:from-blue-50 hover:to-indigo-50 hover:shadow-md hover:transform hover:scale-105'
             } ${sidebarCollapsed ? 'justify-center px-3' : ''}`}
             title={sidebarCollapsed ? item.name : undefined}
