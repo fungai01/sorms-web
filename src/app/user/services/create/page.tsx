@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 
 import { useUserBookings, useServices } from "@/hooks/useApi";
 import { useRouter } from "next/navigation";
@@ -56,6 +56,7 @@ export default function CreateServicePage() {
   const [loading, setLoading] = useState(false);
   const [loadingStaff, setLoadingStaff] = useState(false);
   const [flash, setFlash] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const isSubmitting = useRef(false);
 
   // Load bookings
   useEffect(() => {
@@ -125,6 +126,7 @@ export default function CreateServicePage() {
   const totalAmount = selectedService ? selectedService.unitPrice * quantity : 0;
 
   const handleSubmit = async () => {
+    if (isSubmitting.current) return;
     if (!selectedBookingId) {
       setFlash({ type: 'error', text: 'Vui lòng chọn booking' });
       return;
@@ -161,15 +163,21 @@ export default function CreateServicePage() {
     }
 
     try {
+      isSubmitting.current = true;
       setLoading(true);
       
       // Step 1: Create order cart first (required by backend)
+      const token = authService.getAccessToken();
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
       const cartResponse = await fetch('/api/system/orders?action=cart', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
+        headers,
         body: JSON.stringify({
           bookingId: selectedBookingId,
           requestedBy: requestedBy,
@@ -220,6 +228,7 @@ export default function CreateServicePage() {
       setFlash({ type: 'error', text: error.message || 'Có lỗi xảy ra' });
     } finally {
       setLoading(false);
+      isSubmitting.current = false;
     }
   };
 

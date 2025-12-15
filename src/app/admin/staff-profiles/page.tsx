@@ -204,9 +204,17 @@ export default function StaffProfilesPage() {
       }
     }
     
+    // Kiểm tra xem user này đã có staff profile chưa
+    const existingStaff = rows.find(r => r.accountId === userId);
+    
+    // Nếu đã tồn tại, sử dụng id của staff profile; nếu chưa, tạo mã mới
+    const employeeId = existingStaff ? existingStaff.employeeId : generateEmployeeId();
+    const staffId = existingStaff?.id;
+    
     setEdit({
+      id: staffId,
       accountId: userId,
-      employeeId: generateEmployeeId(),
+      employeeId: employeeId,
       workEmail: user.email || "",
       workPhone: user.phoneNumber || "",
       officeLocation: user.address || "",
@@ -340,16 +348,18 @@ export default function StaffProfilesPage() {
 
       let res: Response;
       if (edit.id) {
+        // Cập nhật hồ sơ đã tồn tại theo staffProfile.id hiện tại
         res = await fetch("/api/system/staff-profiles", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ id: edit.id, ...payload }),
         });
       } else {
+        // Tạo hồ sơ mới và dùng id đăng nhập (accountId) làm staffProfile.id
         res = await fetch("/api/system/staff-profiles", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
+          body: JSON.stringify({ id: edit.accountId, ...payload }),
         });
       }
       if (!res.ok) {

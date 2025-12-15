@@ -57,6 +57,7 @@ export default function UserOrdersPage() {
   const [selectedBookingId, setSelectedBookingId] = useState<number | null>(null);
   const [selectedOrder, setSelectedOrder] = useState<ServiceOrder | null>(null);
   const [detailModalOpen, setDetailModalOpen] = useState(false);
+  const [cancelModalOpen, setCancelModalOpen] = useState(false);
 
   // Load user bookings
   const { data: bookingsData, loading: bookingsLoading } = useUserBookings();
@@ -158,6 +159,40 @@ export default function UserOrdersPage() {
   const totalAmount = orders.reduce((sum, o) => sum + o.totalAmount, 0);
 
   const [payingOrderId, setPayingOrderId] = useState<number | null>(null);
+
+  const handleCancelOrder = async () => {
+    if (!selectedOrder) return;
+
+    try {
+      setLoading(true);
+      const token = authService.getAccessToken();
+      const headers: HeadersInit = { 'Content-Type': 'application/json' };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const res = await fetch(`/api/system/orders?action=cancel&orderId=${selectedOrder.id}`, {
+        method: 'POST',
+        headers,
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Không thể hủy đơn hàng');
+      }
+
+      setFlash({ type: 'success', text: 'Đã hủy đơn hàng thành công.' });
+      setCancelModalOpen(false);
+      setSelectedOrder(null);
+      if (selectedBookingId) {
+        loadOrders(selectedBookingId);
+      }
+    } catch (error: any) {
+      setFlash({ type: 'error', text: error.message || 'Có lỗi xảy ra.' });
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handlePay = async (order: ServiceOrder, method: 'WALLET' | 'CASH') => {
     try {
@@ -461,6 +496,21 @@ export default function UserOrdersPage() {
                               </svg>
                               Xem chi tiết
                             </Button>
+                            {['PENDING', 'PENDING_STAFF_CONFIRMATION', 'PENDING_PAYMENT'].includes(order.status) && (
+                              <Button
+                                variant="danger"
+                                onClick={() => {
+                                  setSelectedOrder(order);
+                                  setCancelModalOpen(true);
+                                }}
+                                className="w-full flex items-center justify-center gap-2"
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                                Hủy đơn hàng
+                              </Button>
+                            )}
                           </div>
                         </div>
                       </CardBody>
@@ -544,6 +594,40 @@ export default function UserOrdersPage() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+      </Modal>
+
+      {/* Cancel Order Modal */}
+      <Modal
+        open={cancelModalOpen}
+        onClose={() => {
+          setCancelModalOpen(false);
+          setSelectedOrder(null);
+        }}
+        title="Xác nhận hủy đơn hàng"
+      >
+        {selectedOrder && (
+          <div className="space-y-4">
+            <p>Bạn có chắc chắn muốn hủy đơn hàng <strong>{selectedOrder.code}</strong> không? Hành động này không thể hoàn tác.</p>
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setCancelModalOpen(false);
+                  setSelectedOrder(null);
+                }}
+              >
+                Không
+              </Button>
+              <Button
+                variant="danger"
+                onClick={handleCancelOrder}
+                disabled={loading}
+              >
+                {loading ? 'Đang hủy...' : 'Có, hủy đơn hàng'}
+              </Button>
+            </div>
           </div>
         )}
       </Modal>

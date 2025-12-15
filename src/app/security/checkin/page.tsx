@@ -423,28 +423,28 @@ export default function CheckInPage() {
         numGuests = b.numGuests || b.num_guests || b.guests || b.numberOfGuests || undefined;
         bookingUserId = b.userId ? String(b.userId) : (b.user_id ? String(b.user_id) : (b.user?.id ? String(b.user.id) : undefined));
         
-        if ((!userName || !userEmail || !phoneNumber) && bookingUserId) {
-          try {
-            const userRes = await fetch(`/api/system/users?id=${bookingUserId}`, { credentials: 'include' });
-            if (userRes.ok) {
-              const userData = await userRes.json();
-              const user = Array.isArray(userData) ? userData.find((u: any) => String(u.id) === String(bookingUserId)) : userData;
-              if (user) {
-                if (!userName) {
-                  userName = user.fullName || user.full_name || user.name || user.userName || undefined;
-                }
-                if (!userEmail) {
-                  userEmail = user.email || undefined;
-                }
-                if (!phoneNumber) {
-                  phoneNumber = user.phoneNumber || user.phone_number || user.phone || undefined;
-                }
-              }
-            }
-          } catch (userErr) {
-            console.error('Error fetching user info:', userErr);
-          }
-        }
+        // if ((!userName || !userEmail || !phoneNumber) && bookingUserId) {
+        //   try {
+        //     const userRes = await fetch(`/api/system/users?id=${bookingUserId}`, { credentials: 'include' });
+        //     if (userRes.ok) {
+        //       const userData = await userRes.json();
+        //       const user = Array.isArray(userData) ? userData.find((u: any) => String(u.id) === String(bookingUserId)) : userData;
+        //       if (user) {
+        //         if (!userName) {
+        //           userName = user.fullName || user.full_name || user.name || user.userName || undefined;
+        //         }
+        //         if (!userEmail) {
+        //           userEmail = user.email || undefined;
+        //         }
+        //         if (!phoneNumber) {
+        //           phoneNumber = user.phoneNumber || user.phone_number || user.phone || undefined;
+        //         }
+        //       }
+        //     }
+        //   } catch (userErr) {
+        //     console.error('Error fetching user info:', userErr);
+        //   }
+        // }
         
         // Try to get phoneNumber from booking if not found in user
         if (!phoneNumber) {
@@ -596,7 +596,7 @@ export default function CheckInPage() {
       formData.append('faceRef', 'true');
 
       // Use Next.js API route as proxy
-      const res = await fetch(`/api/bookings/${result.bookingId}/checkin`, {
+      const res = await fetch(`https://backend.sorms.online/api/bookings/${result.bookingId}/checkin`, {
         method: 'POST',
         credentials: 'include',
         body: formData,

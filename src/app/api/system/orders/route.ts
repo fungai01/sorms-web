@@ -137,9 +137,10 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'cart') {
+      const auth = req.headers.get('authorization') || ''
       const res = await fetch(`${BASE}/orders/cart`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', accept: '*/*' },
+        headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) },
         body: JSON.stringify(body),
       })
       const data = await res.json().catch(() => ({}))
@@ -201,7 +202,7 @@ export async function POST(req: NextRequest) {
       })
       
       try {
-        const res = await fetch(`${BASE}/orders/service`, {
+        const res = await fetch(`${BASE}/orders/${payload.orderId}/items`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) },
           body: JSON.stringify(payload),

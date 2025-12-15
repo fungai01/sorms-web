@@ -661,12 +661,17 @@ class ApiClient {
     // Use Next.js API route as proxy instead of calling backend directly
     // This ensures proper authentication and error handling
     try {
+      const token = authService.getAccessToken();
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
       const response = await fetch('/api/system/orders?action=service', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include',
+        headers,
         body: JSON.stringify(payload),
       })
       
