@@ -596,7 +596,7 @@ export default function CheckInPage() {
       formData.append('faceRef', 'true');
 
       // Use Next.js API route as proxy
-      const res = await fetch(`/api/security/bookings/${result.bookingId}/checkin`, {
+      const res = await fetch(`/api/bookings/${result.bookingId}/checkin`, {
         method: 'POST',
         credentials: 'include',
         body: formData,

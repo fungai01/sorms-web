@@ -54,29 +54,6 @@ export function useAuth() {
     }
   }, [])
 
-  // Login with username/password
-  const login = useCallback(async (username: string, password: string) => {
-    try {
-      setIsLoading(true)
-      const tokens = await authService.login(username, password)
-      
-      // Introspect token để lấy user info
-      const userInfo = await authService.introspectToken()
-      
-      setIsAuthenticated(true)
-      setUser(userInfo)
-      
-      return { success: true, user: userInfo }
-    } catch (error: any) {
-      console.error('Login failed:', error)
-      setIsAuthenticated(false)
-      setUser(null)
-      throw error
-    } finally {
-      setIsLoading(false)
-    }
-  }, [])
-
   // Logout
   const logout = useCallback(async () => {
     try {
@@ -117,7 +94,6 @@ export function useAuth() {
     user,
     isLoading,
     loginWithGoogle,
-    login,
     logout,
     refreshToken,
   }

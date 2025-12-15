@@ -33,7 +33,7 @@ export const mapRoleToAppRole = (role?: string): 'admin' | 'office' | 'security'
   if (r.startsWith('ROLE_')) {
     r = r.substring(5)
   }
-  if (['ADMIN', 'ADMIN_SYTEM'].includes(r)) return 'admin'
+  if (['ADMIN', 'ADMIN_SYSTEM'].includes(r)) return 'admin'
   if (['ADMINISTRATIVE'].includes(r)) return 'office'
   if (['SECURITY', 'SERCURITY', 'SECURITY_GUARD'].includes(r)) return 'security'
   if (['STAFF'].includes(r)) return 'staff'
@@ -168,7 +168,7 @@ class AuthService {
 
     const tokens: AuthTokens = {
       accessToken,
-      refreshToken: undefined,
+      refreshToken: data.refreshToken || data.refresh_token,
       expiresIn: data.expiresIn || data.expires_in,
     }
 
@@ -238,12 +238,12 @@ class AuthService {
   }
 
   async refreshAccessToken(): Promise<AuthTokens> {
-    const currentToken = this.getAccessToken()
-    if (!currentToken) {
-      throw new Error('Không có access token. Vui lòng đăng nhập lại.')
+    const refreshToken = this.getRefreshToken()
+    if (!refreshToken) {
+      throw new Error('Không có refresh token. Vui lòng đăng nhập lại.')
     }
 
-    const response = await apiClient.refreshToken(currentToken)
+    const response = await apiClient.refreshToken(refreshToken)
     if (response.success && response.data) {
       const data = response.data as any
       const newToken = data.token || data.accessToken || data.access_token
@@ -252,12 +252,12 @@ class AuthService {
         throw new Error('Backend không trả về access token mới sau khi refresh')
       }
 
-      // Backend trả về refreshToken trong AuthenticationResponse
-      const refreshToken = data.refreshToken || data.refresh_token
+      // Backend trả về refreshToken trong AuthenticationResponse (hoặc dùng lại refreshToken cũ)
+      const nextRefreshToken = data.refreshToken || data.refresh_token || refreshToken
       
       const tokens: AuthTokens = {
         accessToken: newToken,
-        refreshToken: refreshToken,
+        refreshToken: nextRefreshToken,
         expiresIn: data.expiresIn || data.expires_in,
       }
 
@@ -419,55 +419,6 @@ class AuthService {
     }
 
     return null
-  }
-
-  async login(username: string, password: string): Promise<AuthTokens> {
-    const response = await apiClient.login({ username, password })
-    
-    if (!response.success || !response.data) {
-      throw new Error(response.error || 'Đăng nhập thất bại')
-    }
-    
-    const data = response.data as any
-    const accessToken = data.token || data.accessToken || data.access_token
-    const accountInfo = data.accountInfo || data.user
-    
-    if (!accessToken) {
-      throw new Error('Backend không trả về access token')
-    }
-    
-    const tokens: AuthTokens = {
-      accessToken,
-      refreshToken: data.refreshToken || data.refresh_token,
-      expiresIn: data.expiresIn || data.expires_in,
-    }
-    
-    this.setTokens(tokens)
-    
-    if (accountInfo) {
-      const userInfo: UserInfo = {
-        id: accountInfo.id,
-        email: accountInfo.email || '',
-        username: accountInfo.username,
-        firstName: accountInfo.firstName,
-        lastName: accountInfo.lastName,
-        name: accountInfo.firstName && accountInfo.lastName 
-          ? `${accountInfo.firstName} ${accountInfo.lastName}`
-          : accountInfo.firstName || accountInfo.lastName || accountInfo.email,
-        picture: accountInfo.avatarUrl || accountInfo.picture,
-        avatarUrl: accountInfo.avatarUrl,
-        role: accountInfo.roleName?.[0] || accountInfo.roles?.[0],
-        roleName: accountInfo.roleName || accountInfo.roles,
-        roles: accountInfo.roleName || accountInfo.roles,
-        status: accountInfo.status,
-        dob: accountInfo.dob,
-        address: accountInfo.address,
-        phoneNumber: accountInfo.phoneNumber,
-      }
-      this.setUserInfo(userInfo)
-    }
-    
-    return tokens
   }
 
   async logout(): Promise<void> {

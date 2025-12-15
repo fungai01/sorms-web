@@ -54,7 +54,7 @@ describe('AuthCallbackPage', () => {
   it('renders loading state initially', async () => {
     render(<AuthCallbackPage />)
     await waitFor(() => {
-      expect(screen.getByText(/Đang xác thực/i) || screen.getByText(/Loading/i)).toBeInTheDocument()
+      expect(screen.getByText(/Đang xác thực/i) || screen.queryByText(/Loading/i)).toBeInTheDocument()
     })
   })
 
@@ -79,7 +79,7 @@ describe('AuthCallbackPage', () => {
 
     render(<AuthCallbackPage />)
     await waitFor(() => {
-      expect(screen.getByText(/Lỗi/i) || screen.getByText(/Error/i)).toBeInTheDocument()
+      expect(screen.getByText(/Lỗi/i) || screen.queryByText(/Error/i)).toBeInTheDocument()
     }, { timeout: 3000 })
   })
 
@@ -94,7 +94,7 @@ describe('AuthCallbackPage', () => {
 
     render(<AuthCallbackPage />)
     await waitFor(() => {
-      expect(screen.getByText(/Lỗi/i) || screen.getByText(/Error/i)).toBeInTheDocument()
+      expect(screen.getByText(/Lỗi/i) || screen.queryByText(/Error/i)).toBeInTheDocument()
     }, { timeout: 3000 })
   })
 

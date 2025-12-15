@@ -92,7 +92,7 @@ export default function OfficeBookingsPage() {
         : [];
   
   // Normalize dữ liệu - chuyển snake_case sang camelCase và map user/room info
-  const bookings: BookingRequest[] = rawBookings.map((item: any) => {
+  const bookings: BookingRequest[] = useMemo(() => rawBookings.map((item: any) => {
     const userId = item.userId || item.user_id;
     const roomId = item.roomId || item.room_id;
     
@@ -128,7 +128,7 @@ export default function OfficeBookingsPage() {
       created_at: item.created_at || item.createdAt || '',
       updated_at: item.updated_at || item.updatedAt || ''
     };
-  });
+  }), [rawBookings, rooms, users]);
   const [searchQuery, setSearchQuery] = useState('');
   const [compact, setCompact] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);

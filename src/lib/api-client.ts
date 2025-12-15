@@ -498,9 +498,9 @@ class ApiClient {
     return this.put(`/bookings/${id}`, formattedData)
   }
 
-  async deleteBooking(id: number) {
+  async deleteBooking(id: number, options?: RequestInit) {
     // Xóa booking theo spec mới: DELETE /bookings/{id}
-    return this.delete(`/bookings/${id}`)
+    return this.delete(`/bookings/${id}`, options)
   }
 
   // Additional booking methods for filtering and actions
@@ -527,7 +527,7 @@ class ApiClient {
     return this.post(`/bookings/${id}/checkout`, payload)
   }
 
-  async approveBooking(id: number, approverId?: string, reason?: string) {
+  async approveBooking(id: number, approverId?: string, reason?: string, options?: RequestInit) {
     // Backend hiện yêu cầu body dạng:
     // { bookingId, approverId, decision, reason }
     const payload = {
@@ -536,7 +536,7 @@ class ApiClient {
       decision: 'APPROVED',
       reason: reason ?? ''
     }
-    return this.post(`/bookings/${id}/approve`, payload)
+    return this.post(`/bookings/${id}/approve`, payload, options)
   }
 
   async getServices() {
@@ -981,18 +981,9 @@ class ApiClient {
     }
   }
 
-  // Authentication methods
-  async sendVerificationCode(email: string) {
-    return this.post('/auth/verify-account/send-code', { email })
-  }
-
-  async checkVerificationCode(email: string, code: string) {
-    return this.post('/auth/verify-account/check-code', { email, code })
-  }
-
-  async refreshToken(token: string) {
-    // Backend yêu cầu gửi token hiện tại trong body
-    return this.post('/auth/refresh', { token })
+  async refreshToken(refreshToken: string) {
+    // Backend yêu cầu gửi refreshToken trong body (FE cũ dùng key "token", BE hiện hỗ trợ cả hai)
+    return this.post('/auth/refresh', { refreshToken })
   }
 
   async outboundAuth(data: any) {
@@ -1009,14 +1000,6 @@ class ApiClient {
       return this.post('/auth/logout', { token })
     }
     return this.post('/auth/logout', {})
-  }
-
-  async login(credentials: { username: string; password: string } | { email: string; password: string }) {
-    // Backend yêu cầu username, nhưng hỗ trợ cả email để tương thích
-    const body = 'username' in credentials 
-      ? credentials 
-      : { username: credentials.email, password: credentials.password }
-    return this.post('/auth/login', body)
   }
 
   async introspect(token: string) {

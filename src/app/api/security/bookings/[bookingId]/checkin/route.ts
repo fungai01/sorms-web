@@ -10,7 +10,7 @@ export async function POST(
   context: { params: Promise<{ bookingId: string }> }
 ) {
   try {
-    console.log('[Security Check-in] Request received')
+    console.log('Request received')
     
     // IMPORTANT: Backend has disabled authentication for check-in endpoint
     // Try to get token for logging purposes, but don't require it
@@ -27,20 +27,20 @@ export async function POST(
       
       if (accessTokenCookie) {
         token = accessTokenCookie
-        console.log('[Security Check-in] Token from access_token cookie (optional)')
+        console.log('Token from access_token cookie (optional)')
       } else if (authAccessTokenCookie) {
         token = authAccessTokenCookie
-        console.log('[Security Check-in] Token from auth_access_token cookie (optional)')
+        console.log('Token from auth_access_token cookie (optional)')
       } else if (userInfoCookie) {
         try {
           const decoded = decodeURIComponent(userInfoCookie)
           const userInfo = JSON.parse(decoded)
           if (userInfo && userInfo.token) {
             token = userInfo.token
-            console.log('[Security Check-in] Token from user_info cookie (optional)')
+            console.log('Token from user_info cookie (optional)')
           }
         } catch (error) {
-          console.warn('[Security Check-in] Failed to parse user_info cookie:', error)
+          console.warn('Failed to parse user_info cookie:', error)
         }
       }
       
@@ -65,17 +65,17 @@ export async function POST(
         userInfo = await verifyToken(req)
         if (userInfo?.id) {
           isValidToken = true
-          console.log('[Security Check-in] Valid token found - User info:', { id: userInfo.id, email: userInfo.email })
+          console.log('Valid token found - User info:', { id: userInfo.id, email: userInfo.email })
         } else {
-          console.log('[Security Check-in] Token verification failed - will not send Authorization header')
+          console.log('Token verification failed - will not send Authorization header')
           authHeader = null // Clear invalid token
         }
       } catch (verifyError) {
-        console.log('[Security Check-in] Token verification error - will not send Authorization header:', verifyError)
+        console.log('Token verification error - will not send Authorization header:', verifyError)
         authHeader = null // Clear invalid token
       }
     } else {
-      console.log('[Security Check-in] No token provided - proceeding without authentication (backend allows this)')
+      console.log('No token provided - proceeding without authentication (backend allows this)')
     }
 
     // Params
@@ -94,16 +94,16 @@ export async function POST(
 
     // Log file information
     if (faceImage) {
-      console.log('[Security Check-in] Face image received:', {
+      console.log('Face image received:', {
         name: faceImage.name,
         size: faceImage.size,
         type: faceImage.type,
         lastModified: faceImage.lastModified,
       })
     } else {
-      console.warn('[Security Check-in] No faceImage file found in request')
+      console.warn('No faceImage file found in request')
       // Check all form data entries
-      console.log('[Security Check-in] All form data entries:', Array.from(incomingForm.entries()).map(([key, value]) => ({
+      console.log('All form data entries:', Array.from(incomingForm.entries()).map(([key, value]) => ({
         key,
         valueType: value instanceof File ? `File(${value.name}, ${value.size} bytes)` : typeof value,
       })))
@@ -118,7 +118,7 @@ export async function POST(
     if (finalUserId) {
       outgoing.append('userId', String(finalUserId))
     } else {
-      console.warn('[Security Check-in] No userId found, backend may reject request')
+      console.warn('No userId found, backend may reject request')
     }
     
     // For boolean primitive binding in Spring @ModelAttribute with multipart/form-data:
@@ -127,7 +127,7 @@ export async function POST(
     // Note: If this still fails, the issue might be time validation (check-in before/after booking period)
     const faceRefValue = (faceRef === 'false' || faceRef === 'False' || faceRef === 'FALSE') ? 'false' : 'true'
     outgoing.append('faceRef', faceRefValue)
-    console.log('[Security Check-in] FaceRef being sent:', { original: faceRef, converted: faceRefValue })
+    console.log('FaceRef being sent:', { original: faceRef, converted: faceRefValue })
     
     // Append faceImage file - ensure it's properly included
     if (faceImage && faceImage.size > 0) {
@@ -138,13 +138,13 @@ export async function POST(
         lastModified: faceImage.lastModified,
       })
       outgoing.append('faceImage', imageFile)
-      console.log('[Security Check-in] Face image appended to outgoing FormData:', {
+      console.log('Face image appended to outgoing FormData:', {
         name: imageFile.name,
         size: imageFile.size,
         type: imageFile.type,
       })
     } else {
-      console.error('[Security Check-in] Cannot append faceImage: file is missing or empty')
+      console.error('Cannot append faceImage: file is missing or empty')
       return NextResponse.json(
         { error: 'Face image is required for check-in' },
         { status: 400 }
@@ -163,12 +163,12 @@ export async function POST(
     // If token is invalid/expired, don't send it - backend will allow unauthenticated request
     if (authHeader && isValidToken) {
       headers['Authorization'] = authHeader
-      console.log('[Security Check-in] Valid Authorization header included')
+      console.log('Valid Authorization header included')
     } else {
-      console.log('[Security Check-in] No Authorization header - proceeding without authentication (backend allows this)')
+      console.log('No Authorization header - proceeding without authentication (backend allows this)')
     }
     
-    console.log('[Security Check-in] Headers prepared for backend:', {
+    console.log('Headers prepared for backend:', {
       hasAuthorization: !!headers['Authorization'],
       tokenValid: isValidToken,
       accept: headers['accept'],
@@ -176,7 +176,7 @@ export async function POST(
 
     // Call backend endpoint: POST {BASE_URL}/bookings/{id}/checkin
     const backendUrl = `${API_CONFIG.BASE_URL}/bookings/${bookingId}/checkin`
-    console.log('[Security Check-in] Calling backend:', backendUrl)
+    console.log('Calling backend:', backendUrl)
     
     // Log all FormData entries (for debugging)
     const formDataEntries: any = {}
@@ -187,8 +187,8 @@ export async function POST(
         formDataEntries[key] = value
       }
     }
-    console.log('[Security Check-in] Outgoing FormData fields:', formDataEntries)
-    console.log('[Security Check-in] FaceRef value type and content:', {
+    console.log('Outgoing FormData fields:', formDataEntries)
+    console.log('FaceRef value type and content:', {
       original: faceRef,
       converted: faceRefValue,
       type: typeof faceRefValue
@@ -200,7 +200,7 @@ export async function POST(
       body: outgoing,
     })
     
-    console.log('[Security Check-in] Backend response status:', beRes.status)
+    console.log('Backend response status:', beRes.status)
 
     // Pipe through response
     const contentType = beRes.headers.get('content-type') || ''
@@ -209,10 +209,9 @@ export async function POST(
     // Log response body for debugging, especially for 401 errors
     if (status === 401) {
       const responseText = await beRes.text().catch(() => '')
-      console.error('[Security Check-in] 401 Unauthorized - Backend response:', responseText)
+      console.error('Backend check-in error:', responseText)
       try {
         const errorData = JSON.parse(responseText)
-        console.error('[Security Check-in] Error details:', errorData)
         return NextResponse.json(
           { 
             error: errorData?.message || errorData?.error || 'Unauthorized: Token không hợp lệ hoặc đã hết hạn',
@@ -238,7 +237,7 @@ export async function POST(
     const text = await beRes.text().catch(() => '')
     return new NextResponse(text, { status })
   } catch (error: any) {
-    console.error('[Security Check-in] Error:', error)
+    console.error('Error:', error)
     return NextResponse.json(
       { error: error?.message || 'Internal server error' },
       { status: 500 }
