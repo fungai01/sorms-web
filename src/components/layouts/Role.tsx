@@ -71,7 +71,6 @@ export default function RoleGuard({ children }: { children: React.ReactNode }) {
           "/admin": "admin",
           "/office": "office",
           "/staff": "staff",
-          "/security": "security",
           "/user": "user",
         };
 

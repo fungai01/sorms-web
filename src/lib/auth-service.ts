@@ -27,15 +27,14 @@ export interface UserInfo {
   phoneNumber?: string
 }
 
-export const mapRoleToAppRole = (role?: string): 'admin' | 'office' | 'security' | 'staff' | 'user' => {
+export const mapRoleToAppRole = (role?: string): 'admin' | 'office' |'staff' | 'user' => {
   if (!role) return 'user'
   let r = role.trim().toUpperCase()
   if (r.startsWith('ROLE_')) {
     r = r.substring(5)
   }
-  if (['ADMIN', 'ADMIN_SYSTEM'].includes(r)) return 'admin'
+  if (['ADMIN_SYSTEM'].includes(r)) return 'admin'
   if (['ADMINISTRATIVE'].includes(r)) return 'office'
-  if (['SECURITY', 'SERCURITY', 'SECURITY_GUARD'].includes(r)) return 'security'
   if (['STAFF'].includes(r)) return 'staff'
   if (['USER'].includes(r)) return 'user'
   return 'user'
@@ -61,25 +60,25 @@ class AuthService {
     const scope = 'openid email profile'
     const response = await apiClient.getGoogleOAuthRedirectUrl(normalizedCallbackUrl, scope)
     
-    if (response.success && response.data) {
-      const data = response.data as any
-      const redirectUrl = typeof data === 'string' 
-        ? data 
-        : data.redirectUrl || data.url || ''
-      
-      if (!redirectUrl) {
-        throw new Error('Backend không trả về redirect URL')
-      }
-      
-      return redirectUrl
+    if (!response.success) {
+      throw new Error(response.error || 'Failed to get OAuth URL')
     }
     
-    throw new Error(response.error || 'Không thể lấy Google OAuth URL')
+    const data = response.data as any
+    const redirectUrl = typeof data === 'string' 
+      ? data 
+      : data?.redirectUrl || data?.url || ''
+    
+    if (!redirectUrl) {
+      throw new Error('Missing redirect URL from backend')
+    }
+    
+    return redirectUrl
   }
 
   async handleOAuthCallback(code: string, state?: string): Promise<AuthTokens> {
     if (!code || code.trim() === '') {
-      throw new Error('Mã xác thực không hợp lệ. Vui lòng thử đăng nhập lại.')
+      throw new Error('Invalid authorization code')
     }
 
     let normalizedCode = code.trim()
@@ -107,7 +106,7 @@ class AuthService {
     redirectUri = redirectUri.replace(/\/$/, '').trim()
     
     if (!redirectUri || redirectUri.length === 0) {
-      throw new Error('RedirectUri không hợp lệ. Không thể xác định redirectUri.')
+      throw new Error('Invalid redirectUri')
     }
     
     const requestBody = {
@@ -116,18 +115,18 @@ class AuthService {
     }
     
     if (!requestBody.code || requestBody.code.length === 0) {
-      throw new Error('Mã xác thực không hợp lệ. Code không được để trống.')
+      throw new Error('Invalid code')
     }
     
     if (!requestBody.redirectUri || requestBody.redirectUri.length === 0) {
-      throw new Error('RedirectUri không hợp lệ. RedirectUri không được để trống.')
+      throw new Error('Invalid redirectUri')
     }
     
     const codeUsedKey = `oauth_code_used_${normalizedCode.substring(0, 20)}`
     if (typeof window !== 'undefined') {
       const codeUsed = sessionStorage.getItem(codeUsedKey)
       if (codeUsed === 'true') {
-        throw new Error('Mã xác thực đã được sử dụng. Vui lòng thử đăng nhập lại.')
+        throw new Error('Authorization code already used')
       }
       sessionStorage.setItem(codeUsedKey, 'true')
     }
@@ -143,27 +142,23 @@ class AuthService {
     }
 
     if (!response.success) {
-      const errorMsg = response.error || 'Xác thực thất bại'
-      if (errorMsg.toLowerCase().includes('unauthenticated') || errorMsg.toLowerCase().includes('au0001')) {
-        throw new Error('Xác thực thất bại. Mã xác thực đã hết hạn hoặc đã được sử dụng. Vui lòng thử đăng nhập lại.')
-      }
-      throw new Error(errorMsg)
+      throw new Error(response.error || 'Authentication failed')
     }
 
     if (!response.data) {
-      throw new Error('Backend không trả về dữ liệu xác thực')
+      throw new Error('Authentication failed: empty response')
     }
 
     const data = response.data as any
 
     if (data.authenticated === false) {
-      throw new Error('Xác thực thất bại. Vui lòng thử đăng nhập lại.')
+      throw new Error('Authentication failed')
     }
 
     const accessToken = data.token || data.accessToken || data.access_token
 
     if (!accessToken) {
-      throw new Error('Backend không trả về access token. Vui lòng kiểm tra lại cấu hình.')
+      throw new Error('Missing access token from backend')
     }
 
     const tokens: AuthTokens = {
@@ -240,7 +235,7 @@ class AuthService {
   async refreshAccessToken(): Promise<AuthTokens> {
     const refreshToken = this.getRefreshToken()
     if (!refreshToken) {
-      throw new Error('Không có refresh token. Vui lòng đăng nhập lại.')
+      throw new Error('Missing refresh token')
     }
 
     const response = await apiClient.refreshToken(refreshToken)
@@ -249,7 +244,7 @@ class AuthService {
       const newToken = data.token || data.accessToken || data.access_token
       
       if (!newToken) {
-        throw new Error('Backend không trả về access token mới sau khi refresh')
+        throw new Error('Missing refreshed access token')
       }
 
       // Backend trả về refreshToken trong AuthenticationResponse (hoặc dùng lại refreshToken cũ)
@@ -289,7 +284,7 @@ class AuthService {
       return tokens
     }
 
-    throw new Error(response.error || 'Làm mới token thất bại')
+    throw new Error(response.error || 'Refresh token failed')
   }
 
   setUserInfo(user: UserInfo): void {
@@ -343,93 +338,80 @@ class AuthService {
       return null
     }
 
-    try {
-      const response = await apiClient.introspect(token)
-      if (response.success && response.data) {
-        const data = response.data as any
-        
-        if (!data.valid) {
-          return null
-        }
+    const response = await apiClient.introspect(token)
+    if (!response.success || !response.data) return null
 
-        const accountInfo = data.accountInfo && typeof data.accountInfo === 'object' ? data.accountInfo : {}
-        
-        const rolesFromRoot = Array.isArray(data.roles) 
-          ? data.roles.map((r: any) => String(r).trim()).filter((r: string) => r.length > 0)
-          : (data.roles === null ? [] : [])
-        
-        const rolesFromAccountInfo = accountInfo && Array.isArray(accountInfo.roles) 
-          ? accountInfo.roles.map((r: any) => String(r).trim()).filter((r: string) => r.length > 0)
-          : []
-        
-        const roleNameFromAccountInfo = accountInfo && Array.isArray(accountInfo.roleName) 
-          ? accountInfo.roleName.map((r: any) => String(r).trim()).filter((r: string) => r.length > 0)
-          : []
-        
-        const allRoles = rolesFromRoot.length > 0 
-          ? rolesFromRoot 
-          : rolesFromAccountInfo.length > 0 
-            ? rolesFromAccountInfo 
-            : roleNameFromAccountInfo
-        
-        const firstRoleRaw = allRoles.length > 0 
-          ? String(allRoles[0]) 
-          : (accountInfo.role || 'user')
-        
-        const firstRole = firstRoleRaw.replace(/^ROLE_/, '')
-        const appRole = mapRoleToAppRole(firstRole)
-        
-        const normalizedRoles = allRoles.length > 0
-          ? allRoles.map((r: string) => String(r).replace(/^ROLE_/, ''))
-          : (rolesFromAccountInfo.length > 0 
-              ? rolesFromAccountInfo.map((r: string) => String(r).replace(/^ROLE_/, ''))
-              : [])
-        
-        const jwtPayload = decodeJWTPayload(token)
-        const emailFromJWT = jwtPayload?.sub ? String(jwtPayload.sub) : null
-        const userIdFromJWT = jwtPayload?.userId ? String(jwtPayload.userId) : null
-        
-        const finalEmail = accountInfo.email || data.username || emailFromJWT || ''
-        const finalUserId = accountInfo.id || data.accountId || userIdFromJWT || ''
-        
-        const userInfo: UserInfo = {
-          id: finalUserId,
-          email: finalEmail,
-          username: accountInfo.username || data.username || emailFromJWT || '',
-          firstName: accountInfo.firstName,
-          lastName: accountInfo.lastName,
-          name: accountInfo.firstName && accountInfo.lastName 
-            ? `${accountInfo.firstName} ${accountInfo.lastName}`
-            : accountInfo.firstName || accountInfo.lastName || accountInfo.email || data.username || emailFromJWT || '',
-          picture: accountInfo.avatarUrl || accountInfo.picture,
-          avatarUrl: accountInfo.avatarUrl,
-          role: appRole,
-          roleName: normalizedRoles,
-          roles: normalizedRoles,
-          dob: accountInfo.dob,
-          address: accountInfo.address,
-          phoneNumber: accountInfo.phoneNumber,
-        }
-        
-        this.setUserInfo(userInfo)
-        return userInfo
-      }
-    } catch (error) {
-      console.error('Token introspection failed:', error)
+    const data = response.data as any
+    if (!data.valid) return null
+
+    const accountInfo = data.accountInfo && typeof data.accountInfo === 'object' ? data.accountInfo : {}
+    
+    const rolesFromRoot = Array.isArray(data.roles) 
+      ? data.roles.map((r: any) => String(r).trim()).filter((r: string) => r.length > 0)
+      : (data.roles === null ? [] : [])
+    
+    const rolesFromAccountInfo = accountInfo && Array.isArray(accountInfo.roles) 
+      ? accountInfo.roles.map((r: any) => String(r).trim()).filter((r: string) => r.length > 0)
+      : []
+    
+    const roleNameFromAccountInfo = accountInfo && Array.isArray(accountInfo.roleName) 
+      ? accountInfo.roleName.map((r: any) => String(r).trim()).filter((r: string) => r.length > 0)
+      : []
+    
+    const allRoles = rolesFromRoot.length > 0 
+      ? rolesFromRoot 
+      : rolesFromAccountInfo.length > 0 
+        ? rolesFromAccountInfo 
+        : roleNameFromAccountInfo
+    
+    const firstRoleRaw = allRoles.length > 0 
+      ? String(allRoles[0]) 
+      : (accountInfo.role || 'user')
+    
+    const firstRole = firstRoleRaw.replace(/^ROLE_/, '')
+    const appRole = mapRoleToAppRole(firstRole)
+    
+    const normalizedRoles = allRoles.length > 0
+      ? allRoles.map((r: string) => String(r).replace(/^ROLE_/, ''))
+      : (rolesFromAccountInfo.length > 0 
+          ? rolesFromAccountInfo.map((r: string) => String(r).replace(/^ROLE_/, ''))
+          : [])
+    
+    const jwtPayload = decodeJWTPayload(token)
+    const emailFromJWT = jwtPayload?.sub ? String(jwtPayload.sub) : null
+    const userIdFromJWT = jwtPayload?.userId ? String(jwtPayload.userId) : null
+    
+    const finalEmail = accountInfo.email || data.username || emailFromJWT || ''
+    const finalUserId = accountInfo.id || data.accountId || userIdFromJWT || ''
+    
+    const userInfo: UserInfo = {
+      id: finalUserId,
+      email: finalEmail,
+      username: accountInfo.username || data.username || emailFromJWT || '',
+      firstName: accountInfo.firstName,
+      lastName: accountInfo.lastName,
+      name: accountInfo.firstName && accountInfo.lastName 
+        ? `${accountInfo.firstName} ${accountInfo.lastName}`
+        : accountInfo.firstName || accountInfo.lastName || accountInfo.email || data.username || emailFromJWT || '',
+      picture: accountInfo.avatarUrl || accountInfo.picture,
+      avatarUrl: accountInfo.avatarUrl,
+      role: appRole,
+      roleName: normalizedRoles,
+      roles: normalizedRoles,
+      dob: accountInfo.dob,
+      address: accountInfo.address,
+      phoneNumber: accountInfo.phoneNumber,
     }
-
-    return null
+    
+    this.setUserInfo(userInfo)
+    return userInfo
   }
 
   async logout(): Promise<void> {
     const token = this.getAccessToken()
     
-    try {
-      if (token) {
-        await apiClient.logout(token)
-      }
-    } catch (error) {
-      console.error('Logout API call failed:', error)
+    if (token) {
+      await apiClient.logout(token).catch(() => {})
     }
 
     if (typeof window !== 'undefined') {

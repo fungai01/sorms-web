@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { verifyToken } from '@/lib/auth-utils'
 
-// POST /api/security/qr/verify
+// POST /api/system/security/qr/verify
 // Xác thực mã QR code từ user (chỉ Security role)
 export async function POST(req: NextRequest) {
   try {
@@ -14,7 +14,6 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Kiểm tra role - chỉ Security mới được xác thực QR
     const roles = userInfo.roles || userInfo.roleName || []
     const isSecurity = roles.some((r: string) => 
       r.toUpperCase().includes('SECURITY') || r.toUpperCase() === 'SECURITY'
@@ -42,7 +41,7 @@ export async function POST(req: NextRequest) {
     try {
       const decoded = Buffer.from(token, 'base64').toString('utf-8')
       payload = JSON.parse(decoded)
-    } catch (error) {
+    } catch {
       return NextResponse.json(
         { error: 'Invalid token format' },
         { status: 400 }
@@ -64,9 +63,7 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Verify booking exists and is valid
     // TODO: Call backend API to verify booking status
-    // For now, return the decoded payload
     return NextResponse.json({
       valid: true,
       bookingId: payload.bookingId,
@@ -81,14 +78,11 @@ export async function POST(req: NextRequest) {
       bookingCode: payload.bookingCode,
     })
   } catch (error: any) {
-    console.error('[QR Verify] Error:', error)
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }
     )
   }
 }
-
-
 
 

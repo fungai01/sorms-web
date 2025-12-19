@@ -144,26 +144,6 @@ export function mapServiceStatus(
   return statusMap[backendStatus] || 'AVAILABLE';
 }
 
-export const ERROR_MESSAGES: Record<string, string> = {
-  'SYSTEM_ERROR': 'Hệ thống đang gặp sự cố. Vui lòng thử lại sau.',
-  'S0001': 'Hệ thống đang gặp sự cố. Vui lòng thử lại sau.',
-  'E0001': 'Dữ liệu không hợp lệ.',
-  'E0002': 'Không tìm thấy dữ liệu.',
-  'E0003': 'Không có quyền truy cập.',
-  'E0004': 'Phiên đăng nhập đã hết hạn.',
-  'E0005': 'Lỗi kết nối cơ sở dữ liệu.',
-  'E0006': 'Dịch vụ tạm thời không khả dụng.',
-  'E0007': 'Dữ liệu đã tồn tại.',
-  'E0008': 'Dữ liệu không được phép xóa.',
-  'E0009': 'Lỗi xác thực.',
-  'E0010': 'Thao tác không được phép.',
-  'U0002': 'Email đã tồn tại trong hệ thống.',
-};
-
-export function getErrorMessage(errorCode: string, fallbackMessage?: string): string {
-  return ERROR_MESSAGES[errorCode] || fallbackMessage || 'Có lỗi xảy ra. Vui lòng thử lại.';
-}
-
 export function removeDuplicatesById<T extends { id: number | string }>(items: T[]): T[] {
   const seen = new Set<number | string>();
   return items.filter(item => {
@@ -181,5 +161,61 @@ export function sortByDateDesc<T extends { created_at?: string; createdDate?: st
     const dateB = new Date(b.created_at || b.createdDate || 0).getTime();
     return dateB - dateA;
   });
+}
+
+// Service filtering and sorting utilities
+export interface ServiceFilter {
+  id: number;
+  code: string;
+  name: string;
+  unitPrice: number;
+  unitName: string;
+  description?: string;
+  isActive: boolean;
+}
+
+export function filterServices<T extends ServiceFilter>(
+  services: T[],
+  query: string
+): T[] {
+  if (!query.trim()) return services;
+  
+  const q = query.trim().toLowerCase();
+  return services.filter(service =>
+    service.code.toLowerCase().includes(q) ||
+    service.name.toLowerCase().includes(q) ||
+    (service.description || '').toLowerCase().includes(q) ||
+    service.unitName.toLowerCase().includes(q)
+  );
+}
+
+export function sortServices<T extends ServiceFilter>(
+  services: T[],
+  sortKey: 'code' | 'name' | 'price',
+  sortOrder: 'asc' | 'desc'
+): T[] {
+  const dir = sortOrder === 'asc' ? 1 : -1;
+  return [...services].sort((a, b) => {
+    if (sortKey === 'code') {
+      return a.code.localeCompare(b.code) * dir;
+    }
+    if (sortKey === 'name') {
+      return a.name.localeCompare(b.name) * dir;
+    }
+    if (sortKey === 'price') {
+      return (a.unitPrice - b.unitPrice) * dir;
+    }
+    return 0;
+  });
+}
+
+export function filterAndSortServices<T extends ServiceFilter>(
+  services: T[],
+  query: string,
+  sortKey: 'code' | 'name' | 'price',
+  sortOrder: 'asc' | 'desc'
+): T[] {
+  const filtered = filterServices(services, query);
+  return sortServices(filtered, sortKey, sortOrder);
 }
 

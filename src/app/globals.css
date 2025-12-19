@@ -1,14 +1,67 @@
 @import "tailwindcss";
 
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 200 98% 35%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input-border: 214.3 31.8% 91.4%;
+    --ring: 200 98% 35%;
+    --radius: 0.5rem;
+    --page-bg: 217 100% 95%;
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 200 98% 35%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217.2 32.6% 17.5%;
+    --input-border: 217.2 32.6% 17.5%;
+    --ring: 200 98% 35%;
+  }
+}
+
+.header {
+  background: linear-gradient(90deg, #e6f1ff, #d6e4ff);
+}
+
 /* Context7 MCP inspired performance optimizations */
 html, body, #__next {
   height: 100%;
 }
 
 body {
-  @apply antialiased text-gray-900 bg-gray-50;
+  @apply antialiased;
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
-  /* Context7 MCP: Optimize font loading */
   font-display: swap;
 }
 
@@ -17,7 +70,20 @@ a {
 }
 
 button {
-  @apply inline-flex items-center justify-center rounded-md px-3 sm:px-4 py-1.5 sm:py-2 text-sm font-medium text-gray-900 bg-white hover:bg-gray-50 border border-gray-300 disabled:opacity-50 disabled:cursor-not-allowed;
+  @apply inline-flex items-center justify-center rounded-md px-3 sm:px-4 py-1.5 sm:py-2 text-sm font-medium;
+  background-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  border-radius: var(--radius);
+  transition-colors: 0.2s;
+}
+
+button:hover {
+  background-color: hsl(var(--primary) / 0.9);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Responsive utilities */
@@ -141,66 +207,7 @@ button {
   text-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
 }
 
-/* Utility Classes cho màu sắc trạng thái */
-.trang-thai-thanh-cong {
-  @apply bg-green-100 text-green-800 border-green-200;
-}
 
-.trang-thai-canh-bao {
-  @apply bg-yellow-100 text-yellow-800 border-yellow-200;
-}
-
-.trang-thai-loi {
-  @apply bg-red-100 text-red-800 border-red-200;
-}
-
-.trang-thai-thong-tin {
-  @apply bg-blue-100 text-blue-800 border-blue-200;
-}
-
-.trang-thai-cho-xu-ly {
-  @apply bg-orange-100 text-orange-800 border-orange-200;
-}
-
-.trang-thai-hoan-thanh {
-  @apply bg-green-100 text-green-800 border-green-200;
-}
-
-.trang-thai-huy-bo {
-  @apply bg-red-100 text-red-800 border-red-200;
-}
-
-.trang-thai-dang-thuc-hien {
-  @apply bg-blue-100 text-blue-800 border-blue-200;
-}
-
-.trang-thai-co-san {
-  @apply bg-green-100 text-green-800 border-green-200;
-}
-
-.trang-thai-da-thue {
-  @apply bg-red-100 text-red-800 border-red-200;
-}
-
-.trang-thai-bao-tri {
-  @apply bg-yellow-100 text-yellow-800 border-yellow-200;
-}
-
-.trang-thai-da-dat {
-  @apply bg-blue-100 text-blue-800 border-blue-200;
-}
-
-.trang-thai-da-thanh-toan {
-  @apply bg-green-100 text-green-800 border-green-200;
-}
-
-.trang-thai-chua-thanh-toan {
-  @apply bg-red-100 text-red-800 border-red-200;
-}
-
-.trang-thai-xac-nhan {
-  @apply bg-green-100 text-green-800 border-green-200;
-}
 
 /* Print optimizations for service orders */
 @media print {

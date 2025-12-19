@@ -17,7 +17,7 @@ function getUserInfo() {
 export async function getFaceStatus(bookingId: number) {
   const userInfo = getUserInfo()
   if (!userInfo?.id) {
-    throw new Error('Chưa đăng nhập')
+    throw new Error('Not authenticated')
   }
 
   const headers = getAuthHeaders()
@@ -34,7 +34,7 @@ export async function getFaceStatus(bookingId: number) {
       return { registered: false }
     }
     const error = await res.json().catch(() => ({}))
-    throw new Error(error.error || error.message || 'Không thể lấy trạng thái khuôn mặt')
+    throw new Error(error.error || error.message || `HTTP ${res.status}`)
   }
 
   const data = await res.json().catch(() => ({}))
@@ -47,7 +47,7 @@ export async function getFaceStatus(bookingId: number) {
 export async function registerFace(bookingId: number, formData: FormData) {
   const userInfo = getUserInfo()
   if (!userInfo?.id) {
-    throw new Error('Chưa đăng nhập')
+    throw new Error('Not authenticated')
   }
 
   const headers = getAuthHeaders()
@@ -67,8 +67,7 @@ export async function registerFace(bookingId: number, formData: FormData) {
     } catch {
       error = { message: errorText || `HTTP ${res.status}` }
     }
-    console.error('[Face Service] Register failed:', res.status, error)
-    throw new Error(error.error || error.message || `Không thể đăng ký khuôn mặt (${res.status})`)
+    throw new Error(error.error || error.message || `HTTP ${res.status}`)
   }
 
   return res.json()
@@ -77,7 +76,7 @@ export async function registerFace(bookingId: number, formData: FormData) {
 export async function updateFace(bookingId: number, formData: FormData) {
   const userInfo = getUserInfo()
   if (!userInfo?.id) {
-    throw new Error('Chưa đăng nhập')
+    throw new Error('Not authenticated')
   }
 
   const headers = getAuthHeaders()
@@ -92,7 +91,7 @@ export async function updateFace(bookingId: number, formData: FormData) {
 
   if (!res.ok) {
     const error = await res.json().catch(() => ({}))
-    throw new Error(error.error || error.message || 'Không thể cập nhật khuôn mặt')
+    throw new Error(error.error || error.message || `HTTP ${res.status}`)
   }
 
   return res.json()
@@ -101,7 +100,7 @@ export async function updateFace(bookingId: number, formData: FormData) {
 export async function deleteFace(bookingId: number) {
   const userInfo = getUserInfo()
   if (!userInfo?.id) {
-    throw new Error('Chưa đăng nhập')
+    throw new Error('Not authenticated')
   }
 
   const headers = getAuthHeaders()
@@ -121,7 +120,7 @@ export async function deleteFace(bookingId: number) {
       }
     }
     const error = await res.json().catch(() => ({}))
-    throw new Error(error.error || error.message || 'Không thể xóa khuôn mặt')
+    throw new Error(error.error || error.message || `HTTP ${res.status}`)
   }
 
   return res.json()

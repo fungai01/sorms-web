@@ -9,6 +9,7 @@ import { Card, CardBody } from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import Modal from "@/components/ui/Modal";
 import { apiClient } from "@/lib/api-client";
+import { authService } from "@/lib/auth-service";
 
 type ServiceOrderStatus = 'PENDING' | 'PENDING_STAFF_CONFIRMATION' | 'PENDING_PAYMENT' | 'CONFIRMED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED' | 'REJECTED' | 'FAILED';
 

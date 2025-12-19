@@ -2,16 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { authService } from "@/lib/auth-service";
+import { cookieManager, type AppRole as HttpAppRole } from "@/lib/http";
 
 export type AppRole = "admin" | "office" | "security" | "staff" | "user" | null;
-
-function readCookie(name: string): string | null {
-  if (typeof document === "undefined") return null;
-  const value = `; ${document.cookie}`;
-  const parts = value.split(`; ${name}=`);
-  if (parts.length === 2) return parts.pop()!.split(";").shift() || null;
-  return null;
-}
 
 export function useCurrentRole(): AppRole {
   const [role, setRole] = useState<AppRole>(null);
@@ -21,7 +14,7 @@ export function useCurrentRole(): AppRole {
     
     const loadRole = async () => {
       // Try multiple sources for role
-      const fromCookie = readCookie("role");
+      const fromCookie = cookieManager.getRole() as HttpAppRole | null;
       const fromStorage = localStorage.getItem("userRole");
       
       let currentRole = (fromCookie || fromStorage) as AppRole;
@@ -33,13 +26,9 @@ export function useCurrentRole(): AppRole {
           currentRole = userInfo.role as AppRole;
         } else {
           // Try introspect as last resort
-          try {
-            const introspectedUser = await authService.introspectToken();
-            if (introspectedUser?.role) {
-              currentRole = introspectedUser.role as AppRole;
-            }
-          } catch (error) {
-            console.error('Failed to introspect token:', error);
+          const introspectedUser = await authService.introspectToken();
+          if (introspectedUser?.role) {
+            currentRole = introspectedUser.role as AppRole;
           }
         }
       }

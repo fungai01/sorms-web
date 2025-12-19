@@ -1,23 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiClient } from '@/lib/api-client'
-import { isAdmin, verifyToken } from '@/lib/auth-utils'
+import { isAdmin } from '@/lib/auth-utils'
 
-// GET - Lấy danh sách roles hoặc role theo ID
+// GET - list roles or get by id
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url)
     const id = searchParams.get('id')
+    const authHeader = req.headers.get('authorization') || undefined
 
-    // Lấy role theo ID
     if (id) {
-      const response = await apiClient.getRole(id)
-      if (response.success) {
-        return NextResponse.json(response.data)
-      }
-      return NextResponse.json({ error: response.error }, { status: 500 })
+      const response = await apiClient.getRole(id, {
+        headers: authHeader ? { Authorization: authHeader } : undefined,
+      })
+      return response.success
+        ? NextResponse.json(response.data)
+        : NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
     }
 
-    // Lấy danh sách roles với search params
     const q = searchParams.get('q') || undefined
     let name = searchParams.get('name') || undefined
     let code = searchParams.get('code') || undefined
@@ -27,7 +27,6 @@ export async function GET(req: NextRequest) {
     const page = parseInt(searchParams.get('page') || '0')
     const size = parseInt(searchParams.get('size') || '10')
 
-    // Map q to name/code/description if provided (backend-style filtering)
     if (q) {
       if (!name) name = q
       if (!code) code = q
@@ -41,51 +40,49 @@ export async function GET(req: NextRequest) {
       isActive,
       page,
       size,
+    }, {
+      headers: authHeader ? { Authorization: authHeader } : undefined,
     })
 
-    if (response.success) {
-      const data: any = response.data
-      // Backend trả về PageResponse format
-      const items = Array.isArray(data?.content) ? data.content : (Array.isArray(data) ? data : [])
-      const total = data?.totalElements || data?.total || items.length
-      return NextResponse.json({ items, total })
+    if (!response.success) {
+      return NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
     }
 
-    return NextResponse.json({ error: response.error }, { status: 500 })
+    const data: any = response.data
+    const items = Array.isArray(data?.content) ? data.content : Array.isArray(data) ? data : []
+    const total = data?.totalElements || data?.total || items.length
+    return NextResponse.json({ items, total })
   } catch (error: any) {
-    console.error('GET /api/system/roles error:', error)
-    return NextResponse.json({ error: error.message || 'Internal server error' }, { status: 500 })
+    return NextResponse.json({ error: error?.message || 'Internal server error' }, { status: 500 })
   }
 }
 
-// POST - Tạo role mới
+// POST - create role
 export async function POST(req: NextRequest) {
   try {
-    // Yêu cầu quyền admin
-    if (!await isAdmin(req)) {
-      return NextResponse.json({ error: 'Unauthorized - Admin access required' }, { status: 403 })
+    if (!(await isAdmin(req))) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
     }
 
-    const body = await req.json()
+    const body = await req.json().catch(() => null)
+    if (!body || typeof body !== 'object') {
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+    }
     const response = await apiClient.createRole(body)
 
-    if (response.success) {
-      return NextResponse.json(response.data, { status: 201 })
-    }
-
-    return NextResponse.json({ error: response.error }, { status: 500 })
+    return response.success
+      ? NextResponse.json(response.data, { status: 201 })
+      : NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
   } catch (error: any) {
-    console.error('POST /api/system/roles error:', error)
-    return NextResponse.json({ error: error.message || 'Internal server error' }, { status: 500 })
+    return NextResponse.json({ error: error?.message || 'Internal server error' }, { status: 500 })
   }
 }
 
-// PUT - Cập nhật role hoặc activate/deactivate
+// PUT - update / activate / deactivate role
 export async function PUT(req: NextRequest) {
   try {
-    // Yêu cầu quyền admin
-    if (!await isAdmin(req)) {
-      return NextResponse.json({ error: 'Unauthorized - Admin access required' }, { status: 403 })
+    if (!(await isAdmin(req))) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
     }
 
     const { searchParams } = new URL(req.url)
@@ -96,45 +93,39 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: 'Role ID is required' }, { status: 400 })
     }
 
-    // Activate role
     if (action === 'activate') {
       const response = await apiClient.activateRole(id)
-      if (response.success) {
-        return NextResponse.json(response.data)
-      }
-      return NextResponse.json({ error: response.error }, { status: 500 })
+      return response.success
+        ? NextResponse.json(response.data)
+        : NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
     }
 
-    // Deactivate role
     if (action === 'deactivate') {
       const response = await apiClient.deactivateRole(id)
-      if (response.success) {
-        return NextResponse.json(response.data)
-      }
-      return NextResponse.json({ error: response.error }, { status: 500 })
+      return response.success
+        ? NextResponse.json(response.data)
+        : NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
     }
 
-    // Update role
-    const body = await req.json()
+    const body = await req.json().catch(() => null)
+    if (!body || typeof body !== 'object') {
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+    }
+
     const response = await apiClient.updateRole(id, body)
-
-    if (response.success) {
-      return NextResponse.json(response.data)
-    }
-
-    return NextResponse.json({ error: response.error }, { status: 500 })
+    return response.success
+      ? NextResponse.json(response.data)
+      : NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
   } catch (error: any) {
-    console.error('PUT /api/system/roles error:', error)
-    return NextResponse.json({ error: error.message || 'Internal server error' }, { status: 500 })
+    return NextResponse.json({ error: error?.message || 'Internal server error' }, { status: 500 })
   }
 }
 
-// DELETE - Xóa role
+// DELETE - delete role
 export async function DELETE(req: NextRequest) {
   try {
-    // Yêu cầu quyền admin
-    if (!await isAdmin(req)) {
-      return NextResponse.json({ error: 'Unauthorized - Admin access required' }, { status: 403 })
+    if (!(await isAdmin(req))) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
     }
 
     const { searchParams } = new URL(req.url)
@@ -146,13 +137,10 @@ export async function DELETE(req: NextRequest) {
 
     const response = await apiClient.deleteRole(id)
 
-    if (response.success) {
-      return NextResponse.json({ message: 'Role deleted successfully' })
-    }
-
-    return NextResponse.json({ error: response.error }, { status: 500 })
+    return response.success
+      ? NextResponse.json({ message: 'Role deleted successfully' })
+      : NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
   } catch (error: any) {
-    console.error('DELETE /api/system/roles error:', error)
-    return NextResponse.json({ error: error.message || 'Internal server error' }, { status: 500 })
+    return NextResponse.json({ error: error?.message || 'Internal server error' }, { status: 500 })
   }
 }

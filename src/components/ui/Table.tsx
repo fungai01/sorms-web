@@ -15,7 +15,7 @@ export function THead({ children }: { children: React.ReactNode }) {
 }
 
 export function TBody({ children }: { children: React.ReactNode }) {
-  return <tbody className="divide-y divide-gray-200 bg-white text-xs sm:text-sm text-gray-900 text-center">{children}</tbody>;
+  return <tbody className="divide-y divide-gray-200 text-xs sm:text-sm text-gray-900 text-center">{children}</tbody>;
 }
 
 

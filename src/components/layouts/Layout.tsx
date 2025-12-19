@@ -6,7 +6,8 @@ import Sidebar from "@/components/ui/Sidebar";
 import Footer from "@/components/ui/Footer";
 import { useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
-import RoleGuard from "./RoleGuard";
+import RoleGuard from "./Role";
+
 interface ConditionalLayoutProps {
   children: ReactNode;
 }
@@ -59,11 +60,10 @@ function ConditionalLayoutContent({ children }: ConditionalLayoutProps) {
       
       if (storedName && storedRole) {
         const roleMap = {
-          'admin': 'Administrator',
-          'office': 'Office Staff', 
-          'lecturer': 'Lecturer',
-          'staff': 'Staff',
-          'guest': 'Guest'
+          'admin': 'Quản trị hệ thống',
+          'office': 'Văn phòng',
+          'staff': 'Nhân viên',
+          'user': 'Người dùng'
         };
         setUser({ 
           name: storedName, 
@@ -97,8 +97,8 @@ function ConditionalLayoutContent({ children }: ConditionalLayoutProps) {
         />
       </div>
       
-      {/* Main Content Area - Pushed to right */}
-      <div className={`lg:transition-all lg:duration-300 ${sidebarCollapsed ? 'lg:ml-16 xl:ml-20' : 'lg:ml-64 xl:ml-72'}`} suppressHydrationWarning>
+      {/* Main Content Area - Pushed to right on desktop only */}
+      <div className={`lg:transition-all lg:duration-300 ${sidebarCollapsed ? 'lg:ml-16 xl:ml-20' : 'lg:ml-64 xl:ml-72'} ml-0`} suppressHydrationWarning>
         {/* Header */}
         <div className="sticky top-0 z-30" suppressHydrationWarning>
           <Header onToggleSidebar={() => {
@@ -127,12 +127,13 @@ function ConditionalLayoutContent({ children }: ConditionalLayoutProps) {
       {sidebarOpen && (
         <div className="fixed inset-0 z-40 lg:hidden">
           <div className="fixed inset-0 bg-black bg-opacity-20" onClick={() => setSidebarOpen(false)} />
-          <div className="relative flex-1 flex flex-col max-w-xs sm:max-w-sm w-full bg-white">
+          <div className="relative flex-1 flex flex-col max-w-xs sm:max-w-sm w-full bg-white shadow-xl">
             <Sidebar 
               user={user || undefined} 
               isVisible={true} 
               collapsed={false}
               onToggle={() => setSidebarOpen(false)}
+              isMobile={true}
             />
           </div>
         </div>

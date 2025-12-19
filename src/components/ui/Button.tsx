@@ -9,20 +9,23 @@ export default function Button({
   variant = "primary",
   ...props
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant }) {
+  const baseStyles = "inline-flex items-center justify-center gap-1 sm:gap-2 rounded-md px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-xs sm:text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap";
+
   const styles: Record<Variant, string> = {
     primary:
-      "bg-gray-700 hover:bg-gray-800 text-white shadow-sm",
+      // Soft blue primary based on CSS variable (blue-400) with a slightly darker hover
+      "bg-primary text-primary-foreground hover:bg-primary/90",
     secondary:
-      "bg-white hover:bg-gray-50 text-gray-900 border border-gray-300",
+      "bg-secondary text-secondary-foreground hover:bg-secondary/80 border border-input-border",
     danger:
-      "bg-red-600 hover:bg-red-700 text-white shadow-sm",
+      "bg-destructive text-destructive-foreground hover:bg-destructive/90",
     ghost:
-      "bg-transparent hover:bg-gray-50 text-gray-700 border-0",
+      "bg-transparent hover:bg-accent hover:text-accent-foreground",
   };
   return (
     <button
       className={clsx(
-        "inline-flex items-center justify-center gap-1 sm:gap-2 rounded-md px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-xs sm:text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap",
+        baseStyles,
         styles[variant],
         className
       )}
@@ -32,7 +35,4 @@ export default function Button({
     </button>
   );
 }
-
-
-
 

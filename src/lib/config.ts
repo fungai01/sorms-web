@@ -1,17 +1,20 @@
 export const API_CONFIG = {
   BASE_URL: (() => {
-    const rawUrl = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || 'https://backend.sorms.online/api'
+    // Use environment variable if set, otherwise use default based on NODE_ENV
+    const defaultUrl = process.env.NODE_ENV === 'production' 
+      ? 'https://backend.sorms.online/api'
+      : 'http://103.81.87.99:5656/api'
+    
+    const rawUrl = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || defaultUrl
     const normalized = rawUrl.endsWith('/') ? rawUrl.slice(0, -1) : rawUrl
     try {
       const url = new URL(normalized)
       if (!['http:', 'https:'].includes(url.protocol)) {
-        console.error('Invalid API URL scheme:', url.protocol)
-        return 'https://backend.sorms.online/api'
+        return defaultUrl
       }
       return normalized
     } catch {
-      console.error('Invalid API URL format:', rawUrl)
-      return 'https://backend.sorms.online/api'
+      return defaultUrl
     }
   })(),
   ENDPOINTS: {
@@ -31,6 +34,3 @@ export const API_CONFIG = {
     DELAY: 1000,
   },
 }
-
-export const isDevelopment = process.env.NODE_ENV === 'development'
-export const isProduction = process.env.NODE_ENV === 'production'

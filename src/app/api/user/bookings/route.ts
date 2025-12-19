@@ -2,34 +2,16 @@ import { NextRequest, NextResponse } from 'next/server'
 import { verifyToken } from '@/lib/auth-utils'
 import { apiClient } from '@/lib/api-client'
 
-// Helper: kiểm tra booking thuộc về user hiện tại
-async function ensureBookingOwnership(bookingId: number, userId: number) {
-  const bookingRes = await apiClient.getBooking(bookingId)
-  if (!bookingRes.success || !bookingRes.data) {
-    throw new Error('Booking not found')
-  }
-  const booking: any = bookingRes.data
-  if (String(booking.userId) !== String(userId)) {
-    throw new Error('Forbidden')
-  }
-  return booking
-}
-
 // GET /api/user/bookings
-// Trả về danh sách booking của chính user đang đăng nhập
-// GET /api/user/bookings?id=[bookingId]
-// Trả về thông tin booking cụ thể nếu có query parameter id
-// GET /api/user/bookings?bookingId=[bookingId]&action=qr
-// Lấy mã QR
+// - Without params: list bookings of current user
+// - ?id=[bookingId]: single booking of current user
+// - ?bookingId=[bookingId]&action=qr: QR token for that booking
 export async function GET(req: NextRequest) {
   try {
     const userInfo = await verifyToken(req)
 
     if (!userInfo?.id) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      )
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
     const { searchParams } = new URL(req.url)
@@ -37,7 +19,6 @@ export async function GET(req: NextRequest) {
     const action = searchParams.get('action')
     const status = searchParams.get('status')
 
-    // Xử lý action=qr
     if (action === 'qr' && bookingIdParam) {
       const bookingId = Number(bookingIdParam)
       if (!bookingId || Number.isNaN(bookingId)) {
@@ -66,8 +47,8 @@ export async function GET(req: NextRequest) {
         checkoutDate: booking.checkoutDate,
         numGuests: booking.numGuests,
         note: booking.note,
-        bookingCreatedAt: booking.createdAt || booking.created_at || new Date().toISOString(), // Ngày giờ đặt phòng
-        bookingDate: booking.createdAt || booking.created_at || new Date().toISOString(), // Alias for compatibility
+        bookingCreatedAt: booking.createdAt || booking.created_at || new Date().toISOString(),
+        bookingDate: booking.createdAt || booking.created_at || new Date().toISOString(),
       }
 
       const json = JSON.stringify(payload)
@@ -76,7 +57,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({
         payload,
         token: base64,
-        qrImageUrl: booking.qrImageUrl || null, // Trả về qrImageUrl từ backend nếu có
+        qrImageUrl: booking.qrImageUrl || null,
         bookingData: {
           userName: booking.userName,
           userEmail: booking.userEmail,
@@ -84,11 +65,10 @@ export async function GET(req: NextRequest) {
           roomNumber: booking.roomCode,
           checkInTime: booking.checkinDate,
           checkOutTime: booking.checkoutDate,
-        }
+        },
       })
     }
 
-    // Nếu có bookingId (không có action), trả về booking cụ thể
     if (bookingIdParam && !action) {
       const bookingId = Number(bookingIdParam)
       if (!bookingId || Number.isNaN(bookingId)) {
@@ -108,21 +88,15 @@ export async function GET(req: NextRequest) {
       return NextResponse.json(booking)
     }
 
-    // Nếu không có bookingId, trả về danh sách bookings của user hiện tại
-    // Sử dụng getBookingsByUser để đảm bảo backend filter theo userId
     const userId = userInfo.id
     if (!userId) {
-      return NextResponse.json(
-        { error: 'Invalid user ID' },
-        { status: 400 }
-      )
+      return NextResponse.json({ error: 'Invalid user ID' }, { status: 400 })
     }
 
     const response = await apiClient.getBookingsByUser(userId)
-
     if (!response.success) {
       return NextResponse.json(
-        { error: response.error || 'Failed to fetch user bookings' },
+        { error: response.error || 'Request failed' },
         { status: 500 }
       )
     }
@@ -130,23 +104,14 @@ export async function GET(req: NextRequest) {
     let data = (response.data || []) as any[]
 
     if (status) {
-      data = data.filter(b => String(b.status) === status)
+      data = data.filter((b) => String(b.status) === status)
     }
 
     return NextResponse.json(data)
   } catch (error: any) {
-    if (error instanceof Error && error.message === 'Forbidden') {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
-    if (error instanceof Error && error.message === 'Booking not found') {
-      return NextResponse.json({ error: 'Booking not found' }, { status: 404 })
-    }
-    console.error('[User Bookings] GET error:', error)
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { error: error?.message || 'Internal server error' },
       { status: 500 }
     )
   }
 }
-
-

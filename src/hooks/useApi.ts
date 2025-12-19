@@ -1,52 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
 import { apiClient, ApiResponse } from '@/lib/api-client'
-import { authService } from '@/lib/auth-service'
 
 interface UseApiState<T> {
   data: T | null
   loading: boolean
   error: string | null
   refetch: () => Promise<void>
-}
-
-// Helper function để serialize error values an toàn
-function serializeErrorValue(value: any): string {
-  if (value === null) return 'null'
-  if (value === undefined) return 'undefined'
-  if (typeof value === 'string') return value || '(empty string)'
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
-  
-  // Xử lý objects và arrays
-  try {
-    const serialized = JSON.stringify(value, null, 2)
-    return serialized || '(empty object)'
-  } catch (e) {
-    // Tránh circular references
-    try {
-      return String(value)
-    } catch {
-      return '[Unable to serialize error value]'
-    }
-  }
-}
-
-// Helper function để xác định endpoint name
-function getEndpointName(apiCall: () => Promise<any>): string {
-  // Thử lấy function name trước
-  if (apiCall.name && apiCall.name !== '') {
-    return apiCall.name
-  }
-  
-  // Thử lấy thông tin từ function string representation
-  const funcString = apiCall.toString()
-  if (funcString.includes('apiClient.')) {
-    const match = funcString.match(/apiClient\.(\w+)/)
-    if (match && match[1]) {
-      return match[1]
-    }
-  }
-  
-  return 'unknown-endpoint'
 }
 
 export function useApi<T>(
@@ -66,57 +25,14 @@ export function useApi<T>(
       if (response.success) {
         setData(response.data || null)
       } else {
-        // Better error handling with more context
-        let errorMessage = 'API call failed'
-        
-        if (response.error) {
-          if (typeof response.error === 'string') {
-            errorMessage = response.error.trim() || 'API call failed'
-          } else if (typeof response.error === 'object' && response.error !== null) {
-            // Handle object errors
-            const errorObj = response.error as any
-            if (errorObj.message) {
-              errorMessage = String(errorObj.message).trim() || 'API call failed'
-            } else if (errorObj.error) {
-              errorMessage = String(errorObj.error).trim() || 'API call failed'
-            } else {
-              // Try to stringify the object
-              try {
-                const serialized = JSON.stringify(response.error)
-                errorMessage = serialized || 'API call failed'
-              } catch {
-                errorMessage = 'Unknown error object'
-              }
-            }
-          }
-        }
-        
-        // Đảm bảo errorMessage không bao giờ rỗng
-        if (!errorMessage || errorMessage.trim() === '') {
-          errorMessage = 'API call failed'
-        }
-        
-        // Tạo error object với tất cả properties có giá trị hợp lệ
-        const endpointName = getEndpointName(apiCall)
-        const serializedOriginalError = response.error ? serializeErrorValue(response.error) : 'none'
-        
-        console.error('API Error:', {
-          message: errorMessage,
-          originalError: serializedOriginalError,
-          timestamp: new Date().toISOString(),
-          endpoint: endpointName
-        })
+        const errorMessage =
+          typeof response.error === 'string' && response.error.trim()
+            ? response.error.trim()
+            : ''
         setError(errorMessage)
       }
     } catch (err) {
-      // This should rarely happen now since we handle errors in apiClient
-      const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred'
-      console.error('Unexpected API Error:', {
-        message: errorMessage,
-        error: serializeErrorValue(err),
-        timestamp: new Date().toISOString(),
-        endpoint: getEndpointName(apiCall)
-      })
+      const errorMessage = err instanceof Error ? err.message : ''
       setError(errorMessage)
     } finally {
       setLoading(false)
@@ -147,10 +63,10 @@ async function fetchFromProxy<T>(endpoint: string): Promise<{ success: boolean; 
     })
 
     if (!res.ok) {
-      const errorData = await res.json().catch(() => ({ error: 'Request failed' }))
+      const errorData = await res.json().catch(() => ({ error: '' }))
       return {
         success: false,
-        error: errorData.error || `HTTP ${res.status}`
+        error: errorData.error || ''
       }
     }
 
@@ -162,7 +78,7 @@ async function fetchFromProxy<T>(endpoint: string): Promise<{ success: boolean; 
   } catch (error) {
     return {
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error'
+      error: error instanceof Error ? error.message : ''
     }
   }
 }
@@ -170,7 +86,7 @@ async function fetchFromProxy<T>(endpoint: string): Promise<{ success: boolean; 
 // Normalize list results to always return an array
 async function fetchList<T = any>(endpoint: string): Promise<ApiResponse<T[]>> {
   const res = await fetchFromProxy<any>(endpoint)
-  if (!res.success) return { success: false, error: res.error || 'Request failed' }
+  if (!res.success) return { success: false, error: res.error || '' }
   const d = res.data
   const items: T[] = Array.isArray(d?.items)
     ? d.items
@@ -222,7 +138,8 @@ export function useBookings(status?: string) {
       ? `/api/system/bookings?status=${encodeURIComponent(status)}`
       : '/api/system/bookings'
 
-  return useApi(() => fetchFromProxy(endpoint), [endpoint])
+  // Use fetchList to normalize response to array format (same as useRoomsFiltered)
+  return useApi(() => fetchList(endpoint), [endpoint])
 }
 
 // Dành riêng cho dashboard user: lấy toàn bộ bookings để tính toán phòng trống
@@ -234,12 +151,28 @@ export function useUserBookings() {
   return useApi(() => fetchFromProxy('/api/user/bookings'))
 }
 
-export function useServices() {
-  return useApi(() => fetchList('/api/system/services'))
+export function useServices(params?: { q?: string; sortBy?: string; sortOrder?: string; isActive?: boolean }) {
+  const queryParams = new URLSearchParams()
+  if (params?.q) queryParams.set('q', params.q)
+  if (params?.sortBy) queryParams.set('sortBy', params.sortBy)
+  if (params?.sortOrder) queryParams.set('sortOrder', params.sortOrder)
+  if (params?.isActive !== undefined) queryParams.set('isActive', params.isActive.toString())
+  const endpoint = `/api/system/services${queryParams.toString() ? `?${queryParams.toString()}` : ''}`
+  return useApi(() => fetchList(endpoint), [endpoint])
 }
 
-export function useServiceOrders() {
-  return useApi(() => fetchList('/api/user/orders'))
+export function useServiceOrders(status?: string) {
+  // Backend doesn't have direct GET /orders endpoint
+  // Use Next.js API route which proxies to backend
+  const endpoint = status && status !== 'ALL'
+    ? `/api/system/orders?status=${encodeURIComponent(status)}`
+    : '/api/system/orders'
+  return useApi(() => fetchList(endpoint), [endpoint])
+}
+
+export function useServiceOrdersByBooking(bookingId: number) {
+  const endpoint = `/api/system/orders?my=true&bookingId=${bookingId}`
+  return useApi(() => fetchList(endpoint), [bookingId])
 }
 
 export function useStaffUsers() {
@@ -269,27 +202,46 @@ export function useStaffProfiles() {
 }
 
 export function useStaffProfilesFiltered(status?: string, department?: string) {
-  const params = new URLSearchParams()
-  if (status && status !== 'ALL') params.set('status', status)
-  if (department && department !== 'ALL') params.set('department', department)
-  const endpoint = `/api/system/staff-profiles${params.toString() ? `?${params.toString()}` : ''}`
-  return useApi(() => fetchFromProxy(endpoint), [endpoint])
+  // Prefer normalized API from apiClient, with optional filters
+  return useApi(() => {
+    if (status && status !== 'ALL') {
+      return apiClient.getStaffProfilesByStatus(status)
+    }
+    if (department && department !== 'ALL') {
+      return apiClient.getStaffProfilesByDepartment(department)
+    }
+    return apiClient.getStaffProfiles()
+  }, [status, department])
 }
 
-// Users management
-export function useUsers(role?: string, page?: number, size?: number, keyword?: string) {
-  const params = new URLSearchParams()
-  if (role) params.set('role', role)
-  if (page !== undefined) params.set('page', String(page))
-  if (size !== undefined) params.set('size', String(size))
-  if (keyword) params.set('q', keyword)
-  const endpoint = `/api/system/users${params.toString() ? `?${params.toString()}` : ''}`
+// Users management - filters are forwarded to backend via Next.js API route
+export function useUsers(params?: { role?: string; status?: string; page?: number; size?: number; keyword?: string }) {
+  const query = new URLSearchParams()
+  if (params?.role) query.set('role', params.role)
+  if (params?.status && params.status !== 'ALL') query.set('status', params.status)
+  if (params?.page !== undefined) query.set('page', String(params.page))
+  if (params?.size !== undefined) query.set('size', String(params.size))
+  if (params?.keyword) query.set('q', params.keyword)
+  const endpoint = `/api/system/users${query.toString() ? `?${query.toString()}` : ''}`
   return useApi(() => fetchFromProxy(endpoint), [endpoint])
 }
 
 // Staff tasks
-export function useStaffTasks() {
-  return useApi(() => fetchFromProxy('/api/system/tasks'))
+export function useStaffTasks(params?: { 
+  status?: string
+  assignedTo?: number
+  relatedType?: string
+  relatedId?: number
+}) {
+  const queryParams = new URLSearchParams()
+  if (params?.status && params.status !== 'ALL') queryParams.set('status', params.status)
+  if (params?.assignedTo) queryParams.set('assignedTo', String(params.assignedTo))
+  if (params?.relatedType && params?.relatedId) {
+    queryParams.set('relatedType', params.relatedType)
+    queryParams.set('relatedId', String(params.relatedId))
+  }
+  const endpoint = `/api/system/tasks${queryParams.toString() ? `?${queryParams.toString()}` : ''}`
+  return useApi(() => fetchList(endpoint), [endpoint])
 }
 
 // Roles management
@@ -302,7 +254,7 @@ export function useRoles(params?: { q?: string; page?: number; size?: number }) 
   return useApi(() => fetchFromProxy(endpoint), [endpoint])
 }
 
-// Payments (list via FE API route)
+// Payments - use backend API via apiClient (normalized)
 export function usePayments() {
-  return useApi(() => fetchFromProxy('/api/system/payments'))
+  return useApi(() => apiClient.getPaymentTransactions())
 }

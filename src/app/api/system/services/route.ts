@@ -1,171 +1,115 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiClient } from '@/lib/api-client'
-import { isAdmin } from '@/lib/auth-utils'
+import { isAdmin, getAuthorizationHeader } from '@/lib/auth-utils'
 
-// GET - Fetch all services or specific service by ID
+// GET - list services or get by id
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const id = searchParams.get('id');
+    const { searchParams } = new URL(req.url)
+    const id = searchParams.get('id')
 
-    // Get specific service by ID
+    const authHeader = getAuthorizationHeader(req)
+    const options: RequestInit = authHeader ? { headers: { Authorization: authHeader } } : {}
+
     if (id) {
-      const serviceId = parseInt(id);
-      if (isNaN(serviceId)) {
-        return NextResponse.json({ error: 'Invalid service ID' }, { status: 400 });
+      const serviceId = Number(id)
+      if (!serviceId || Number.isNaN(serviceId)) {
+        return NextResponse.json({ error: 'Invalid service ID' }, { status: 400 })
       }
-      const response = await apiClient.getService(serviceId);
-      if (response.success) {
-        return NextResponse.json(response.data);
-      }
-      return NextResponse.json({ error: response.error }, { status: 500 });
+      const response = await apiClient.getService(serviceId, options as any)
+      return response.success
+        ? NextResponse.json(response.data)
+        : NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
     }
 
-    // Get all services (default)
-    const response = await apiClient.getServices()
-    
+    // Note: Backend services API may not support query params for filter/sort
+    // If backend supports, we can add params here. For now, get all services
+    // and filter/sort will be done client-side using lib/utils functions
+    const response = await apiClient.getServices(options as any)
     if (!response.success) {
-      return NextResponse.json(
-        { error: response.error || 'Failed to fetch services' }, 
-        { status: 500 }
-      )
+      console.error('GET /api/system/services error:', response.error)
+      return NextResponse.json({ 
+        error: response.error || 'Request failed',
+        details: response.error 
+      }, { status: 500 })
     }
     
     const raw: any = response.data
-    const items = Array.isArray(raw?.content) ? raw.content : (Array.isArray(raw) ? raw : [])
-    
-    // Add caching headers - cache for 60 seconds (services don't change often)
+    const items = Array.isArray(raw?.content) ? raw.content : Array.isArray(raw) ? raw : []
     return NextResponse.json(
       { items, total: items.length },
       {
         headers: {
-          'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=120',
+          'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0',
         },
       }
     )
-  } catch (error) {
-    console.error('Services API error:', error)
-    return NextResponse.json(
-      { error: 'Internal server error' }, 
-      { status: 500 }
-    )
+  } catch (error: any) {
+    console.error('GET /api/system/services exception:', error)
+    return NextResponse.json({ 
+      error: error?.message || 'Internal server error',
+      details: error?.stack || String(error)
+    }, { status: 500 })
   }
 }
 
 export async function POST(req: NextRequest) {
-  if (!await isAdmin(req)) {
-    return NextResponse.json({ error: 'Unauthorized - Admin access required' }, { status: 403 })
+  if (!(await isAdmin(req))) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
   }
-  let body
   try {
-    body = await req.json()
-    console.log('POST /api/system/services - Request body:', JSON.stringify(body, null, 2))
-  } catch (parseError) {
-    console.error('POST /api/system/services - Failed to parse request body:', parseError)
-    return NextResponse.json(
-      { error: 'Invalid request body. Expected JSON format.' },
-      { status: 400 }
-    )
-  }
-
-  try {
+    const body = await req.json().catch(() => null)
+    if (!body || typeof body !== 'object') {
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+    }
     const response = await apiClient.createService(body)
-    console.log('POST /api/system/services - API response:', JSON.stringify(response, null, 2))
-
-    if (!response.success) {
-      const errorMessage = response.error || 'Failed to create service'
-      console.error('POST /api/system/services - API error:', errorMessage)
-      console.error('POST /api/system/services - Full error response:', response)
-      return NextResponse.json(
-        { error: errorMessage },
-        { status: 500 }
-      )
-    }
-
-    console.log('POST /api/system/services - Success:', response.data)
-    return NextResponse.json(response.data, { status: 201 })
-  } catch (error) {
-    // Log chi tiết error để debug
-    console.error('Create service API error - Error type:', error instanceof Error ? error.constructor.name : typeof error)
-    console.error('Create service API error - Error message:', error instanceof Error ? error.message : String(error))
-    console.error('Create service API error - Error stack:', error instanceof Error ? error.stack : 'No stack trace')
-    console.error('Create service API error - Full error object:', error)
-    
-    // Xác định error message phù hợp
-    let errorMessage = 'Internal server error'
-    if (error instanceof Error) {
-      errorMessage = error.message || 'Internal server error'
-    } else if (typeof error === 'string') {
-      errorMessage = error
-    }
-    
-    return NextResponse.json(
-      { error: errorMessage },
-      { status: 500 }
-    )
+    return response.success
+      ? NextResponse.json(response.data, { status: 201 })
+      : NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
+  } catch (error: any) {
+    return NextResponse.json({ error: error?.message || 'Internal server error' }, { status: 500 })
   }
 }
 
 export async function PUT(req: NextRequest) {
-  if (!await isAdmin(req)) {
-    return NextResponse.json({ error: 'Unauthorized - Admin access required' }, { status: 403 })
+  if (!(await isAdmin(req))) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
   }
   try {
-    const body = await req.json()
-    console.log('PUT /api/system/services - Request body:', body)
-    
-    const response = await apiClient.updateService(body.id, body)
-    console.log('PUT /api/system/services - API response:', response)
-    
-    if (!response.success) {
-      console.error('PUT /api/system/services - API error:', response.error)
-      return NextResponse.json(
-        { error: response.error || 'Failed to update service' }, 
-        { status: 500 }
-      )
+    const body = await req.json().catch(() => null)
+    if (!body || typeof body !== 'object' || !body.id) {
+      return NextResponse.json({ error: 'Invalid JSON body or missing id' }, { status: 400 })
     }
-    
-    return NextResponse.json(response.data)
-  } catch (error) {
-    console.error('Update service API error:', error)
-    return NextResponse.json(
-      { error: 'Internal server error' }, 
-      { status: 500 }
-    )
+    const response = await apiClient.updateService(body.id, body)
+    return response.success
+      ? NextResponse.json(response.data)
+      : NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
+  } catch (error: any) {
+    return NextResponse.json({ error: error?.message || 'Internal server error' }, { status: 500 })
   }
 }
 
 export async function DELETE(req: NextRequest) {
-  if (!await isAdmin(req)) {
-    return NextResponse.json({ error: 'Unauthorized - Admin access required' }, { status: 403 })
+  if (!(await isAdmin(req))) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
   }
   try {
-    const { searchParams } = new URL(req.url);
-    const id = searchParams.get('id');
-    
+    const { searchParams } = new URL(req.url)
+    const id = searchParams.get('id')
     if (!id) {
-      return NextResponse.json({ error: 'Service ID is required for deletion' }, { status: 400 });
+      return NextResponse.json({ error: 'Service ID is required' }, { status: 400 })
     }
-    
-    const serviceId = parseInt(id);
-    if (isNaN(serviceId)) {
-      return NextResponse.json({ error: 'Invalid service ID' }, { status: 400 });
+    const serviceId = Number(id)
+    if (!serviceId || Number.isNaN(serviceId)) {
+      return NextResponse.json({ error: 'Invalid service ID' }, { status: 400 })
     }
-    
-    const response = await apiClient.deleteService(serviceId);
-    if (response.success) {
-      return NextResponse.json({ message: 'Service deleted successfully' });
-    }
-    return NextResponse.json({ error: response.error }, { status: 500 });
-  } catch (error) {
-    console.error('Delete service API error:', error)
-    return NextResponse.json(
-      { error: 'Internal server error' }, 
-      { status: 500 }
-    )
+    const response = await apiClient.deleteService(serviceId)
+    return response.success
+      ? NextResponse.json({ message: 'Service deleted successfully' })
+      : NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
+  } catch (error: any) {
+    return NextResponse.json({ error: error?.message || 'Internal server error' }, { status: 500 })
   }
 }
-
-
-
-

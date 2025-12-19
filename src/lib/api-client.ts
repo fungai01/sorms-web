@@ -2,7 +2,8 @@
 import { API_CONFIG } from './config'
 import { authService } from './auth-service'
 import { authFetch } from './http'
-import { generateBookingCode, getErrorMessage } from './utils'
+import { generateBookingCode } from './utils'
+import type { StaffProfile } from './types'
 
 const API_BASE_URL = API_CONFIG.BASE_URL
 
@@ -29,58 +30,37 @@ class ApiClient {
       const baseURLWithoutTrailingSlash = this.baseURL.endsWith('/') ? this.baseURL.slice(0, -1) : this.baseURL
       const endpointWithLeadingSlash = endpoint.startsWith('/') ? endpoint : `/${endpoint}`
       const url = `${baseURLWithoutTrailingSlash}${endpointWithLeadingSlash}`
-      const incomingHeaders = options.headers as Record<string, string> | Headers | undefined
-      let authHeaderFromOptions: string | null = null
-      
-      if (incomingHeaders) {
-        if (incomingHeaders instanceof Headers) {
-          authHeaderFromOptions = incomingHeaders.get('authorization') || 
-                                  incomingHeaders.get('Authorization') ||
-                                  incomingHeaders.get('AUTHORIZATION') ||
-                                  null
-        } else if (typeof incomingHeaders === 'object') {
-          authHeaderFromOptions = incomingHeaders['authorization'] || 
-                                  incomingHeaders['Authorization'] || 
-                                  incomingHeaders['AUTHORIZATION'] ||
-                                  null
+      const getAuthHeader = (h: HeadersInit | undefined): string | null => {
+        if (!h) return null
+        if (h instanceof Headers) return h.get('authorization')
+        if (Array.isArray(h)) {
+          const entry = h.find(([k]) => k?.toLowerCase() === 'authorization')
+          return entry ? (entry[1] as string | null) ?? null : null
         }
+        if (typeof h === 'object') {
+          const key = Object.keys(h).find(k => k.toLowerCase() === 'authorization')
+          return key ? ((h as Record<string, string | null | undefined>)[key] ?? null) : null
+        }
+        return null
       }
+      
+      const authHeaderFromOptions = getAuthHeader(options.headers)
       
       let token: string | null = null
       
       if (authHeaderFromOptions && authHeaderFromOptions.startsWith('Bearer ')) {
         token = authHeaderFromOptions.substring(7)
       } else {
-        try {
           const userInfo = authService.getUserInfo()
           if (userInfo && (userInfo as any).token) {
             token = (userInfo as any).token
           }
-        } catch {}
         
         if (!token) {
           token = authService.getAccessToken()
         }
         
-        if (!token) {
-          try {
-            const mod: any = await import('next/headers')
-            if (typeof mod.cookies === 'function') {
-              const maybePromise = mod.cookies()
-              const cookieStore =
-                typeof maybePromise?.then === 'function' ? await maybePromise : maybePromise
-              
-              const cookieToken = cookieStore?.get?.('access_token')?.value || 
-                                 cookieStore?.get?.('auth_access_token')?.value
-              
-              if (cookieToken) {
-                token = cookieToken
-              }
-            }
-          } catch (e) {
-            // ignore
-          }
-        }
+        // On the server, prefer passing Authorization header explicitly instead of reading cookies here.
       }
       
       const publicEndpoints = [
@@ -91,10 +71,6 @@ class ApiClient {
       ]
       
       const isPublicEndpoint = publicEndpoints.some(publicPath => endpoint.includes(publicPath))
-      
-      if (!token && !isPublicEndpoint) {
-        console.warn('[API Client] No access token available for request:', endpoint)
-      }
       
       let mergedHeaders: Record<string, string> = {
         'Content-Type': 'application/json',
@@ -135,45 +111,22 @@ class ApiClient {
       })
       
       if (!response.ok) {
-        const alreadyRetried = (options as any)?._retried === true
-        if (response.status === 401 && typeof window !== 'undefined' && !alreadyRetried) {
+        let errorMessage = response.statusText || `HTTP error! status: ${response.status}`
+        const rawResponseText = await response.text().catch(() => '')
+        let parsed: any = null
+        if (rawResponseText) {
           try {
-            await authService.refreshAccessToken()
-            const retryOptions: RequestInit & { _retried?: boolean } = { ...(options || {}), _retried: true }
-            return await this.request<T>(endpoint, retryOptions)
-          } catch (refreshErr) {
-            console.error('[API Client] Refresh token failed:', refreshErr)
-          }
+            parsed = JSON.parse(rawResponseText)
+          } catch {}
         }
-
-        let errorMessage = `HTTP error! status: ${response.status}`
-        let errorData: any = null
-        let rawResponseText: string = ''
-        try {
-          const responseClone = response.clone()
-          rawResponseText = await responseClone.text()
-          try {
-            errorData = JSON.parse(rawResponseText)
-          } catch (parseErr) {
-            errorMessage = rawResponseText || errorMessage
-          }
-          
-          if (errorData) {
-            if (errorData.responseCode) {
-              errorMessage = getErrorMessage(
-                String(errorData.responseCode),
-                errorData.message || errorData.error || ''
-              )
-            } else if (errorData.message) {
-              errorMessage = errorData.message
-            } else if (errorData.error) {
-              const mappedError = getErrorMessage(String(errorData.error), '')
-              errorMessage = mappedError !== 'Có lỗi xảy ra. Vui lòng thử lại.' ? mappedError : errorData.error
-            }
-          }
-        } catch (parseError) {
-          console.error(`[API Client] ${endpoint} - Failed to parse error response:`, parseError)
-          errorMessage = response.statusText || errorMessage
+        if (parsed?.message) {
+          errorMessage = parsed.message
+        } else if (parsed?.error) {
+          errorMessage = String(parsed.error)
+        } else if (parsed?.responseCode) {
+          errorMessage = String(parsed.responseCode)
+        } else if (rawResponseText) {
+          errorMessage = rawResponseText
         }
         
         return {
@@ -191,28 +144,17 @@ class ApiClient {
             data: data.data,
           }
         } else {
-          const errorMessage = getErrorMessage(
-            String(data.responseCode),
-            data.message || data.error || ''
-          )
           return {
             success: false,
-            error: String(errorMessage),
+            error: String(data.message || data.error || data.responseCode),
           }
         }
       }
       
       if (data.error) {
-        const mappedError = getErrorMessage(String(data.error), data.message || '')
-        if (mappedError !== 'Có lỗi xảy ra. Vui lòng thử lại.') {
           return {
             success: false,
-            error: String(mappedError),
-          }
-        }
-        return {
-          success: false,
-          error: String(data.error),
+          error: String(data.message || data.error),
         }
       }
       
@@ -221,25 +163,9 @@ class ApiClient {
         data,
       }
     } catch (error) {
-      console.error(`[API Client] Request failed for ${endpoint}:`, error)
-
-      let errorMessage = 'Unknown error occurred'
-
-      if (error instanceof TypeError) {
-        if (error.message.includes('fetch') || error.message.includes('Failed to fetch')) {
-          errorMessage = 'Không thể kết nối đến server. Nguyên nhân có thể:\n' +
-            '- Backend không cho phép CORS từ domain này\n' +
-            '- Server backend đang offline\n' +
-            '- URL không hợp lệ (phải là http:// hoặc https://)\n' +
-            `- Kiểm tra BASE_URL: ${this.baseURL}`
-        } else if (error.message.includes('URL scheme')) {
-          errorMessage = error.message
-        } else {
-          errorMessage = error.message
-        }
-      } else if (error instanceof Error) {
-        errorMessage = error.message
-      }
+      const errorMessage = error instanceof Error
+        ? error.message
+        : 'Unknown error occurred'
       
       return {
         success: false,
@@ -327,30 +253,29 @@ class ApiClient {
   }
 
 
-  // Staff Profiles API
   async getStaffProfiles() {
-    return this.get('/staff-profiles')
+    return this.get<StaffProfile[]>('/staff-profiles')
   }
 
   async getStaffProfile(id: number) {
-    return this.get(`/staff-profiles/${id}`)
+    return this.get<StaffProfile>(`/staff-profiles/${id}`)
   }
 
   async getStaffProfilesByStatus(status: string) {
     // Backend expects isActive boolean: ACTIVE -> true, INACTIVE -> false
     const isActive = status === 'ACTIVE'
-    return this.get(`/staff-profiles/by-status?isActive=${isActive}`)
+    return this.get<StaffProfile[]>(`/staff-profiles/by-status?isActive=${isActive}`)
   }
 
   async getStaffProfilesByDepartment(department: string) {
-    return this.get(`/staff-profiles/by-department/${encodeURIComponent(department)}`)
+    return this.get<StaffProfile[]>(`/staff-profiles/by-department/${encodeURIComponent(department)}`)
   }
 
-  async createStaffProfile(profileData: any) {
+  async createStaffProfile(profileData: Partial<StaffProfile>) {
     return this.post('/staff-profiles', profileData)
   }
 
-  async updateStaffProfile(id: number, profileData: any) {
+  async updateStaffProfile(id: number, profileData: Partial<StaffProfile>) {
     return this.put(`/staff-profiles/${id}`, profileData)
   }
 
@@ -528,23 +453,107 @@ class ApiClient {
   }
 
   async approveBooking(id: number, approverId?: string, reason?: string, options?: RequestInit) {
-    // Backend hiện yêu cầu body dạng:
-    // { bookingId, approverId, decision, reason }
-    const payload = {
+    // Gọi trực tiếp backend endpoint: /bookings/{id}/approve (không qua Next.js route)
+    // Body: { bookingId, approverId, decision, reason }
+    // Lấy approverId từ token nếu chưa có
+    let finalApproverId = approverId
+    if (!finalApproverId) {
+      try {
+        const userInfo = authService.getUserInfo()
+        if (userInfo?.id) {
+          finalApproverId = userInfo.id
+        } else {
+          // Thử lấy từ token trực tiếp
+          const token = authService.getAccessToken()
+          if (token) {
+            const { decodeJWTPayload } = await import('./auth-utils')
+            const payload = decodeJWTPayload(token)
+            if (payload?.userId) {
+              finalApproverId = String(payload.userId)
+            } else if (payload?.sub) {
+              finalApproverId = String(payload.sub)
+            } else if (payload?.accountId) {
+              finalApproverId = String(payload.accountId)
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error getting approverId:', error)
+      }
+    }
+
+    if (!finalApproverId) {
+      return {
+        success: false,
+        error: 'Approver ID is required. Please ensure you are logged in.'
+      }
+    }
+
+    const payload: any = {
       bookingId: id,
-      approverId: approverId ?? 'SYSTEM',
+      approverId: finalApproverId,
       decision: 'APPROVED',
       reason: reason ?? ''
     }
+    
+    // Gọi trực tiếp backend endpoint (không qua Next.js route để tránh /api/api)
     return this.post(`/bookings/${id}/approve`, payload, options)
   }
 
-  async getServices() {
-    return this.get('/services')
+  async rejectBooking(id: number, approverId?: string, reason?: string, options?: RequestInit) {
+    // Gọi trực tiếp backend endpoint: /bookings/{id}/approve (không qua Next.js route)
+    // Body: { bookingId, approverId, decision, reason }
+    // Lấy approverId từ token nếu chưa có
+    let finalApproverId = approverId
+    if (!finalApproverId) {
+      try {
+        const userInfo = authService.getUserInfo()
+        if (userInfo?.id) {
+          finalApproverId = userInfo.id
+        } else {
+          // Thử lấy từ token trực tiếp
+          const token = authService.getAccessToken()
+          if (token) {
+            const { decodeJWTPayload } = await import('./auth-utils')
+            const payload = decodeJWTPayload(token)
+            if (payload?.userId) {
+              finalApproverId = String(payload.userId)
+            } else if (payload?.sub) {
+              finalApproverId = String(payload.sub)
+            } else if (payload?.accountId) {
+              finalApproverId = String(payload.accountId)
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error getting approverId:', error)
+      }
+    }
+
+    if (!finalApproverId) {
+      return {
+        success: false,
+        error: 'Approver ID is required. Please ensure you are logged in.'
+      }
+    }
+
+    const payload: any = {
+      bookingId: id,
+      approverId: finalApproverId,
+      decision: 'REJECTED',
+      reason: reason ?? ''
+    }
+    
+    // Gọi trực tiếp backend endpoint (không qua Next.js route để tránh /api/api)
+    return this.post(`/bookings/${id}/approve`, payload, options)
   }
 
-  async getService(id: number) {
-    return this.get(`/services/${id}`)
+  async getServices(options?: RequestInit) {
+    return this.get('/services', options)
+  }
+
+  async getService(id: number, options?: RequestInit) {
+    return this.get(`/services/${id}`, options)
   }
 
   async createService(serviceData: any) {
@@ -585,6 +594,8 @@ class ApiClient {
 
   // Service Orders (Orders API)
   async getServiceOrders() {
+    // Backend doesn't have GET /orders endpoint to list all orders
+    // Use Next.js API route which may aggregate from multiple sources
     return this.get('/orders')
   }
 
@@ -599,6 +610,35 @@ class ApiClient {
 
   async getServiceOrder(id: number) {
     return this.get(`/orders/${id}`)
+  }
+
+  // Order Cart Workflow - Create cart
+  async createOrderCart(data: { bookingId: number; requestedBy: string; note?: string }) {
+    return this.post('/orders/cart', {
+      bookingId: data.bookingId,
+      requestedBy: data.requestedBy,
+      note: data.note || null
+    })
+  }
+
+  // Order Cart Workflow - Add item to order (replaces old addOrderItem)
+  async addOrderItemToCart(orderId: number, itemData: { serviceId: number; quantity: number }) {
+    return this.post(`/orders/${orderId}/items`, {
+      serviceId: itemData.serviceId,
+      quantity: itemData.quantity
+    })
+  }
+
+  // Order Cart Workflow - Update item quantity
+  async updateOrderItem(orderId: number, itemId: number, quantity: number) {
+    return this.put(`/orders/${orderId}/items/${itemId}`, {
+      quantity: quantity
+    })
+  }
+
+  // Order Cart Workflow - Remove item
+  async removeOrderItem(orderId: number, itemId: number) {
+    return this.delete(`/orders/${orderId}/items/${itemId}`)
   }
 
   async createServiceOrder(orderData: any) {
@@ -697,10 +737,6 @@ class ApiClient {
     }
   }
 
-  async addOrderItem(orderId: number, itemData: any) {
-    return this.post(`/orders/${orderId}/items`, itemData)
-  }
-
   async confirmOrder(orderId: number) {
     return this.post(`/orders/${orderId}/confirm`)
   }
@@ -715,7 +751,7 @@ class ApiClient {
   }
 
   async getPaymentTransactions() {
-    return { success: false, error: 'API not implemented yet' }
+    return this.get('/payments')
   }
 
   // Staff Tasks API
@@ -752,7 +788,7 @@ class ApiClient {
   }
 
   // Roles API
-  async getRoles(params?: { name?: string; code?: string; description?: string; isActive?: boolean; page?: number; size?: number }) {
+  async getRoles(params?: { name?: string; code?: string; description?: string; isActive?: boolean; page?: number; size?: number }, options?: RequestInit) {
     const queryParams = new URLSearchParams()
     if (params?.name) queryParams.set('name', params.name)
     if (params?.code) queryParams.set('code', params.code)
@@ -762,11 +798,11 @@ class ApiClient {
     if (params?.size !== undefined) queryParams.set('size', params.size.toString())
 
     const endpoint = `/roles/search${queryParams.toString() ? '?' + queryParams.toString() : ''}`
-    return this.get(endpoint)
+    return this.get(endpoint, options)
   }
 
-  async getRole(id: string) {
-    return this.get(`/roles/${id}`)
+  async getRole(id: string, options?: RequestInit) {
+    return this.get(`/roles/${id}`, options)
   }
 
   async createRole(roleData: any) {
@@ -794,6 +830,12 @@ class ApiClient {
 
   async staffRejectOrder(orderId: number, staffId: number, reason?: string) {
     return this.post(`/orders/${orderId}/staff/reject`, { staffId, reason: reason || '' })
+  }
+
+  async assignStaffToOrder(orderId: number, staffId: number) {
+    // Note: This endpoint may need to be created in backend
+    // For now, using PUT to update order with assignedStaffId
+    return this.put(`/orders/${orderId}/assign-staff`, { assignedStaffId: staffId })
   }
 
   async getStaffTasksForOrder(staffId: number, status?: string) {

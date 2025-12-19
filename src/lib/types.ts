@@ -140,18 +140,18 @@ export interface StaffProfile {
   department: string;
   position: string;
   jobTitle: string;
-  hireDate: string;
+  hireDate: string; // LocalDate -> ISO string from backend
   employmentType: string;
   workSchedule: string;
-  salary: number;
-  hourlyRate: number;
+  salary: number; // BigDecimal -> number in JSON
+  hourlyRate: number; // BigDecimal -> number in JSON
   managerId: number | null;
   officeLocation: string;
   workPhone: string;
   workEmail: string;
   skills: string;
   certifications: string;
-  performanceRating: number;
+  performanceRating: number; // BigDecimal -> number in JSON
   lastReviewDate: string | null;
   nextReviewDate: string | null;
   vacationDaysRemaining: number;
@@ -160,7 +160,7 @@ export interface StaffProfile {
   terminationDate: string | null;
   terminationReason: string | null;
   notes: string;
-  createdDate?: string;
-  lastModifiedDate?: string;
+  createdDate: string;
+  lastModifiedDate: string;
 }
 

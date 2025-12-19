@@ -40,19 +40,18 @@ export default function NotificationsPage() {
         if (path.startsWith('/admin')) return 'admin';
         if (path.startsWith('/office')) return 'office';
         if (path.startsWith('/staff')) return 'staff';
-        if (path.startsWith('/security')) return 'security';
         if (path.startsWith('/user')) return 'user';
         return sessionStorage.getItem('userRole');
       }
       return null;
     };
 
-    const initialRole = getUserRole() as 'admin' | 'office' | 'staff' | 'security' | 'user' | null;
+    const initialRole = getUserRole() as 'admin' | 'office' | 'staff' | 'user' | null;
     setNotifications(getNotificationsByRole((initialRole ?? 'office')));
 
     // Listen for notification updates
     const handleNotificationUpdate = (event: CustomEvent) => {
-      const currentRole = getUserRole() as 'admin' | 'office' | 'staff' | 'security' | 'user' | null;
+      const currentRole = getUserRole() as 'admin' | 'office' | 'staff' | 'user' | null;
       setNotifications(getNotificationsByRole((currentRole ?? 'office')));
     };
 

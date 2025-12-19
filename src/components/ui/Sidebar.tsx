@@ -15,9 +15,10 @@ interface SidebarProps {
   collapsed?: boolean;
   onToggle?: () => void;
   onToggleCollapsed?: () => void;
+  isMobile?: boolean; // Add flag to identify mobile sidebar
 }
 
-export default function Sidebar({ user, isVisible = false, collapsed = true, onToggle, onToggleCollapsed }: SidebarProps) {
+export default function Sidebar({ user, isVisible = false, collapsed = true, onToggle, onToggleCollapsed, isMobile = false }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
 
@@ -27,7 +28,6 @@ export default function Sidebar({ user, isVisible = false, collapsed = true, onT
   const isAdmin = pathname.startsWith('/admin');
   const isOffice = pathname.startsWith('/office');
   const isStaff = pathname.startsWith('/staff');
-  const isSecurity = pathname.startsWith('/security');
   const isUser = pathname.startsWith('/user');
 
   const role = useCurrentRole();
@@ -61,7 +61,7 @@ export default function Sidebar({ user, isVisible = false, collapsed = true, onT
     ),
     RoomTypes: () => (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 5a1 1 0 011-1h4a1 1 0 011 1v7a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM14 5a1 1 0 011-1h4a1 1 0 011 1v7a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 16a1 1 0 011-1h4a1 1 0 011 1v3a1 1 0 01-1 1H5a1 1 0 01-1-1v-3zM14 16a1 1 0 011-1h4a1 1 0 011 1v3a1 1 0 01-1 1h-4a1 1 0 01-1-1v-3z" />
       </svg>
     ),
     Bookings: () => (
@@ -76,7 +76,7 @@ export default function Sidebar({ user, isVisible = false, collapsed = true, onT
     ),
     Services: () => (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
       </svg>
     ),
     ServiceOrders: () => (
@@ -97,6 +97,11 @@ export default function Sidebar({ user, isVisible = false, collapsed = true, onT
     Users: () => (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z" />
+      </svg>
+    ),
+    Staff: () => (
+      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
       </svg>
     ),
     Roles: () => (
@@ -156,82 +161,76 @@ export default function Sidebar({ user, isVisible = false, collapsed = true, onT
     
     if (isAdmin || currentRole === 'admin') {
       return [
-        { 
-          name: 'Dashboard quản lý hệ thống', 
-          href: '/admin/dashboard', 
-          icon: <Icons.Dashboard />, 
-          current: pathname === '/admin/dashboard'
+        {
+          name: 'Tổng quan hệ thống',
+          href: '/admin/dashboard',
+          icon: <Icons.Dashboard />,
+          current: pathname === '/admin/dashboard',
         },
-        { 
-          name: 'Quản lý phòng', 
-          href: '/admin/rooms', 
-          icon: <Icons.Rooms />, 
-          current: pathname.startsWith('/admin/rooms')
+        {
+          name: 'Quản lý phòng',
+          href: '/admin/rooms',
+          icon: <Icons.Rooms />,
+          current: pathname.startsWith('/admin/rooms'),
         },
-        { 
-          name: 'Quản lý dãy tòa', 
-          href: '/admin/room-types', 
-          icon: <Icons.RoomTypes />, 
-          current: pathname.startsWith('/admin/room-types')
+        {
+          name: 'Quản lý tòa nhà',
+          href: '/admin/room-types',
+          icon: <Icons.RoomTypes />,
+          current: pathname.startsWith('/admin/room-types'),
         },
-        { 
-          name: 'Quản lý đặt phòng', 
-          href: '/admin/bookings', 
-          icon: <Icons.Bookings />, 
-          current: pathname.startsWith('/admin/bookings')
+        {
+          name: 'Quản lý đặt phòng',
+          href: '/admin/bookings',
+          icon: <Icons.Bookings />,
+          current: pathname.startsWith('/admin/bookings'),
         },
-        { 
-          name: 'Quản lý dịch vụ', 
-          href: '/admin/services', 
-          icon: <Icons.Services />, 
-          current: pathname.startsWith('/admin/services')
+        {
+          name: 'Quản lý dịch vụ',
+          href: '/admin/services',
+          icon: <Icons.Services />,
+          current: pathname.startsWith('/admin/services'),
         },
-        { 
-          name: 'Đơn dịch vụ', 
-          href: '/admin/service-orders', 
-          icon: <Icons.ServiceOrders />, 
-          current: pathname.startsWith('/admin/service-orders')
+        {
+          name: 'Yêu cầu dịch vụ',
+          href: '/admin/service-orders',
+          icon: <Icons.ServiceOrders />,
+          current: pathname.startsWith('/admin/service-orders'),
         },
-        { 
-          name: 'Thanh toán', 
-          href: '/admin/payments', 
-          icon: <Icons.Payments />, 
-          current: pathname.startsWith('/admin/payments')
+        {
+          name: 'Quản lý công việc',
+          href: '/admin/tasks',
+          icon: <Icons.Tasks />,
+          current: pathname.startsWith('/admin/tasks'),
         },
-        { 
-          name: 'Quản lý Công việc', 
-          href: '/admin/tasks', 
-          icon: <Icons.Tasks />, 
-          current: pathname.startsWith('/admin/tasks')
+        {
+          name: 'Quản lý người dùng',
+          href: '/admin/users',
+          icon: <Icons.Users />,
+          current: pathname.startsWith('/admin/users'),
         },
-        { 
-          name: 'Quản lý người dùng', 
-          href: '/admin/users', 
-          icon: <Icons.Users />, 
-          current: pathname.startsWith('/admin/users')
+        {
+          name: 'Quản lý nhân sự',
+          href: '/admin/staff-profiles',
+          icon: <Icons.Staff />,
+          current: pathname.startsWith('/admin/staff-profiles'),
         },
-        { 
-          name: 'Quản lý nhân sự', 
-          href: '/admin/staff-profiles', 
-          icon: <Icons.Users />, 
-          current: pathname.startsWith('/admin/staff-profiles')
+        {
+          name: 'Quản lý vai trò',
+          href: '/admin/roles',
+          icon: <Icons.Roles />,
+          current: pathname.startsWith('/admin/roles'),
         },
-        { 
-          name: 'Quản lý phân quyền hệ thống', 
-          href: '/admin/roles', 
-          icon: <Icons.Roles />, 
-          current: pathname.startsWith('/admin/roles')
-        },
-        { 
-          name: 'Báo cáo', 
-          href: '/admin/reports', 
-          icon: <Icons.Payments />, 
-          current: pathname.startsWith('/admin/reports')
+        {
+          name: 'Báo cáo',
+          href: '/admin/reports',
+          icon: <Icons.Payments />,
+          current: pathname.startsWith('/admin/reports'),
         },
       ];
     } else if (isOffice || currentRole === 'office') {
       return [
-        { name: 'Dashboard', href: '/office/dashboard', icon: <Icons.Dashboard />, current: pathname.startsWith('/office/dashboard') },
+        { name: 'Tổng quan', href: '/office/dashboard', icon: <Icons.Dashboard />, current: pathname.startsWith('/office/dashboard') },
         { name: 'Duyệt đặt phòng', href: '/office/bookings', icon: <Icons.Bookings />, current: pathname.startsWith('/office/bookings') },
         { name: 'Quản lý phòng', href: '/office/rooms', icon: <Icons.Rooms />, current: pathname.startsWith('/office/rooms') },
         { name: 'Báo cáo', href: '/office/reports', icon: <Icons.Payments />, current: pathname.startsWith('/office/reports') },
@@ -239,17 +238,13 @@ export default function Sidebar({ user, isVisible = false, collapsed = true, onT
   
     } else if (isStaff || currentRole === 'staff') {
       return [
-        { name: 'Dashboard', href: '/staff/dashboard', icon: <Icons.Dashboard />, current: pathname.startsWith('/staff/dashboard') },
+        { name: 'Tổng quan', href: '/staff/dashboard', icon: <Icons.Dashboard />, current: pathname.startsWith('/staff/dashboard') },
       ];
     
-    } else if (isSecurity || currentRole === 'security') {
+    }
+    if (isUser || currentRole === 'user') {
       return [
-        { name: 'Dashboard', href: '/user/dashboard', icon: <Icons.Dashboard />, current: pathname.startsWith('/user/dashboard') },
-      ];
-
-    } else if (isUser || currentRole === 'user') {
-      return [
-        { name: 'Dashboard', href: '/user/dashboard', icon: <Icons.Dashboard />, current: pathname.startsWith('/user/dashboard') },
+        { name: 'Tổng quan', href: '/user/dashboard', icon: <Icons.Dashboard />, current: pathname.startsWith('/user/dashboard') },
       ];
     } else if (isProfile) {
       return [
@@ -257,7 +252,7 @@ export default function Sidebar({ user, isVisible = false, collapsed = true, onT
       ];
     } else {
       return [
-        { name: 'Dashboard', href: '/', icon: <Icons.Dashboard />, current: pathname === '/' },
+        { name: 'Trang chủ', href: '/', icon: <Icons.Dashboard />, current: pathname === '/' },
       ];
     }
   };
@@ -272,18 +267,20 @@ export default function Sidebar({ user, isVisible = false, collapsed = true, onT
       } ${!isVisible ? 'hidden' : ''}`}
       suppressHydrationWarning
     >
-      {/* Toggle Button */}
-      <div className="p-3 border-b border-gray-100/50" suppressHydrationWarning>
-        <button
-          onClick={onToggleCollapsed}
-          className={`w-full flex items-center ${sidebarCollapsed ? 'justify-center' : 'justify-start'} p-3 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-xl transition-all duration-200`}
-          title={sidebarCollapsed ? "Mở rộng menu" : "Thu gọn menu"}
-        >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 6h16M4 12h16M4 18h16" />
-          </svg>
-        </button>
-      </div>
+      {/* Toggle Button - Only show on desktop */}
+      {!isMobile && (
+        <div className="p-3 border-b border-gray-100/50" suppressHydrationWarning>
+          <button
+            onClick={onToggleCollapsed}
+            className={`w-full flex items-center ${sidebarCollapsed ? 'justify-center' : 'justify-start'} p-3 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-xl transition-all duration-200`}
+            title={sidebarCollapsed ? 'Mở rộng menu' : 'Thu gọn menu'}
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+        </div>
+      )}
 
       {/* Navigation */}
       <nav className="p-3 space-y-2">

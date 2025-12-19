@@ -15,8 +15,7 @@ export function decodeJWTPayload(token: string): any | null {
     const padded = base64 + '='.repeat((4 - base64.length % 4) % 4)
     const decoded = Buffer.from(padded, 'base64').toString('utf-8')
     return JSON.parse(decoded)
-  } catch (error) {
-    console.error('[Auth Utils] Failed to decode JWT payload:', error)
+  } catch {
     return null
   }
 }
@@ -57,8 +56,8 @@ export function getTokenFromRequest(req: NextRequest): string | null {
       if (userInfo && userInfo.token) {
         return userInfo.token
       }
-    } catch (error) {
-      console.warn('[Auth Utils] Failed to parse user_info cookie:', error)
+    } catch {
+      // ignore cookie parse error
     }
   }
   
@@ -184,8 +183,7 @@ export async function verifyToken(req: NextRequest): Promise<UserInfo | null> {
     }
     
     return null
-  } catch (error) {
-    console.error('[Auth Utils] Token verification failed:', error)
+  } catch {
     return null
   }
 }
@@ -215,7 +213,7 @@ export function isAdminRole(userInfo: UserInfo): boolean {
     }
   }
 
-  const roles = userInfo.roles || userInfo.roleName || []
+  const roles = userInfo.roles ||  userInfo.roleName || []
   if (Array.isArray(roles) && roles.length > 0) {
     const hasAdminRole = roles.some(role => {
       const normalized = normalizeRole(String(role))
@@ -235,19 +233,14 @@ export function isAdminRole(userInfo: UserInfo): boolean {
 }
 
 export async function isAdmin(req: NextRequest): Promise<boolean> {
-  try {
-    const userInfo = await verifyToken(req)
-    
-    if (!userInfo || !userInfo.email) {
-      return false
-    }
-    
-    const roleCheck = isAdminRole(userInfo)
-    const emailCheck = isAdminEmail(userInfo.email)
-    
-    return roleCheck || emailCheck
-  } catch (error) {
-    console.error('[Auth Utils] Error checking admin:', error)
+  const userInfo = await verifyToken(req)
+  
+  if (!userInfo || !userInfo.email) {
     return false
   }
+  
+  const roleCheck = isAdminRole(userInfo)
+  const emailCheck = isAdminEmail(userInfo.email)
+  
+  return roleCheck || emailCheck
 }

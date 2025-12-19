@@ -30,8 +30,7 @@ export function useAuth() {
         } else {
           setUser(null)
         }
-      } catch (error) {
-        console.error('Auth check failed:', error)
+      } catch {
         setIsAuthenticated(false)
         setUser(null)
       } finally {
@@ -49,7 +48,6 @@ export function useAuth() {
       // Redirect đến Google OAuth
       window.location.href = redirectUrl
     } catch (error) {
-      console.error('Login failed:', error)
       throw error
     }
   }, [])
@@ -61,9 +59,7 @@ export function useAuth() {
       setIsAuthenticated(false)
       setUser(null)
       router.push('/login')
-    } catch (error) {
-      console.error('Logout failed:', error)
-      // Vẫn redirect dù có lỗi
+    } catch {
       setIsAuthenticated(false)
       setUser(null)
       router.push('/login')
@@ -82,8 +78,7 @@ export function useAuth() {
         const userInfo = authService.getUserInfo()
         setUser(userInfo)
       }
-    } catch (error) {
-      console.error('Token refresh failed:', error)
+    } catch {
       // Token refresh failed, logout user
       await logout()
     }

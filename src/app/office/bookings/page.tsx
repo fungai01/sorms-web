@@ -326,7 +326,7 @@ export default function OfficeBookingsPage() {
     let backendValidated = false;
     let fromBackend: any = null;
     try {
-      const verifyRes = await fetch('/api/security/qr/verify', {
+      const verifyRes = await fetch('/api/system/security/qr/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',

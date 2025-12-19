@@ -1,17 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-
-import { authService } from '@/lib/auth-service'
-import { useBookings, useRooms, useUsers } from '@/hooks/useApi'
+import { Card, CardBody, CardHeader } from "@/components/ui/Card";
+import { useBookings, useRooms, useServiceOrders, useStaffTasks } from '@/hooks/useApi'
+import { authFetch } from '@/lib/http'
 
 // ===== Types =====
 type DateRange = { fromDate: string; toDate: string };
-type OccupancyResp = { total: number; occupied: number };
-type BookingsResp = { pending: number; series: { date: string; count: number }[] };
-type CheckinsResp = { series: { date: string; count: number }[] };
-type PaymentsResp = { count: number; sum: number; series: { date: string; sum: number }[] };
-type ServicesResp = { top: { name: string; count: number }[] };
 type TasksResp = { todo: number; in_progress: number; done: number; cancelled: number };
 
 // ===== Helpers =====
@@ -37,42 +32,59 @@ const getDefaultDateRange = (): DateRange => {
 
 // ===== UI Components =====
 
-function Card({ title, actions, children, className = "" }: { title?: string; actions?: React.ReactNode; children: React.ReactNode; className?: string }) {
+function DashboardCard({ title, actions, children, className = "" }: { title?: string; actions?: React.ReactNode; children: React.ReactNode; className?: string }) {
   return (
-    <div className={`rounded-2xl border border-gray-200 bg-white shadow-sm p-6 ${className}`}>
+    <Card className={`bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-md rounded-2xl overflow-hidden ${className}`}>
       {(title || actions) && (
-        <div className="mb-5 flex items-center justify-between">
+        <CardHeader className="bg-[hsl(var(--page-bg))]/40 border-b border-gray-200 !px-6 py-3">
+          <div className="flex items-center justify-between">
           {title && (
-            <h3 className="text-base font-semibold text-gray-800">{title}</h3>
+              <h3 className="text-lg font-bold text-gray-900">{title}</h3>
           )}
           {actions}
         </div>
+        </CardHeader>
       )}
+      <CardBody className={title || actions ? "p-6" : "p-0"}>
       {children}
-    </div>
+      </CardBody>
+    </Card>
   );
 }
 
-function KPICard({ title, value, hint, trend, bgColor = "bg-blue-50" }: { 
+function KPICard({ title, value, hint, trend, icon, bgColor = "bg-blue-50", iconColor = "text-blue-600" }: { 
   title: string; 
   value: string; 
   hint?: string; 
   trend?: { value: number; isPositive: boolean };
   bgColor?: string;
+  icon?: React.ReactNode;
+  iconColor?: string;
 }) {
   return (
-    <div className={`rounded-2xl ${bgColor} p-5`}>
-      <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">{title}</div>
-      <div className="text-3xl font-bold text-gray-900 mb-1">{value}</div>
-      {hint && <div className="text-sm text-gray-600">{hint}</div>}
+    <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm hover:shadow-md transition-shadow">
+      <div className="flex items-center justify-between">
+        <div className="flex-1">
+          <p className="text-sm font-medium text-gray-600 mb-1">{title}</p>
+          <p className="text-3xl font-bold text-gray-900 mb-1">{value}</p>
+          {hint && <p className="text-sm text-gray-500">{hint}</p>}
       {trend && (
-        <div className={`flex items-center gap-1 text-xs mt-2 ${trend.isPositive ? 'text-green-600' : 'text-red-600'}`}>
-          <span className={`inline-flex items-center px-1.5 py-0.5 rounded ${trend.isPositive ? 'bg-green-100' : 'bg-red-100'}`}>
-            {trend.isPositive ? '+' : '-'}{Math.abs(trend.value)}%
+            <div className={`flex items-center gap-1.5 text-xs mt-2 ${trend.isPositive ? 'text-green-600' : 'text-red-600'}`}>
+              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${trend.isPositive ? 'bg-green-100' : 'bg-red-100'}`}>
+                {trend.isPositive ? '↑' : '↓'} {Math.abs(trend.value)}%
           </span>
           <span className="text-gray-500">so với tháng trước</span>
         </div>
       )}
+        </div>
+        {icon && (
+          <div className={`w-12 h-12 ${bgColor} rounded-xl flex items-center justify-center flex-shrink-0`}>
+            <div className={iconColor}>
+              {icon}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -83,9 +95,9 @@ function DateRangeSelector({ dateRange, setDateRange, onReload }: {
   onReload: () => void;
 }) {
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
       <div className="flex items-center gap-2">
-        <span className="text-sm text-gray-500">Từ ngày</span>
+        <span className="text-sm text-gray-600 font-medium">Từ ngày</span>
         <input
           type="date"
           value={dateRange.fromDate}
@@ -98,11 +110,11 @@ function DateRangeSelector({ dateRange, setDateRange, onReload }: {
               setDateRange({ ...dateRange, fromDate: newFrom })
             }
           }}
-          className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
+          className="h-9 px-3 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
         />
       </div>
       <div className="flex items-center gap-2">
-        <span className="text-sm text-gray-500">Đến ngày</span>
+        <span className="text-sm text-gray-600 font-medium">Đến ngày</span>
         <input
           type="date"
           value={dateRange.toDate}
@@ -113,14 +125,17 @@ function DateRangeSelector({ dateRange, setDateRange, onReload }: {
             if (new Date(newTo) < new Date(dateRange.fromDate)) return
             setDateRange({ ...dateRange, toDate: newTo })
           }}
-          className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
+          className="h-9 px-3 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
         />
       </div>
       <button
         onClick={onReload}
-        className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+        className="h-9 px-4 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-2"
       >
-        Reload
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+        Tải lại
       </button>
     </div>
   );
@@ -156,7 +171,7 @@ function Grid({ w, h, pad, rows = 4 }: { w: number; h: number; pad: number; rows
 }
 
 function LineChart({ series, color = "#3b82f6" }: { series: { date: string; count: number }[]; color?: string }) {
-  if (!series?.length) return <Empty />;
+  if (!series?.length) return null;
   const w = 560, h = 200, pad = 28;
   const maxY = Math.max(...series.map((s) => s.count), 1);
   const stepX = (w - 2 * pad) / Math.max(1, series.length - 1);
@@ -195,7 +210,7 @@ function LineChart({ series, color = "#3b82f6" }: { series: { date: string; coun
 }
 
 function AreaChart({ series, color = "#3b82f6" }: { series: { date: string; count: number }[]; color?: string }) {
-  if (!series?.length) return <Empty />;
+  if (!series?.length) return null;
   const w = 560, h = 200, pad = 28;
   const maxY = Math.max(...series.map((s) => s.count), 1);
   const stepX = (w - 2 * pad) / Math.max(1, series.length - 1);
@@ -220,7 +235,7 @@ function AreaChart({ series, color = "#3b82f6" }: { series: { date: string; coun
 }
 
 function BarChart({ series, color = "#3b82f6" }: { series: { label: string; value: number }[]; color?: string }) {
-  if (!series?.length) return <Empty />;
+  if (!series?.length) return null;
   const w = 560, h = 200, pad = 28;
   const max = Math.max(...series.map((s) => s.value), 1);
   const barW = (w - 2 * pad) / series.length - 6;
@@ -250,7 +265,7 @@ function BarChart({ series, color = "#3b82f6" }: { series: { label: string; valu
 }
 
 function HBarChart({ series, color = "#3b82f6" }: { series: { label: string; value: number }[]; color?: string }) {
-  if (!series?.length) return <Empty />;
+  if (!series?.length) return null;
   const w = 560, h = Math.max(200, 40 + series.length * 26), pad = 28;
   const max = Math.max(...series.map((s) => s.value), 1);
   const barH = (h - 2 * pad) / series.length - 6;
@@ -317,11 +332,7 @@ function Donut({ value, total, color = "#3b82f6" }: { value: number; total: numb
 }
 
 function Empty() {
-  return (
-    <div className="flex flex-col items-center justify-center py-12 text-gray-500">
-      <div className="text-sm">Không có dữ liệu</div>
-    </div>
-  );
+  return null;
 }
 
 function Skeleton({ className = "h-24" }: { className?: string }) {
@@ -330,11 +341,12 @@ function Skeleton({ className = "h-24" }: { className?: string }) {
 
 function Stacked({ tasks }: { tasks: TasksResp }) {
   const total = tasks.todo + tasks.in_progress + tasks.done + tasks.cancelled;
+  // Colors matching Badge.tsx but lighter: pending (orange-100), in-progress (primary/0.12), completed (green-100), cancelled (red-100)
   const segments = [
-    { label: 'Chờ xử lý', value: tasks.todo, color: '#ef4444', percentage: total > 0 ? (tasks.todo / total) * 100 : 0 },
-    { label: 'Đang thực hiện', value: tasks.in_progress, color: '#f59e0b', percentage: total > 0 ? (tasks.in_progress / total) * 100 : 0 },
-    { label: 'Hoàn thành', value: tasks.done, color: '#22c55e', percentage: total > 0 ? (tasks.done / total) * 100 : 0 },
-    { label: 'Đã hủy', value: tasks.cancelled, color: '#9ca3af', percentage: total > 0 ? (tasks.cancelled / total) * 100 : 0 },
+    { label: 'Chờ xử lý', value: tasks.todo, color: '#ffedd5', percentage: total > 0 ? (tasks.todo / total) * 100 : 0 }, // orange-100
+    { label: 'Đang thực hiện', value: tasks.in_progress, color: '#dbeafe', percentage: total > 0 ? (tasks.in_progress / total) * 100 : 0 }, // blue-100 (lighter primary)
+    { label: 'Hoàn thành', value: tasks.done, color: '#dcfce7', percentage: total > 0 ? (tasks.done / total) * 100 : 0 }, // green-100
+    { label: 'Đã hủy', value: tasks.cancelled, color: '#fee2e2', percentage: total > 0 ? (tasks.cancelled / total) * 100 : 0 }, // red-100
   ];
 
   return (
@@ -403,124 +415,114 @@ function ExportCSV({ filename, rows }: { filename: string; rows: any[] }) {
 
 export default function AdminHome() {
   const [dateRange, setDateRange] = useState<DateRange>(getDefaultDateRange());
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
-  const abortRef = useRef<AbortController | null>(null);
-  const { data: bookingsData } = useBookings('PENDING');
-  const { data: roomsData } = useRooms();
-  const { data: usersData } = useUsers();
 
-  const [kpis, setKpis] = useState({ totalRooms: 0, occupiedRooms: 0, pendingBookings: 0, paymentsToday: 0, revenueToday: 0, tasksTodo: 0 });
-  const [bookingsSeries, setBookingsSeries] = useState<{ date: string; count: number }[]>([]);
-  const [checkinsSeries, setCheckinsSeries] = useState<{ date: string; count: number }[]>([]);
-  const [paymentsSeries, setPaymentsSeries] = useState<{ date: string; sum: number }[]>([]);
-  const [servicesTop, setServicesTop] = useState<{ name: string; count: number }[]>([]);
-  const [tasksSummary, setTasksSummary] = useState<TasksResp>({ todo: 0, in_progress: 0, done: 0, cancelled: 0 });
-  const [apiLoaded, setApiLoaded] = useState(false);
+  // Use hooks to fetch data - refetch when refreshTrigger changes
+  const { data: roomsData, loading: roomsLoading, refetch: refetchRooms } = useRooms();
+  const { data: bookingsData, loading: bookingsLoading, refetch: refetchBookings } = useBookings();
+  const { data: serviceOrdersData, loading: ordersLoading, refetch: refetchOrders } = useServiceOrders();
+  const { data: tasksData, loading: tasksLoading, refetch: refetchTasks } = useStaffTasks();
 
-  const daysRange = useMemo(() => {
-    return Math.ceil((new Date(dateRange.toDate).getTime() - new Date(dateRange.fromDate).getTime()) / (1000 * 60 * 60 * 24)) + 1;
-  }, [dateRange]);
+  // Fetch payments
+  const [paymentsData, setPaymentsData] = useState<any[]>([]);
+  const [paymentsLoading, setPaymentsLoading] = useState(true);
 
   useEffect(() => {
-    setLoading(true);
-    setError(null);
-    
-    if (abortRef.current) abortRef.current.abort();
-    const ac = new AbortController();
-    abortRef.current = ac;
-    
-    const timeoutId = setTimeout(() => {
-      const fetchData = async () => {
-        try {
-          if (ac.signal.aborted) return;
-          
-          const token = typeof window !== 'undefined' ? authService.getAccessToken() : null;
-          const fetchOptions: RequestInit = { 
-            signal: ac.signal,
-            credentials: 'include' as RequestCredentials,
-            headers: {
-              'Content-Type': 'application/json',
-              ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
-            }
-          };
-          
-          const [occRes, bRes, cRes, pRes, soRes, tRes] = await Promise.all([
-            fetch(`/api/dashboard/occupancy?fromDate=${dateRange.fromDate}&toDate=${dateRange.toDate}`, fetchOptions),
-            fetch(`/api/dashboard/bookings?fromDate=${dateRange.fromDate}&toDate=${dateRange.toDate}`, fetchOptions),
-            fetch(`/api/dashboard/checkins?fromDate=${dateRange.fromDate}&toDate=${dateRange.toDate}`, fetchOptions),
-            fetch(`/api/dashboard/payments?fromDate=${dateRange.fromDate}&toDate=${dateRange.toDate}`, fetchOptions),
-            fetch(`/api/dashboard/service-orders?fromDate=${dateRange.fromDate}&toDate=${dateRange.toDate}`, fetchOptions),
-            fetch(`/api/dashboard/tasks?fromDate=${dateRange.fromDate}&toDate=${dateRange.toDate}`, fetchOptions),
-          ]);
-
-          if (ac.signal.aborted) return;
-
-          if (!occRes.ok || !bRes.ok || !cRes.ok || !pRes.ok || !soRes.ok || !tRes.ok) {
-            throw new Error('HTTP error');
-          }
-
-          const [occ, b, c, p, so, t] = await Promise.all([
-            occRes.json() as Promise<OccupancyResp>,
-            bRes.json() as Promise<BookingsResp>,
-            cRes.json() as Promise<CheckinsResp>,
-            pRes.json() as Promise<PaymentsResp>,
-            soRes.json() as Promise<ServicesResp>,
-            tRes.json() as Promise<TasksResp>,
-          ]);
-
-          if (ac.signal.aborted) return;
-
-          setKpis({ 
-            totalRooms: occ.total, 
-            occupiedRooms: occ.occupied, 
-            pendingBookings: b.pending, 
-            paymentsToday: p.count, 
-            revenueToday: p.sum, 
-            tasksTodo: t.todo + t.in_progress 
-          });
-          setBookingsSeries(b.series);
-          setCheckinsSeries(c.series);
-          setPaymentsSeries(p.series);
-          setServicesTop(so.top);
-          setTasksSummary(t);
-          setApiLoaded(true);
-        } catch (err) {
-          if (err instanceof Error && err.name === 'AbortError') return;
-          setError(`Không tải được dữ liệu`);
-          setApiLoaded(false);
-        } finally {
-          if (!ac.signal.aborted) setLoading(false);
+    const fetchPayments = async () => {
+      try {
+        setPaymentsLoading(true);
+        const res = await authFetch('/api/system/payments', {
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include'
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const items = Array.isArray(data?.items) ? data.items : Array.isArray(data) ? data : [];
+          setPaymentsData(items);
         }
-      };
-      fetchData();
-    }, 100);
-    
-    return () => {
-      clearTimeout(timeoutId);
-      ac.abort();
+      } catch (error) {
+        console.error('Error fetching payments:', error);
+      } finally {
+        setPaymentsLoading(false);
+      }
     };
-  }, [dateRange, refreshTrigger, daysRange]);
+    fetchPayments();
+  }, [refreshTrigger]);
+
+  // Refetch all data when refreshTrigger changes
+  useEffect(() => {
+    if (refreshTrigger > 0) {
+      refetchRooms();
+      refetchBookings();
+      refetchOrders();
+      refetchTasks();
+    }
+  }, [refreshTrigger, refetchRooms, refetchBookings, refetchOrders, refetchTasks]);
+
+  const loading = roomsLoading || bookingsLoading || ordersLoading || tasksLoading || paymentsLoading;
+
+  // Calculate KPIs from hooks data
+  const kpis = useMemo(() => {
+    const rooms = Array.isArray(roomsData) ? roomsData : [];
+    const bookings = Array.isArray(bookingsData) ? bookingsData : [];
+    const orders = Array.isArray(serviceOrdersData) ? serviceOrdersData : [];
+    const tasks = Array.isArray(tasksData) ? tasksData : [];
+    const payments = Array.isArray(paymentsData) ? paymentsData : [];
+
+    const totalRooms = rooms.length;
+    const occupiedRooms = rooms.filter((r: any) => r.status === 'OCCUPIED').length;
+    const pendingBookings = bookings.filter((b: any) => b.status === 'PENDING').length;
+
+    // Calculate today's revenue and payment count
+    const today = new Date().toISOString().split('T')[0];
+    const todayPayments = payments.filter((p: any) => {
+      const paymentDate = p.created_at?.split('T')[0] || p.createdAt?.split('T')[0];
+      return paymentDate === today && p.status === 'SUCCESS';
+    });
+    const paymentsToday = todayPayments.length;
+    const revenueToday = todayPayments.reduce((sum: number, p: any) => sum + (p.amount || 0), 0);
+
+    // Calculate tasks todo
+    const tasksTodo = tasks.filter((t: any) => {
+      const status = (t.status || '').toUpperCase();
+      return status === 'TODO' || status === 'OPEN' || status === 'IN_PROGRESS';
+    }).length;
+
+    return {
+      totalRooms,
+      occupiedRooms,
+      pendingBookings,
+      paymentsToday,
+      revenueToday,
+      tasksTodo
+    };
+  }, [roomsData, bookingsData, paymentsData, tasksData]);
+
+  // Calculate tasks summary
+  const tasksSummary = useMemo(() => {
+    const tasks = Array.isArray(tasksData) ? tasksData : [];
+    return {
+      todo: tasks.filter((t: any) => ['TODO', 'OPEN'].includes((t.status || '').toUpperCase())).length,
+      in_progress: tasks.filter((t: any) => (t.status || '').toUpperCase() === 'IN_PROGRESS').length,
+      done: tasks.filter((t: any) => ['DONE', 'COMPLETED'].includes((t.status || '').toUpperCase())).length,
+      cancelled: tasks.filter((t: any) => (t.status || '').toUpperCase() === 'CANCELLED').length,
+    };
+  }, [tasksData]);
 
   const occupancyPercent = useMemo(() => Math.round((kpis.occupiedRooms / Math.max(1, kpis.totalRooms)) * 100), [kpis]);
 
-  const revenueTrend = useMemo(() => {
-    if (paymentsSeries.length < 2) return undefined;
-    const last = paymentsSeries[paymentsSeries.length - 1].sum;
-    const prevAvg = Math.max(1, Math.round((paymentsSeries.slice(0, -1).reduce((s, x) => s + x.sum, 0)) / (paymentsSeries.length - 1)));
-    const diffPct = Math.round(((last - prevAvg) / prevAvg) * 100);
-    return { value: Math.abs(diffPct), isPositive: diffPct >= 0 };
-  }, [paymentsSeries]);
-
   return (
-    <main className="min-h-screen bg-gray-50" suppressHydrationWarning>
+    <div className="px-6 pt-4 pb-6" suppressHydrationWarning>
+      <div className="max-w-7xl mx-auto space-y-6">
       {/* Header */}
-      <div className="bg-white border-b border-gray-200 px-6 py-5" suppressHydrationWarning>
+        <div className="bg-white shadow-sm border border-gray-200 rounded-2xl overflow-hidden">
+          <div className="border-b border-gray-200/50 px-6 py-4">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
           <div>
-            <h1 className="text-xl font-bold text-gray-900">ADMIN - Dashboard</h1>
-            <p className="text-sm text-gray-500">Tổng quan hệ thống quản lý nhà công vụ thông minh</p>
+                <h1 className="text-3xl font-bold text-gray-900 leading-tight">Dashboard</h1>
+                <p className="mt-1 text-sm text-gray-500">
+                  Tổng quan hệ thống quản lý nhà công vụ thông minh
+                </p>
           </div>
           <DateRangeSelector 
             dateRange={dateRange} 
@@ -529,24 +531,7 @@ export default function AdminHome() {
           />
         </div>
       </div>
-
-      <div className="p-6 space-y-6" suppressHydrationWarning>
-        {/* API Status */}
-        {!loading && !error && apiLoaded && (
-          <div className="text-xs text-green-600 bg-green-50 px-3 py-1.5 rounded-lg inline-block">
-            Dữ liệu đã được tải từ API
           </div>
-        )}
-
-        {/* Error Banner */}
-        {error && (
-          <div className="rounded-xl bg-red-50 border border-red-100 px-4 py-3 text-sm text-red-700 flex items-center justify-between">
-            <span>{error}</span>
-            <button onClick={() => { setError(null); setRefreshTrigger(prev => prev + 1); }} className="px-3 py-1 text-xs bg-red-100 hover:bg-red-200 rounded-md">
-              Thử lại
-            </button>
-          </div>
-        )}
 
         {/* KPIs - 4 Cards */}
         <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
@@ -560,29 +545,52 @@ export default function AdminHome() {
           ) : (
             <>
               <KPICard 
-                title="Tỉ lệ lấp đầy" 
+                title="Phòng đang ở" 
                 value={`${kpis.occupiedRooms}/${kpis.totalRooms}`} 
                 hint={`${occupancyPercent}% đang ở`}
-                bgColor="bg-blue-50"
+                bgColor="bg-blue-100"
+                iconColor="text-blue-600"
+                icon={
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                  </svg>
+                }
               />
               <KPICard 
-                title="Đặt phòng chờ" 
+                title="Đặt phòng trống" 
                 value={String(kpis.pendingBookings)} 
                 hint="Cần xử lý"
-                bgColor="bg-blue-50"
+                bgColor="bg-blue-100"
+                iconColor="text-blue-600"
+                icon={
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                }
               />
               <KPICard 
-                title="Doanh thu hôm nay" 
+                title="Doanh thu" 
                 value={fmtCurrency(kpis.revenueToday)} 
                 hint={`${kpis.paymentsToday} giao dịch`}
-                bgColor="bg-blue-50"
-                trend={revenueTrend}
+                bgColor="bg-blue-100"
+                iconColor="text-blue-600"
+                icon={
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                }
               />
               <KPICard 
-                title="Công việc đang chờ" 
+                title="Công việc" 
                 value={String(kpis.tasksTodo)} 
                 hint="Cần thực hiện"
-                bgColor="bg-blue-50"
+                bgColor="bg-blue-100"
+                iconColor="text-blue-600"
+                icon={
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                  </svg>
+                }
               />
             </>
           )}
@@ -591,7 +599,7 @@ export default function AdminHome() {
         {/* Row 2: Occupancy + Tasks */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Occupancy Donut */}
-          <Card title="Tỉ lệ lấp đầy phòng">
+          <DashboardCard title="Phòng đang ở và phòng trống">
             {loading ? <Skeleton className="h-56" /> : (
               <div className="flex items-center gap-6">
                 <Donut value={kpis.occupiedRooms} total={kpis.totalRooms} color="#3b82f6" />
@@ -613,151 +621,50 @@ export default function AdminHome() {
                 </div>
               </div>
             )}
-          </Card>
+          </DashboardCard>
 
           {/* Tasks Status */}
-          <Card title="Trạng thái công việc">
+          <DashboardCard title="Trạng thái công việc">
             {loading ? <Skeleton className="h-56" /> : (
               <div className="space-y-4">
                 <Stacked tasks={tasksSummary} />
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="flex items-center justify-between p-3 bg-blue-50 rounded-xl">
-                    <div className="flex items-center gap-2">
-                      <div className="w-2.5 h-2.5 rounded-full bg-red-500"></div>
-                      <span className="text-sm text-gray-700">Chờ xử lý</span>
-                    </div>
-                    <span className="text-lg font-bold text-gray-800">{tasksSummary.todo}</span>
-                  </div>
-                  <div className="flex items-center justify-between p-3 bg-blue-50 rounded-xl">
-                    <div className="flex items-center gap-2">
-                      <div className="w-2.5 h-2.5 rounded-full bg-amber-500"></div>
-                      <span className="text-sm text-gray-700">Đang thực hiện</span>
-                    </div>
-                    <span className="text-lg font-bold text-gray-800">{tasksSummary.in_progress}</span>
-                  </div>
-                  <div className="flex items-center justify-between p-3 bg-blue-50 rounded-xl">
-                    <div className="flex items-center gap-2">
-                      <div className="w-2.5 h-2.5 rounded-full bg-green-500"></div>
-                      <span className="text-sm text-gray-700">Hoàn thành</span>
-                    </div>
-                    <span className="text-lg font-bold text-gray-800">{tasksSummary.done}</span>
-                  </div>
-                  <div className="flex items-center justify-between p-3 bg-gray-100 rounded-xl">
-                    <div className="flex items-center gap-2">
-                      <div className="w-2.5 h-2.5 rounded-full bg-gray-400"></div>
-                      <span className="text-sm text-gray-700">Đã hủy</span>
-                    </div>
-                    <span className="text-lg font-bold text-gray-800">{tasksSummary.cancelled}</span>
-                  </div>
-                </div>
+                 <div className="grid grid-cols-2 gap-2.5">
+                   <div className="flex items-center justify-between p-2.5 rounded-lg border border-gray-200" style={{ backgroundColor: '#eff7fe' }}>
+                     <div className="flex items-center gap-2">
+                       <div className="w-2 h-2 rounded-full bg-orange-300"></div>
+                       <span className="text-xs text-gray-700 font-medium">Chờ xử lý</span>
+                     </div>
+                     <span className="text-base font-bold text-gray-800">{tasksSummary.todo}</span>
+                   </div>
+                   <div className="flex items-center justify-between p-2.5 rounded-lg border border-gray-200" style={{ backgroundColor: '#f2f4f7' }}>
+                     <div className="flex items-center gap-2">
+                       <div className="w-2 h-2 rounded-full bg-blue-300"></div>
+                       <span className="text-xs text-gray-700 font-medium">Đang thực hiện</span>
+                     </div>
+                     <span className="text-base font-bold text-gray-800">{tasksSummary.in_progress}</span>
+                   </div>
+                   <div className="flex items-center justify-between p-2.5 rounded-lg border border-gray-200" style={{ backgroundColor: '#eff7fe' }}>
+                     <div className="flex items-center gap-2">
+                       <div className="w-2 h-2 rounded-full bg-green-300"></div>
+                       <span className="text-xs text-gray-700 font-medium">Hoàn thành</span>
+                     </div>
+                     <span className="text-base font-bold text-gray-800">{tasksSummary.done}</span>
+                   </div>
+                   <div className="flex items-center justify-between p-2.5 rounded-lg border border-gray-200" style={{ backgroundColor: '#f2f4f7' }}>
+                     <div className="flex items-center gap-2">
+                       <div className="w-2 h-2 rounded-full bg-red-300"></div>
+                       <span className="text-xs text-gray-700 font-medium">Đã hủy</span>
+                     </div>
+                     <span className="text-base font-bold text-gray-800">{tasksSummary.cancelled}</span>
+                   </div>
+                 </div>
               </div>
             )}
-          </Card>
+          </DashboardCard>
         </div>
 
-        {/* Row 3: Bookings + Checkins Charts */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <Card title={`Xu hướng đặt phòng (${daysRange} ngày)`}>
-            {loading ? <Skeleton className="h-64" /> : (
-              <div className="space-y-4">
-                <LineChart series={bookingsSeries} color="#3b82f6" />
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="text-center p-3 bg-blue-50 rounded-xl">
-                    <div className="text-lg font-bold text-blue-700">{bookingsSeries.reduce((sum, s) => sum + s.count, 0)}</div>
-                    <div className="text-xs text-gray-600">Tổng đặt phòng</div>
-                  </div>
-                  <div className="text-center p-3 bg-blue-50 rounded-xl">
-                    <div className="text-lg font-bold text-blue-700">{Math.round(bookingsSeries.reduce((sum, s) => sum + s.count, 0) / Math.max(1, bookingsSeries.length))}</div>
-                    <div className="text-xs text-gray-600">Trung bình/ngày</div>
-                  </div>
-                  <div className="text-center p-3 bg-blue-50 rounded-xl">
-                    <div className="text-lg font-bold text-blue-700">{Math.max(...bookingsSeries.map(s => s.count), 0)}</div>
-                    <div className="text-xs text-gray-600">Cao nhất/ngày</div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </Card>
-          
-          <Card title={`Lượt check-in (${daysRange} ngày)`}>
-            {loading ? <Skeleton className="h-64" /> : (
-              <div className="space-y-4">
-                <AreaChart series={checkinsSeries} color="#3b82f6" />
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="text-center p-3 bg-blue-50 rounded-xl">
-                    <div className="text-lg font-bold text-blue-700">{checkinsSeries.reduce((sum, s) => sum + s.count, 0)}</div>
-                    <div className="text-xs text-gray-600">Tổng check-in</div>
-                  </div>
-                  <div className="text-center p-3 bg-blue-50 rounded-xl">
-                    <div className="text-lg font-bold text-blue-700">{Math.round(checkinsSeries.reduce((sum, s) => sum + s.count, 0) / Math.max(1, checkinsSeries.length))}</div>
-                    <div className="text-xs text-gray-600">Trung bình/ngày</div>
-                  </div>
-                  <div className="text-center p-3 bg-blue-50 rounded-xl">
-                    <div className="text-lg font-bold text-blue-700">{Math.max(...checkinsSeries.map(s => s.count), 0)}</div>
-                    <div className="text-xs text-gray-600">Cao nhất/ngày</div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </Card>
-        </div>
-
-        {/* Row 4: Payments + Services */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <Card 
-            title={`Doanh thu thanh toán (${daysRange} ngày)`} 
-            actions={<ExportCSV filename={`payments_${daysRange}d.csv`} rows={paymentsSeries.map((s) => ({ Ngày: fmtDate(s.date), DoanhThu: s.sum }))} />}
-          >
-            {loading ? <Skeleton className="h-64" /> : (
-              <div className="space-y-4">
-                <BarChart series={paymentsSeries.map((s) => ({ label: fmtDate(s.date), value: s.sum }))} color="#3b82f6" />
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="text-center p-3 bg-blue-50 rounded-xl">
-                    <div className="text-sm font-bold text-blue-700">{fmtCurrency(paymentsSeries.reduce((sum, s) => sum + s.sum, 0))}</div>
-                    <div className="text-xs text-gray-600">Tổng doanh thu</div>
-                  </div>
-                  <div className="text-center p-3 bg-blue-50 rounded-xl">
-                    <div className="text-sm font-bold text-blue-700">{fmtCurrency(Math.round(paymentsSeries.reduce((sum, s) => sum + s.sum, 0) / Math.max(1, paymentsSeries.length)))}</div>
-                    <div className="text-xs text-gray-600">Trung bình/ngày</div>
-                  </div>
-                  <div className="text-center p-3 bg-blue-50 rounded-xl">
-                    <div className="text-sm font-bold text-blue-700">{fmtCurrency(Math.max(...paymentsSeries.map(s => s.sum), 0))}</div>
-                    <div className="text-xs text-gray-600">Cao nhất/ngày</div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </Card>
-          
-          <Card 
-            title="Top dịch vụ được sử dụng" 
-            actions={<ExportCSV filename={`services_top_${daysRange}d.csv`} rows={servicesTop} />}
-          >
-            {loading ? <Skeleton className="h-64" /> : (
-              servicesTop.length === 0 ? (
-                <Empty />
-              ) : (
-                <div className="space-y-4">
-                  <HBarChart series={servicesTop.map((s) => ({ label: s.name, value: s.count }))} color="#3b82f6" />
-                  <div className="space-y-2.5">
-                    {servicesTop.slice(0, 5).map((service, index) => (
-                      <div key={service.name} className="flex items-center justify-between p-3 bg-blue-50 rounded-xl">
-                        <div className="flex items-center gap-3">
-                          <div className="w-7 h-7 bg-blue-500 text-white rounded-lg flex items-center justify-center text-xs font-bold">
-                            {index + 1}
-                          </div>
-                          <span className="text-sm font-medium text-gray-700">{service.name}</span>
-                        </div>
-                        <div className="text-sm font-bold text-blue-700">{service.count} lần</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )
-            )}
-          </Card>
         </div>
       </div>
-    </main>
   );
 }
+

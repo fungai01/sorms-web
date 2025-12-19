@@ -4,9 +4,11 @@ import { Suspense, useEffect, useMemo, useRef, useState, useCallback } from "rea
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
 import { useUsers } from "@/hooks/useApi";
+import { apiClient } from "@/lib/api-client";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
+import { Table, THead, TBody } from "@/components/ui/Table";
 import Input from "@/components/ui/Input";
 import Modal from "@/components/ui/Modal";
 
@@ -46,14 +48,6 @@ function UsersInner() {
   const searchParams = useSearchParams();
   const { user, isAuthenticated, isLoading: authLoading } = useAuth();
   
-  // Helper to get auth headers
-  const getAuthHeaders = () => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_access_token') : null
-    return {
-      'Content-Type': 'application/json',
-      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-    }
-  }
   const [rows, setRows] = useState<User[]>([]);
   const [query, setQuery] = useState("")
   const [page, setPage] = useState(1);
@@ -63,9 +57,18 @@ function UsersInner() {
   const queryDebounceRef = useRef<NodeJS.Timeout | null>(null)
   const isProcessingRef = useRef(false)
   
-  // Load users with hook - debounced query
   const [debouncedQuery, setDebouncedQuery] = useState("")
-  const { data: usersData, loading, error, refetch: refetchUsers } = useUsers(undefined, 0, 100, debouncedQuery.trim() || undefined);
+  const [sortKey, setSortKey] = useState<"name" | "email">("name");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
+  const [filterStatus, setFilterStatus] = useState<"ALL" | "ACTIVE" | "INACTIVE">("ALL");
+
+  // Load users with hook - debounced query
+  const { data: usersData, loading, error, refetch: refetchUsers } = useUsers({
+    page: page - 1,
+    size,
+    keyword: debouncedQuery.trim() || undefined,
+    status: filterStatus === "ALL" ? undefined : filterStatus,
+  });
   
   // Debounce query changes
   useEffect(() => {
@@ -89,8 +92,6 @@ function UsersInner() {
       }
     }
   }, [query])
-  const [sortKey, setSortKey] = useState<"name" | "email">("name");
-  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [detailOpen, setDetailOpen] = useState(false);
   const [selected, setSelected] = useState<User | null>(null);
   const [editOpen, setEditOpen] = useState(false);
@@ -166,10 +167,14 @@ function UsersInner() {
   const [createForm, setCreateForm] = useState<{ full_name: string; email: string; phone_number?: string }>(
     { full_name: "", email: "", phone_number: "" }
   );
+  const [createErrors, setCreateErrors] = useState<Record<string, string>>({});
   const [confirmOpen, setConfirmOpen] = useState<{ open: boolean; type: 'delete' | 'deactivate' | 'activate'; user?: User }>({ open: false, type: 'delete' });
   const [message, setMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [creatingUser, setCreatingUser] = useState(false);
+  const [actionLoadingId, setActionLoadingId] = useState<string | number | null>(null);
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   const phoneRegex = /^(0[3|5|7|8|9])+([0-9]{8})$/;
 
@@ -240,6 +245,34 @@ function UsersInner() {
     }
     
     setFieldErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const validateCreateForm = () => {
+    const errors: Record<string, string> = {};
+    const fullName = createForm.full_name?.trim() || "";
+    const email = createForm.email?.trim() || "";
+    const phone = createForm.phone_number?.trim() || "";
+
+    if (!fullName) {
+      errors.full_name = "Họ tên là bắt buộc";
+    } else if (fullName.length < 3) {
+      errors.full_name = "Họ tên phải có ít nhất 3 ký tự";
+    }
+
+    if (!email) {
+      errors.email = "Email là bắt buộc";
+    } else if (!emailRegex.test(email)) {
+      errors.email = "Email không hợp lệ";
+    }
+
+    if (phone) {
+      if (!phoneRegex.test(phone)) {
+        errors.phone_number = "Số điện thoại không hợp lệ (10 số, bắt đầu 03/05/07/08/09)";
+      }
+    }
+
+    setCreateErrors(errors);
     return Object.keys(errors).length === 0;
   };
 
@@ -439,20 +472,17 @@ function UsersInner() {
       return;
     }
     try {
-      const res = await fetch(`/api/system/users?action=deactivate&userId=${id}`, {
-        method: 'POST',
-        headers: getAuthHeaders()
-      });
-
-      if (res.ok) {
-        setMessage('Đã vô hiệu hóa người dùng.');
-        await refetchUsers();
-      } else {
-        const errorData = await res.json().catch(() => ({}));
-        setMessage(errorData.error || 'Lỗi khi vô hiệu hóa người dùng.');
+      setActionLoadingId(id);
+      const res = await apiClient.put(`/users/${id}/deactivate`);
+      if (!res.success) {
+        throw new Error(res.error || 'Lỗi khi vô hiệu hóa người dùng.');
       }
+      setMessage('Đã vô hiệu hóa người dùng.');
+      await refetchUsers();
     } catch (error) {
-      setMessage('Lỗi khi vô hiệu hóa người dùng.');
+      setMessage(error instanceof Error ? error.message : 'Lỗi khi vô hiệu hóa người dùng.');
+    } finally {
+      setActionLoadingId(null);
     }
   }
 
@@ -462,20 +492,17 @@ function UsersInner() {
       return;
     }
     try {
-      const res = await fetch(`/api/system/users?action=activate&userId=${id}`, {
-        method: 'POST',
-        headers: getAuthHeaders()
-      });
-
-      if (res.ok) {
-        setMessage('Đã kích hoạt người dùng.');
-        await refetchUsers();
-      } else {
-        const errorData = await res.json().catch(() => ({}));
-        setMessage(errorData.error || 'Lỗi khi kích hoạt người dùng.');
+      setActionLoadingId(id);
+      const res = await apiClient.put(`/users/${id}/activate`);
+      if (!res.success) {
+        throw new Error(res.error || 'Lỗi khi kích hoạt người dùng.');
       }
+      setMessage('Đã kích hoạt người dùng.');
+      await refetchUsers();
     } catch (error) {
-      setMessage('Lỗi khi kích hoạt người dùng.');
+      setMessage(error instanceof Error ? error.message : 'Lỗi khi kích hoạt người dùng.');
+    } finally {
+      setActionLoadingId(null);
     }
   }
 
@@ -487,368 +514,389 @@ function UsersInner() {
 
   return (
     <>
-      {/* Header - match admin style with Demo/Live toggle */}
-      <div className="bg-white border-b border-gray-200 px-3 py-3">
-        <div className="flex items-center justify-between">
-          <div className="min-w-0 flex-1">
-            <h1 className="text-lg font-bold text-gray-900 truncate">Người dùng</h1>
-            <p className="text-sm text-gray-500">{filtered.length} người dùng</p>
-          </div>
-          <div className="flex items-center gap-2 sm:gap-3">
-            <Button className="h-9 px-4 bg-blue-600 text-white hover:bg-blue-700 rounded-md text-sm whitespace-nowrap" onClick={() => { setCreateForm({ full_name: "", email: "", phone_number: "" }); setCreateOpen(true); }}>
-              Tạo người dùng
-            </Button>
-            <button
-              type="button"
-              aria-label="Xuất Excel"
-              title="Xuất Excel"
-              className="h-9 px-3 rounded-md border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-50 whitespace-nowrap"
-              onClick={() => {
-                const csv = [['ID', 'Email', 'Họ tên', 'Số điện thoại', 'Trạng thái'], ...filtered.map(u => [u.id || '-', u.email, u.fullName, u.phoneNumber || '-', u.status || 'ACTIVE'])]
-                const blob = new Blob([csv.map(r => r.join(',')).join('\n')], { type: 'text/csv' })
-                const url = URL.createObjectURL(blob)
-                const a = document.createElement('a')
-                a.href = url
-                a.download = `users_${new Date().toISOString().slice(0,10)}.xlsx`
-                a.click()
-                URL.revokeObjectURL(url)
-              }}
-            >
-              Xuất excel
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Content */}
-      <div className="w-full px-4 py-3">
-        <div className="space-y-3">
-        {message && (
-          <div className={`rounded-lg border p-3 text-sm ${
-            message.includes('Lỗi') || message.includes('không có quyền') 
-              ? 'bg-red-50 border-red-200 text-red-700' 
-              : message.includes('thành công')
-              ? 'bg-green-50 border-green-200 text-green-700'
-              : 'bg-blue-50 border-blue-200 text-blue-700'
-          }`}>
-            {message}
-          </div>
-        )}
-        
-        {isLoading && (
-          <div className="rounded-lg border p-4 text-center bg-gray-50 border-gray-200">
-            <div className="flex items-center justify-center gap-2">
-              <div className="animate-spin rounded-full h-4 w-4 border-2 border-gray-400 border-t-transparent"></div>
-              <span className="text-sm text-gray-600">Đang tải...</span>
-            </div>
-          </div>
-        )}
-
-        {/* Removed Demo/Live banner */}
-
-        {/* Filters */}
-        <div className="bg-gray-50 border-b border-gray-200 px-4 py-3 rounded-lg">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-            <div>
-              <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1">Tìm kiếm</label>
-              <div className="relative">
-                <Input
-                  className="w-full h-9 pl-3 pr-9 text-sm border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  placeholder="Tìm theo email, họ tên, vai trò..."
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  onKeyDown={(e) => {
-                    // Nếu nhấn Enter và có query, thử search từ backend
-                    if (e.key === 'Enter' && query.trim()) {
-                      console.log('🔍 Searching for:', query.trim())
-                      refetchUsers()
-                    }
-                  }}
-                />
-                <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
-                  <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                  </svg>
+      <div className="px-6 pt-4 pb-6">
+        <div className="max-w-7xl mx-auto space-y-6">
+          {/* Header & Filters */}
+          <div className="bg-white shadow-sm border border-gray-200 rounded-2xl overflow-hidden">
+            <div className="border-b border-gray-200/50 px-6 py-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h1 className="text-3xl font-bold text-gray-900 leading-tight">Quản lý người dùng</h1>
+                  <p className="text-sm text-gray-500">{filtered.length} người dùng</p>
+                </div>
+                <div className="flex items-center gap-2 sm:gap-3">
+                  <Button className="h-10 px-4 bg-blue-600 text-white hover:bg-blue-700 rounded-xl text-sm whitespace-nowrap" onClick={() => { setCreateForm({ full_name: "", email: "", phone_number: "" }); setCreateErrors({}); setCreateOpen(true); }}>
+                    Tạo người dùng
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    className="h-10 px-3 rounded-xl border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-50 whitespace-nowrap"
+                    onClick={() => {
+                      const csv = [['ID', 'Email', 'Họ tên', 'Số điện thoại', 'Trạng thái'], ...filtered.map(u => [u.id || '-', u.email, u.fullName, u.phoneNumber || '-', u.status || 'ACTIVE'])]
+                      const blob = new Blob([csv.map(r => r.join(',')).join('\n')], { type: 'text/csv' })
+                      const url = URL.createObjectURL(blob)
+                      const a = document.createElement('a')
+                      a.href = url
+                      a.download = `users_${new Date().toISOString().slice(0,10)}.xlsx`
+                      a.click()
+                      URL.revokeObjectURL(url)
+                    }}
+                  >
+                    Xuất excel
+                  </Button>
                 </div>
               </div>
             </div>
-            <div>
-              <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1">Sắp xếp</label>
-              <div className="flex gap-2">
-                <select
-                  className="h-9 rounded-md border border-gray-300 bg-white px-3 text-sm flex-1"
-                  value={sortKey}
-                  onChange={(e) => setSortKey(e.target.value as any)}
-                >
-                  <option value="name">Họ tên</option>
-                  <option value="email">Email</option>
-                </select>
-                <select
-                  className="h-9 rounded-md border border-gray-300 bg-white px-3 text-sm flex-1"
-                  value={sortOrder}
-                  onChange={(e) => setSortOrder(e.target.value as any)}
-                >
-                  <option value="asc">Tăng dần</option>
-                  <option value="desc">Giảm dần</option>
-                </select>
+
+            <div className="bg-white px-6 py-4">
+              {/* Mobile filters */}
+              <div className="lg:hidden space-y-3">
+                <div className="relative">
+                  <Input
+                    className="w-full pl-4 pr-10 py-2.5 text-sm border-gray-300 rounded-xl focus:ring-0 focus:border-gray-300"
+                    placeholder="Tìm theo họ tên..."
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && query.trim()) {
+                        refetchUsers()
+                      }
+                    }}
+                  />
+                  <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                    <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="relative rounded-xl border border-gray-300 bg-white overflow-hidden">
+                    <select
+                      value={filterStatus}
+                      onChange={(e) => setFilterStatus(e.target.value as any)}
+                      className="w-full px-3 py-2.5 pr-10 text-sm focus:outline-none appearance-none bg-transparent border-0"
+                    >
+                      <option value="ALL">Tất cả</option>
+                      <option value="ACTIVE">Đang hoạt động</option>
+                      <option value="INACTIVE">Đã khóa</option>
+                    </select>
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
+                      <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Desktop filters */}
+              <div className="hidden lg:flex flex-row gap-4 items-center">
+                <div className="flex-1 min-w-0">
+                  <div className="relative">
+                    <Input
+                      className="w-full pl-4 pr-10 py-2.5 text-sm border-gray-300 rounded-xl focus:ring-0 focus:border-gray-300"
+                      placeholder="Tìm theo họ tên..."
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && query.trim()) {
+                          refetchUsers()
+                        }
+                      }}
+                    />
+                    <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                      <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                      </svg>
+                    </div>
+                  </div>
+                </div>
+                <div className="w-48 flex-shrink-0 relative rounded-xl border border-gray-300 bg-white overflow-hidden">
+                  <select
+                    value={filterStatus}
+                    onChange={(e) => setFilterStatus(e.target.value as any)}
+                    className="w-full px-3 py-2.5 pr-10 text-sm focus:outline-none appearance-none bg-transparent border-0"
+                  >
+                    <option value="ALL">Tất cả</option>
+                    <option value="ACTIVE">Đang hoạt động</option>
+                    <option value="INACTIVE">Đã khóa</option>
+                  </select>
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
+                    <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
-        </div>
 
-        {!isLoading && (
-        <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-xl rounded-2xl overflow-hidden">
-        <CardHeader className="bg-gray-50 border-b border-gray-200 px-6 py-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg text-left font-bold text-gray-900">Danh sách người dùng</h2>
-            <span className="text-sm text-right font-semibold text-blue-700 bg-blue-100 px-3 py-1 rounded-full">{filtered.length} người dùng</span>
-          </div>
-        </CardHeader>
-        <CardBody className="p-0">
-          <div className="hidden lg:block overflow-x-auto">
-          <table className="min-w-[680px] w-full table-fixed text-xs sm:text-sm">
-            <colgroup>
-              <col className="w-[15%]" />
-              <col className="w-[15%]" />
-              <col className="w-[10%]" />
-              <col className="w-[10%]" />
-              <col className="w-[15%]" />
-            </colgroup>
-            <thead>
-              <tr className="bg-gray-50 border-b border-gray-200 text-gray-700 text-xs sm:text-sm">
-                <th className="px-2 sm:px-3 py-1.5 sm:py-2 text-left font-semibold">Người dùng</th>
-                <th className="px-2 sm:px-3 py-1.5 sm:py-2 text-left font-semibold">Email</th>
-                <th className="px-2 sm:px-3 py-1.5 sm:py-2 text-center font-semibold">Điện thoại</th>
-                <th className="px-2 sm:px-3 py-1.5 sm:py-2 text-center font-semibold">Trạng thái</th>
+          {/* Alerts & loading */}
+          {message && (
+            <div className={`rounded-xl border p-3 text-sm shadow-sm ${
+              message.includes('Lỗi') || message.includes('không có quyền') 
+                ? 'bg-red-50 border-red-200 text-red-700' 
+                : message.includes('thành công')
+                ? 'bg-green-50 border-green-200 text-green-700'
+                : 'bg-blue-50 border-blue-200 text-blue-700'
+            }`}>
+              {message}
+            </div>
+          )}
+          
+          {isLoading && (
+            <div className="rounded-xl border p-4 text-center bg-gray-50 border-gray-200 shadow-sm">
+              <div className="flex items-center justify-center gap-2">
+                <div className="animate-spin rounded-full h-4 w-4 border-2 border-gray-400 border-t-transparent"></div>
+                <span className="text-sm text-gray-600">Đang tải...</span>
+              </div>
+            </div>
+          )}
 
-                <th className="px-2 sm:px-3 py-1.5 sm:py-2 text-center font-semibold">Thao tác</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered
-                .map((u, idx) => (
-                  <tr key={u.email || `user-${idx}`} className="hover:bg-gray-50">
-                    <td className="px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm">
-                      <div className="flex items-center gap-2">
-                        <div className="h-8 w-8 rounded-full overflow-hidden bg-blue-100 flex items-center justify-center text-blue-700 text-xs font-semibold">
+          {!isLoading && (
+          <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-md rounded-2xl overflow-hidden">
+          <CardHeader className="bg-[hsl(var(--page-bg))]/40 border-b border-gray-200 !px-6 py-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-bold text-gray-900">Danh sách người dùng</h2>
+              <span className="text-sm font-semibold text-[hsl(var(--primary))] bg-[hsl(var(--primary)/0.12)] px-3 py-1 rounded-full">{filtered.length} người dùng</span>
+            </div>
+          </CardHeader>
+          <CardBody className="p-0">
+            <div className="hidden lg:block overflow-x-auto">
+              <Table>
+                <THead>
+                  <tr>
+                    <th className="px-4 py-3 text-left text-sm font-bold">Người dùng</th>
+                    <th className="px-4 py-3 text-left text-sm font-bold">Email</th>
+                    <th className="px-4 py-3 text-center text-sm font-bold">Điện thoại</th>
+                    <th className="px-4 py-3 text-center text-sm font-bold">Trạng thái</th>
+                    <th className="px-4 py-3 text-center text-sm font-bold">Thao tác</th>
+                  </tr>
+                </THead>
+                <TBody>
+                  {paginatedData.map((u, idx) => (
+                    <tr key={u.email || `user-${idx}`} className={`transition-colors ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-100'} hover:bg-[#f2f8fe]`}>
+                      <td className="px-4 py-3 text-left text-gray-900">
+                        <div className="flex items-center gap-2">
+                          <div className="h-9 w-9 rounded-full overflow-hidden bg-blue-100 flex items-center justify-center text-blue-700 text-sm font-semibold">
+                            {u.avatarUrl ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={u.avatarUrl} alt={u.fullName || u.email} className="h-full w-full object-cover" />
+                            ) : (
+                              (u.fullName || u.email || '?').charAt(0).toUpperCase()
+                            )}
+                          </div>
+                          <span className="truncate font-semibold">{u.fullName}</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-left text-sm font-mono truncate max-w-[320px]" title={u.email}>
+                        {u.email}
+                      </td>
+                      <td className="px-4 py-3 text-center text-sm">{u.phoneNumber || "—"}</td>
+                      <td className="px-4 py-3 text-center text-sm">
+                        {u.status === "ACTIVE" || !u.status ? <Badge tone="success">ACTIVE</Badge> : <Badge tone="muted">INACTIVE</Badge>}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <div className="flex gap-2 justify-center">
+                          <Button variant="secondary" className="h-8 px-3 text-xs bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]" onClick={() => { setSelected(u); setDetailOpen(true); }}>Xem</Button>
+                          <Button
+                            className="h-8 px-3 text-xs"
+                            onClick={() => {
+                              setEditForm({
+                                id: u.id?.toString() || "",
+                                full_name: u.fullName,
+                                email: u.email,
+                                phone_number: u.phoneNumber,
+                                first_name: u.firstName,
+                                last_name: u.lastName,
+                                date_of_birth: u.dateOfBirth,
+                                gender: u.gender,
+                                address: u.address,
+                                city: u.city,
+                                state: u.state,
+                                postal_code: u.postalCode,
+                                country: u.country || 'Việt Nam',
+                                avatar_url: u.avatarUrl,
+                                bio: u.bio,
+                                preferred_language: u.preferredLanguage || 'vi',
+                                timezone: u.timezone || 'GMT+7',
+                                emergency_contact_name: u.emergencyContactName,
+                                emergency_contact_phone: u.emergencyContactPhone,
+                                emergency_contact_relationship: u.emergencyContactRelationship,
+                                id_card_number: u.idCardNumber,
+                                id_card_issue_date: u.idCardIssueDate,
+                                id_card_issue_place: u.idCardIssuePlace,
+                              });
+                              updateFullName(u.firstName, u.lastName);
+                              const savedProvince = provinces.find((p) => p.name === u.city);
+                              setSelectedProvince(savedProvince?.code || "");
+                              setProvinceSearch(u.city || "");
+                              if (savedProvince) {
+                                const filteredWards = allCommunes.filter((c) => c.provinceCode === savedProvince.code);
+                                const savedWard = filteredWards.find((w) => w.name === u.state);
+                                setSelectedWard(savedWard?.code || "");
+                                setWardSearch(u.state || "");
+                              } else {
+                                setSelectedWard("");
+                                setWardSearch(u.state || "");
+                              }
+                              setEditOpen(true);
+                            }}
+                          >
+                            Sửa
+                          </Button>
+                          <Button variant="danger" className="h-8 px-3 text-xs" onClick={() => setConfirmOpen({ open: true, type: 'delete', user: u })}>Xóa</Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </TBody>
+              </Table>
+            </div>
+
+            {/* Mobile list */}
+            <div className="lg:hidden p-3 space-y-3">
+              {paginatedData.map((u, idx) => (
+                <div key={u.email || `user-mobile-${idx}`} className="bg-white rounded-2xl border border-gray-200 shadow-sm hover:shadow-lg transition-all duration-300 overflow-hidden">
+                  <div className="bg-gradient-to-r from-blue-50 to-indigo-50 px-4 py-3 border-b border-gray-100">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl overflow-hidden bg-blue-100 flex items-center justify-center shadow-sm">
                           {u.avatarUrl ? (
                             // eslint-disable-next-line @next/next/no-img-element
                             <img src={u.avatarUrl} alt={u.fullName || u.email} className="h-full w-full object-cover" />
                           ) : (
-                            (u.fullName || u.email || '?').charAt(0).toUpperCase()
+                            <span className="text-blue-700 font-semibold text-sm">
+                              {(u.fullName || u.email || '?').charAt(0).toUpperCase()}
+                            </span>
                           )}
                         </div>
-                        <span className="truncate">{u.fullName}</span>
+                        <div>
+                          <div className="text-sm font-semibold text-gray-900 truncate">{u.fullName}</div>
+                          <div className="text-xs text-gray-600 truncate">{u.email}</div>
+                          {u.preferredLanguage && (
+                            <div className="text-[11px] text-gray-500">Ngôn ngữ: {u.preferredLanguage}</div>
+                          )}
+                        </div>
                       </div>
-                    </td>
-                    <td className="px-2 sm:px-3 py-1.5 sm:py-2 text-left font-mono text-xs sm:text-sm truncate max-w-[220px] sm:max-w-[320px] lg:max-w-[380px]" title={u.email}>
-                      {u.email}
-                    </td>
-                    <td className="px-2 sm:px-3 py-1.5 sm:py-2 text-center text-xs sm:text-sm">{u.phoneNumber || "—"}</td>
-                    <td className="px-2 sm:px-3 py-1.5 sm:py-2 text-center text-xs sm:text-sm">
-                      {u.status === "ACTIVE" || !u.status ? <Badge tone="success">ACTIVE</Badge> : <Badge tone="muted">INACTIVE</Badge>}
-                    </td>
-                    <td className="px-2 sm:px-3 py-1.5 sm:py-2 text-center">
-                      <div className="flex flex-col sm:flex-row gap-1 sm:gap-2 items-center justify-center">
-                        <Button variant="secondary" className="h-8 px-3 text-xs" onClick={() => { setSelected(u); setDetailOpen(true); }}>Xem</Button>
-                        <Button
-                          className="h-8 px-3 text-xs"
-                          onClick={() => {
-                            setEditForm({
-                              id: u.id?.toString() || "",
-                              full_name: u.fullName,
-                              email: u.email,
-                              phone_number: u.phoneNumber,
-                              first_name: u.firstName,
-                              last_name: u.lastName,
-                              date_of_birth: u.dateOfBirth,
-                              gender: u.gender,
-                              address: u.address,
-                              city: u.city,
-                              state: u.state,
-                              postal_code: u.postalCode,
-                              country: u.country || 'Việt Nam',
-                              avatar_url: u.avatarUrl,
-                              bio: u.bio,
-                              preferred_language: u.preferredLanguage || 'vi',
-                              timezone: u.timezone || 'GMT+7',
-                              emergency_contact_name: u.emergencyContactName,
-                              emergency_contact_phone: u.emergencyContactPhone,
-                              emergency_contact_relationship: u.emergencyContactRelationship,
-                              id_card_number: u.idCardNumber,
-                              id_card_issue_date: u.idCardIssueDate,
-                              id_card_issue_place: u.idCardIssuePlace,
-                            });
-                            updateFullName(u.firstName, u.lastName);
-                            // Set address selection state từ dữ liệu đã lưu
-                            // city = Tỉnh/TP, state = Khu vực (Phường/Xã)
-                            const savedProvince = provinces.find((p) => p.name === u.city);
-                            setSelectedProvince(savedProvince?.code || "");
-                            setProvinceSearch(u.city || "");
-                            // Tìm ward sau khi có province
-                            if (savedProvince) {
-                              const filteredWards = allCommunes.filter((c) => c.provinceCode === savedProvince.code);
-                              const savedWard = filteredWards.find((w) => w.name === u.state);
-                              setSelectedWard(savedWard?.code || "");
-                              setWardSearch(u.state || "");
-                            } else {
-                              setSelectedWard("");
-                              setWardSearch(u.state || "");
-                            }
-                            setEditOpen(true);
-                          }}
-                        >
-                          Sửa
-                        </Button>
-                        <Button variant="danger" className="h-8 px-3 text-xs" onClick={() => setConfirmOpen({ open: true, type: 'delete', user: u })}>Xóa</Button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
-          </div>
-
-          {/* Mobile list */}
-          <div className="lg:hidden p-3 space-y-3">
-            {filtered.map((u, idx) => (
-              <div key={u.email || `user-mobile-${idx}`} className="bg-white rounded-2xl border border-gray-200 shadow-sm hover:shadow-lg transition-all duration-300 overflow-hidden">
-                {/* Header gradient giống bookings/tasks */}
-                <div className="bg-gradient-to-r from-blue-50 to-indigo-50 px-4 py-3 border-b border-gray-100">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl overflow-hidden bg-blue-100 flex items-center justify-center shadow-sm">
-                        {u.avatarUrl ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img src={u.avatarUrl} alt={u.fullName || u.email} className="h-full w-full object-cover" />
-                        ) : (
-                          <span className="text-blue-700 font-semibold text-sm">
-                            {(u.fullName || u.email || '?').charAt(0).toUpperCase()}
-                          </span>
-                        )}
-                      </div>
-                      <div>
-                        <div className="text-sm font-semibold text-gray-900 truncate">{u.fullName}</div>
-                <div className="text-xs text-gray-600 truncate">{u.email}</div>
-                {u.preferredLanguage && (
-                  <div className="text-[11px] text-gray-500">Ngôn ngữ: {u.preferredLanguage}</div>
-                )}
-                      </div>
-                    </div>
-                    <div>{u.status === 'ACTIVE' || !u.status ? <Badge tone="success">ACTIVE</Badge> : <Badge tone="muted">INACTIVE</Badge>}</div>
-                  </div>
-                </div>
-
-                <div className="p-3 space-y-2 text-sm">
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-600">Điện thoại</span>
-                    <span className="font-medium">{u.phoneNumber || '—'}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-600">Trạng thái</span>
-                    <div className="flex flex-wrap gap-1 justify-end">
-                      {u.status === 'ACTIVE' || !u.status ? <Badge tone="success">ACTIVE</Badge> : <Badge tone="muted">INACTIVE</Badge>}
+                      <div>{u.status === 'ACTIVE' || !u.status ? <Badge tone="success">ACTIVE</Badge> : <Badge tone="muted">INACTIVE</Badge>}</div>
                     </div>
                   </div>
-                </div>
 
-                <div className="px-3 py-3 bg-gray-50 border-t border-gray-100">
-                  <div className="grid grid-cols-3 gap-2">
-                    <Button
-                      variant="secondary"
-                      className="h-10 text-xs font-medium px-2"
-                      onClick={() => {
-                        setSelected(u);
-                        setDetailOpen(true);
-                      }}
-                    >
-                      Xem
-                    </Button>
-                    <Button
-                      className="h-10 text-xs font-medium px-2"
-                      onClick={() => {
-                        setEditForm({
-                          id: u.id?.toString() || "",
-                          full_name: u.fullName,
-                          email: u.email,
-                          phone_number: u.phoneNumber,
-                          first_name: u.firstName,
-                          last_name: u.lastName,
-                          date_of_birth: u.dateOfBirth,
-                          gender: u.gender,
-                          address: u.address,
-                          city: u.city,
-                          state: u.state,
-                          postal_code: u.postalCode,
-                          country: u.country || 'Việt Nam',
-                          avatar_url: u.avatarUrl,
-                          bio: u.bio,
-                          preferred_language: u.preferredLanguage || 'vi',
-                          timezone: u.timezone || 'GMT+7',
-                          emergency_contact_name: u.emergencyContactName,
-                          emergency_contact_phone: u.emergencyContactPhone,
-                          emergency_contact_relationship: u.emergencyContactRelationship,
-                          id_card_number: u.idCardNumber,
-                          id_card_issue_date: u.idCardIssueDate,
-                          id_card_issue_place: u.idCardIssuePlace,
-                        });
-                        updateFullName(u.firstName, u.lastName);
-                        // Set address selection state từ dữ liệu đã lưu
-                        const savedProvince = provinces.find((p) => p.name === u.city);
-                        setSelectedProvince(savedProvince?.code || "");
-                        setProvinceSearch(u.city || "");
-                        if (savedProvince) {
-                          const filteredWards = allCommunes.filter((c) => c.provinceCode === savedProvince.code);
-                          const savedWard = filteredWards.find((w) => w.name === u.state);
-                          setSelectedWard(savedWard?.code || "");
-                          setWardSearch(u.state || "");
-                        } else {
-                          setSelectedWard("");
-                          setWardSearch(u.state || "");
+                  <div className="p-3 space-y-2 text-sm">
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-600">Điện thoại</span>
+                      <span className="font-medium">{u.phoneNumber || '—'}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-600">Trạng thái</span>
+                      <div className="flex flex-wrap gap-1 justify-end">
+                        {u.status === 'ACTIVE' || !u.status ? <Badge tone="success">ACTIVE</Badge> : <Badge tone="muted">INACTIVE</Badge>}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="px-3 py-3 bg-gray-50 border-t border-gray-100">
+                    <div className="grid grid-cols-3 gap-2">
+                      <Button
+                        variant="secondary"
+                        className="h-10 text-xs font-medium px-2 bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]"
+                        onClick={() => {
+                          setSelected(u);
+                          setDetailOpen(true);
+                        }}
+                      >
+                        Xem
+                      </Button>
+                      <Button
+                        className="h-10 text-xs font-medium px-2"
+                        onClick={() => {
+                          setEditForm({
+                            id: u.id?.toString() || "",
+                            full_name: u.fullName,
+                            email: u.email,
+                            phone_number: u.phoneNumber,
+                            first_name: u.firstName,
+                            last_name: u.lastName,
+                            date_of_birth: u.dateOfBirth,
+                            gender: u.gender,
+                            address: u.address,
+                            city: u.city,
+                            state: u.state,
+                            postal_code: u.postalCode,
+                            country: u.country || 'Việt Nam',
+                            avatar_url: u.avatarUrl,
+                            bio: u.bio,
+                            preferred_language: u.preferredLanguage || 'vi',
+                            timezone: u.timezone || 'GMT+7',
+                            emergency_contact_name: u.emergencyContactName,
+                            emergency_contact_phone: u.emergencyContactPhone,
+                            emergency_contact_relationship: u.emergencyContactRelationship,
+                            id_card_number: u.idCardNumber,
+                            id_card_issue_date: u.idCardIssueDate,
+                            id_card_issue_place: u.idCardIssuePlace,
+                          });
+                          updateFullName(u.firstName, u.lastName);
+                          const savedProvince = provinces.find((p) => p.name === u.city);
+                          setSelectedProvince(savedProvince?.code || "");
+                          setProvinceSearch(u.city || "");
+                          if (savedProvince) {
+                            const filteredWards = allCommunes.filter((c) => c.provinceCode === savedProvince.code);
+                            const savedWard = filteredWards.find((w) => w.name === u.state);
+                            setSelectedWard(savedWard?.code || "");
+                            setWardSearch(u.state || "");
+                          } else {
+                            setSelectedWard("");
+                            setWardSearch(u.state || "");
+                          }
+                          setEditOpen(true);
+                        }}
+                      >
+                        Sửa
+                      </Button>
+                      <Button
+                        variant="danger"
+                        className="h-10 text-xs font-medium px-2"
+                        onClick={() =>
+                          setConfirmOpen({ open: true, type: "delete", user: u })
                         }
-                        setEditOpen(true);
-                      }}
-                    >
-                      Sửa
-                    </Button>
-                    <Button
-                      variant="danger"
-                      className="h-10 text-xs font-medium px-2"
-                      onClick={() =>
-                        setConfirmOpen({ open: true, type: "delete", user: u })
-                      }
-                    >
-                      Xóa
-                    </Button>
+                      >
+                        Xóa
+                      </Button>
+                    </div>
                   </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Pagination */}
+            <div className="bg-gradient-to-r from-gray-50 to-blue-50 px-3 py-4 border-t border-gray-200/50">
+              <div className="flex flex-col lg:flex-row items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-600">Hàng / trang:</span>
+                  <select
+                    className="h-9 rounded-lg border border-gray-300 bg-white px-3 text-sm"
+                    value={size}
+                    onChange={(e) => { setPage(1); setSize(parseInt(e.target.value, 10)); }}
+                  >
+                    <option value={10}>10</option>
+                    <option value={20}>20</option>
+                    <option value={50}>50</option>
+                  </select>
+                  <span className="text-sm text-gray-500">trên {filtered.length}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button variant="secondary" className="h-9 px-3 text-sm" disabled={page === 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Trước</Button>
+                  <span className="px-2 text-sm font-semibold text-gray-700">Trang {page} / {Math.max(1, Math.ceil(filtered.length / size))}</span>
+                  <Button variant="secondary" className="h-9 px-3 text-sm" disabled={page >= Math.ceil(filtered.length / size)} onClick={() => setPage((p) => Math.min(Math.ceil(filtered.length / size), p + 1))}>Sau</Button>
                 </div>
               </div>
-            ))}
-          </div>
-
-          <div className="mt-3 sm:mt-4 flex flex-col sm:flex-row items-center justify-between gap-3 sm:gap-0 text-xs sm:text-sm">
-            <div className="flex items-center gap-2">
-              <span>Hàng:</span>
-              <select
-                className="h-7 sm:h-8 rounded-md border border-gray-300 bg-white px-2 text-xs sm:text-sm"
-                value={size}
-                onChange={(e) => { setPage(1); setSize(parseInt(e.target.value, 10)); }}
-              >
-                <option value={10}>10</option>
-                <option value={20}>20</option>
-                <option value={50}>50</option>
-              </select>
-              <span className="text-gray-500">trên {filtered.length}</span>
             </div>
-            <div className="flex items-center gap-1 sm:gap-2">
-              <Button variant="secondary" className="h-7 sm:h-8 px-2 sm:px-3 text-xs" disabled={page === 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Trước</Button>
-              <span className="px-2 text-xs sm:text-sm">Trang {page} / {Math.max(1, Math.ceil(filtered.length / size))}</span>
-              <Button variant="secondary" className="h-7 sm:h-8 px-2 sm:px-3 text-xs" disabled={page >= Math.ceil(filtered.length / size)} onClick={() => setPage((p) => Math.min(Math.ceil(filtered.length / size), p + 1))}>Sau</Button>
-            </div>
-          </div>
-        </CardBody>
-        </Card>
-        )}
+          </CardBody>
+          </Card>
+          )}
+        </div>
+      </div>
 
       <Modal open={detailOpen} onClose={() => setDetailOpen(false)} title="Chi tiết người dùng" size="xl">
         {selected ? (
@@ -1028,72 +1076,69 @@ function UsersInner() {
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => { setEditOpen(false); setFieldErrors({}); }}>Hủy</Button>
             <Button
+              disabled={savingEdit}
               onClick={async () => {
-              // Validate before submit
-              if (!validateEditForm()) {
-                setMessage('Vui lòng điền đầy đủ các trường bắt buộc.');
-                return;
-              }
-              try {
-                // Giới hạn avatarUrl - nếu base64 quá lớn (>500KB) thì bỏ qua
-                let avatarToSend = editForm.avatar_url || '';
-                if (avatarToSend.startsWith('data:') && avatarToSend.length > 500000) {
-                  console.warn('[Admin Users] Avatar base64 quá lớn, bỏ qua để tránh lỗi backend');
-                  avatarToSend = '';
+                if (!validateEditForm()) {
+                  setMessage('Vui lòng điền đầy đủ các trường bắt buộc.');
+                  return;
                 }
-
-                const payload = {
-                  id: editForm.id,
-                  fullName: editForm.full_name,
-                  phoneNumber: editForm.phone_number,
-                  firstName: editForm.first_name,
-                  lastName: editForm.last_name,
-                  dateOfBirth: editForm.date_of_birth || null,
-                  gender: editForm.gender,
-                  address: editForm.address,
-                  city: editForm.city,
-                  state: editForm.state,
-                  postalCode: editForm.postal_code,
-                  country: editForm.country,
-                  avatarUrl: avatarToSend,
-                  bio: editForm.bio,
-                  preferredLanguage: editForm.preferred_language,
-                  timezone: editForm.timezone,
-                  emergencyContactName: editForm.emergency_contact_name,
-                  emergencyContactPhone: editForm.emergency_contact_phone,
-                  emergencyContactRelationship: editForm.emergency_contact_relationship,
-                  idCardNumber: editForm.id_card_number,
-                  idCardIssueDate: editForm.id_card_issue_date || null,
-                  idCardIssuePlace: editForm.id_card_issue_place,
-                };
-
-                console.log('[Admin Users] PUT payload:', payload);
-
-                const res = await fetch('/api/system/users', {
-                  method: 'PUT',
-                  headers: getAuthHeaders(),
-                  body: JSON.stringify(payload)
-                });
-
-                const responseText = await res.text();
-                let errorData: any = {};
-                try { errorData = responseText ? JSON.parse(responseText) : {}; } catch { errorData = { message: responseText }; }
-
-                if (!res.ok) {
-                  console.error('[Admin Users] PUT error:', res.status, errorData);
-                  const errorMsg = errorData.error || errorData.message || `Lỗi backend: ${res.status}`;
-                  throw new Error(errorMsg);
+                if (!editForm.id) {
+                  setMessage('Thiếu ID người dùng.');
+                  return;
                 }
+                try {
+                  setSavingEdit(true);
+                  // Giới hạn avatarUrl - nếu base64 quá lớn (>500KB) thì bỏ qua
+                  let avatarToSend = editForm.avatar_url || '';
+                  if (avatarToSend.startsWith('data:') && avatarToSend.length > 500000) {
+                    console.warn('[Admin Users] Avatar base64 quá lớn, bỏ qua để tránh lỗi backend');
+                    avatarToSend = '';
+                  }
 
-                setEditOpen(false);
-                setFieldErrors({});
-                setMessage('Đã cập nhật người dùng thành công.');
-                await refetchUsers();
-              } catch (e) {
-                console.error('[Admin Users] Update error:', e);
-                setMessage(e instanceof Error ? e.message : 'Lỗi khi cập nhật người dùng.');
-              }
-            }}>Lưu</Button>
+                  const payload = {
+                    id: editForm.id,
+                    fullName: editForm.full_name,
+                    phoneNumber: editForm.phone_number,
+                    firstName: editForm.first_name,
+                    lastName: editForm.last_name,
+                    dateOfBirth: editForm.date_of_birth || null,
+                    gender: editForm.gender,
+                    address: editForm.address,
+                    city: editForm.city,
+                    state: editForm.state,
+                    postalCode: editForm.postal_code,
+                    country: editForm.country,
+                    avatarUrl: avatarToSend,
+                    bio: editForm.bio,
+                    preferredLanguage: editForm.preferred_language,
+                    timezone: editForm.timezone,
+                    emergencyContactName: editForm.emergency_contact_name,
+                    emergencyContactPhone: editForm.emergency_contact_phone,
+                    emergencyContactRelationship: editForm.emergency_contact_relationship,
+                    idCardNumber: editForm.id_card_number,
+                    idCardIssueDate: editForm.id_card_issue_date || null,
+                    idCardIssuePlace: editForm.id_card_issue_place,
+                  };
+
+                  const res = await apiClient.put(`/users/${editForm.id}`, payload);
+                  if (!res.success) {
+                    throw new Error(res.error || 'Lỗi khi cập nhật người dùng.');
+                  }
+
+                  setEditOpen(false);
+                  setFieldErrors({});
+                  setMessage('Đã cập nhật người dùng thành công.');
+                  await refetchUsers();
+                } catch (e) {
+                  console.error('[Admin Users] Update error:', e);
+                  setMessage(e instanceof Error ? e.message : 'Lỗi khi cập nhật người dùng.');
+                } finally {
+                  setSavingEdit(false);
+                }
+              }}
+            >
+              {savingEdit ? 'Đang lưu...' : 'Lưu'}
+            </Button>
           </div>
         }
       >
@@ -1428,40 +1473,45 @@ function UsersInner() {
       {/* Modal tạo người dùng */}
       <Modal
         open={createOpen}
-        onClose={() => setCreateOpen(false)}
+        onClose={() => { setCreateOpen(false); setCreateErrors({}); }}
         title="Tạo người dùng"
         footer={
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setCreateOpen(false)}>Hủy</Button>
-            <Button disabled={
-              !createForm.full_name.trim() ||
-              createForm.full_name.trim().length < 3 ||
-              !emailRegex.test(createForm.email) ||
-              (!!createForm.phone_number && !phoneRegex.test(createForm.phone_number))
-            }
+            <Button
+              disabled={creatingUser}
               onClick={async () => {
-              try {
-                const resp = await fetch('/api/system/users?action=create', {
-                  method: 'POST',
-                  headers: getAuthHeaders(),
-                  body: JSON.stringify({
-                    fullName: createForm.full_name,
-                    email: createForm.email,
-                    phoneNumber: createForm.phone_number
-                  })
-                })
-                if (!resp.ok) {
-                  const errorData = await resp.json().catch(() => ({}));
-                  throw new Error(errorData.error || 'Tạo người dùng thất bại');
+                if (!validateCreateForm()) {
+                  setMessage('Vui lòng kiểm tra thông tin tạo mới.');
+                  return;
                 }
-                setCreateOpen(false);
-                setCreateForm({ full_name: "", email: "", phone_number: "" });
-                setMessage('Đã tạo người dùng mới.');
-                await refetchUsers()
-              } catch (e) {
-                setMessage(e instanceof Error ? e.message : 'Lỗi khi tạo người dùng mới.')
-              }
-            }}>Tạo</Button>
+                try {
+                  setCreatingUser(true);
+                  const password = `sorms_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+                  const payload = {
+                    email: createForm.email.trim(),
+                    password,
+                    fullName: createForm.full_name.trim(),
+                    phoneNumber: createForm.phone_number?.trim() || '',
+                  };
+                  const resp = await apiClient.post('/users', payload);
+                  if (!resp.success) {
+                    throw new Error(resp.error || 'Tạo người dùng thất bại');
+                  }
+                  setCreateOpen(false);
+                  setCreateForm({ full_name: "", email: "", phone_number: "" });
+                  setCreateErrors({});
+                  setMessage('Đã tạo người dùng mới.');
+                  await refetchUsers();
+                } catch (e) {
+                  setMessage(e instanceof Error ? e.message : 'Lỗi khi tạo người dùng mới.');
+                } finally {
+                  setCreatingUser(false);
+                }
+              }}
+            >
+              {creatingUser ? 'Đang tạo...' : 'Tạo'}
+            </Button>
           </div>
         }
       >
@@ -1469,24 +1519,17 @@ function UsersInner() {
           <div> 
             <label className="mb-1 block text-sm font-medium">Họ tên</label>
             <Input value={createForm.full_name} onChange={(e) => setCreateForm((f) => ({ ...f, full_name: e.target.value }))} />
+            {createErrors.full_name && <p className="mt-1 text-xs text-red-600">{createErrors.full_name}</p>}
           </div>
           <div>
             <label className="mb-1 block text-sm font-medium">Email</label>
             <Input value={createForm.email} onChange={(e) => setCreateForm((f) => ({ ...f, email: e.target.value }))} />
+            {createErrors.email && <p className="mt-1 text-xs text-red-600">{createErrors.email}</p>}
           </div>
           <div>
             <label className="mb-1 block text-sm font-medium">Điện thoại</label>
             <Input value={createForm.phone_number || ''} onChange={(e) => setCreateForm((f) => ({ ...f, phone_number: e.target.value }))} />
-          </div>
-          <div>
-            {(!createForm.full_name.trim() || createForm.full_name.trim().length < 3 || !emailRegex.test(createForm.email) || (!!createForm.phone_number && !phoneRegex.test(createForm.phone_number))) && (
-              <div className="mt-1 text-xs text-red-600">
-                {!createForm.full_name.trim() ? 'Họ tên bắt buộc. ' : ''}
-                {createForm.full_name.trim() && createForm.full_name.trim().length < 3 ? 'Họ tên phải có ít nhất 3 ký tự. ' : ''}
-                {!emailRegex.test(createForm.email) ? 'Email không hợp lệ. ' : ''}
-                {!!createForm.phone_number && !phoneRegex.test(createForm.phone_number) ? 'Số điện thoại phải có 10-11 chữ số. ' : ''}
-              </div>
-            )}
+            {createErrors.phone_number && <p className="mt-1 text-xs text-red-600">{createErrors.phone_number}</p>}
           </div>
         </div>
       </Modal>
@@ -1499,21 +1542,23 @@ function UsersInner() {
         footer={
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setConfirmOpen({ open: false, type: 'delete' })}>Hủy</Button>
-            <Button onClick={async () => {
+            <Button disabled={actionLoadingId === confirmOpen.user?.id} onClick={async () => {
               if (!confirmOpen.user) return;
               try {
-                const resp = await fetch(`/api/system/users?id=${confirmOpen.user.id}` , { method: 'DELETE', headers: getAuthHeaders() })
-                if (!resp.ok) {
-                  const err = await resp.json().catch(() => ({}))
-                  throw new Error(err?.error || 'Xóa người dùng thất bại')
+                setActionLoadingId(confirmOpen.user.id || null);
+                const resp = await apiClient.delete(`/users/${confirmOpen.user.id}`);
+                if (!resp.success) {
+                  throw new Error(resp.error || 'Xóa người dùng thất bại');
                 }
                 setMessage('Đã xóa người dùng.');
                 setConfirmOpen({ open: false, type: 'delete' });
                 await refetchUsers()
               } catch (e) {
                 setMessage(e instanceof Error ? e.message : 'Lỗi khi xóa người dùng.')
+              } finally {
+                setActionLoadingId(null);
               }
-            }}>Xác nhận</Button>
+            }}>{actionLoadingId === confirmOpen.user?.id ? 'Đang xóa...' : 'Xác nhận'}</Button>
           </div>
         }
       >
@@ -1521,20 +1566,15 @@ function UsersInner() {
           Bạn có chắc muốn xóa người dùng này? Hành động này không thể hoàn tác.
         </div>
       </Modal>
-      </div>
-      </div>
     </>
   );
 }
 
+
 export default function UsersPage() {
   return (
-    <Suspense fallback={<div className="p-4 text-sm text-gray-600">Đang tải...</div>}>
+    <Suspense fallback={null}>
       <UsersInner />
     </Suspense>
-  )
+  );
 }
-
-
-
-

@@ -7,6 +7,7 @@ import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import Modal from "@/components/ui/Modal";
 import { useAuth } from "@/hooks/useAuth";
+import { useUsers } from "@/hooks/useApi";
 import {
   UserIcon,
   EnvelopeIcon,
@@ -150,14 +151,15 @@ function SectionCard({
         <button
           type="button"
           onClick={() => collapsible && setOpen((o) => !o)}
-          className={`w-full flex items-center justify-between ${collapsible ? 'cursor-pointer' : ''}`}
+          className={`!bg-transparent !text-gray-900 w-full flex items-center justify-between hover:!bg-transparent hover:!text-gray-900 focus:outline-none focus:ring-0 ${collapsible ? 'cursor-pointer' : ''}`}
+          style={{ backgroundColor: 'transparent', color: '#111827' }}
         >
           <div className="flex items-center gap-2">
-            {Icon ? <Icon className="h-5 w-5 text-gray-600" /> : null}
-            <h2 className="text-base font-semibold text-gray-900">{title}</h2>
+            {Icon ? <Icon className="h-5 w-5 text-gray-600" style={{ color: '#4b5563' }} /> : null}
+            <h2 className="text-base font-semibold !text-gray-900" style={{ color: '#111827' }}>{title}</h2>
           </div>
           {collapsible && (
-            <ChevronDownIcon className={`h-5 w-5 text-gray-500 transition-transform ${open ? '' : '-rotate-90'}`} />
+            <ChevronDownIcon className={`h-5 w-5 !text-gray-500 transition-transform ${open ? '' : '-rotate-90'}`} style={{ color: '#6b7280' }} />
           )}
         </button>
       </CardHeader>
@@ -183,6 +185,7 @@ function InfoRow({ label, value, loading, hideIfEmpty = true }: { label: string;
 export default function ProfilePage() {
   const router = useRouter();
   const { user, isAuthenticated, isLoading } = useAuth();
+  const { data: usersData, loading: usersLoading } = useUsers();
   
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(false);
@@ -314,82 +317,60 @@ export default function ProfilePage() {
     else setAddressDetail("");
   }, [selectedProvince, selectedWard, provinces, wards]);
 
-  // Load profile from API
+  // Load profile from API using hook
   useEffect(() => {
-    const load = async () => {
-      if (isLoading) return;
-      if (!isAuthenticated || !user) {
-        router.push("/login");
-        return;
-      }
-      if (!user.email) return;
-      
-      setLoading(true);
-      try {
-        const res = await fetch("/api/system/users?self=1", {
-          headers: { 
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${localStorage.getItem("auth_access_token") || ""}`,
-          }, 
-          credentials: "include",
-        });
-        const data = await res.json();
-        const items: any[] = Array.isArray(data?.items) ? data.items : Array.isArray(data) ? data : [];
-        const found = items[0] || items.find((u) => (u.email || "").toLowerCase() === user.email!.toLowerCase());
-        if (found) {
-          const mapped: UserProfile = {
-            id: found.id,
-            email: found.email,
-            fullName: found.fullName ?? found.full_name ?? user.name ?? user.email,
-            phoneNumber: found.phoneNumber ?? found.phone_number,
-            status: found.status,
-            firstName: found.firstName ?? found.first_name,
-            lastName: found.lastName ?? found.last_name,
-            dateOfBirth: found.dateOfBirth ?? found.date_of_birth,
-            gender: found.gender,
-            address: found.address,
-            city: found.city,
-            state: found.state,
-            postalCode: found.postalCode ?? found.postal_code,
-            country: found.country,
-            avatarUrl: found.avatarUrl ?? found.avatar_url ?? user.avatarUrl,
-            bio: found.bio,
-            preferredLanguage: found.preferredLanguage ?? found.preferred_language,
-            timezone: found.timezone,
-            emergencyContactName: found.emergencyContactName,
-            emergencyContactPhone: found.emergencyContactPhone,
-            emergencyContactRelationship: found.emergencyContactRelationship,
-            userProfileId: found.userProfileId,
-            idCardNumber: found.idCardNumber,
-            idCardIssueDate: found.idCardIssueDate ?? found.id_card_issue_date,
-            idCardIssuePlace: found.idCardIssuePlace ?? found.id_card_issue_place,
-            createdDate: found.createdDate,
-            lastModifiedDate: found.lastModifiedDate,
-          };
-          setProfile(mapped);
-        } else {
-          setProfile({
-            id: user.id ?? 0,
-            email: user.email,
-            fullName: user.name ?? user.email,
-            phoneNumber: (user as any).phoneNumber,
-            avatarUrl: user.avatarUrl,
-          });
-        }
-      } catch (e) {
-        setProfile({
-          id: user.id ?? 0,
-          email: user.email,
-          fullName: user.name ?? user.email,
-          phoneNumber: (user as any).phoneNumber,
-          avatarUrl: user.avatarUrl,
-        });
-      } finally {
-        setLoading(false);
-      }
-    };
-    load();
-  }, [isAuthenticated, isLoading, router, user]);
+    if (isLoading || usersLoading) return;
+    if (!isAuthenticated || !user) {
+      router.push("/login");
+      return;
+    }
+    if (!user.email) return;
+    
+    const data = usersData as any;
+    const items: any[] = Array.isArray(data?.items) ? data.items : Array.isArray(data?.data?.items) ? data.data.items : Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
+    const found = items.find((u) => (u.email || "").toLowerCase() === user.email!.toLowerCase());
+    
+    if (found) {
+      const mapped: UserProfile = {
+        id: found.id,
+        email: found.email,
+        fullName: found.fullName ?? found.full_name ?? user.name ?? user.email,
+        phoneNumber: found.phoneNumber ?? found.phone_number,
+        status: found.status,
+        firstName: found.firstName ?? found.first_name,
+        lastName: found.lastName ?? found.last_name,
+        dateOfBirth: found.dateOfBirth ?? found.date_of_birth,
+        gender: found.gender,
+        address: found.address,
+        city: found.city,
+        state: found.state,
+        postalCode: found.postalCode ?? found.postal_code,
+        country: found.country,
+        avatarUrl: found.avatarUrl ?? found.avatar_url ?? user.avatarUrl,
+        bio: found.bio,
+        preferredLanguage: found.preferredLanguage ?? found.preferred_language,
+        timezone: found.timezone,
+        emergencyContactName: found.emergencyContactName,
+        emergencyContactPhone: found.emergencyContactPhone,
+        emergencyContactRelationship: found.emergencyContactRelationship,
+        userProfileId: found.userProfileId,
+        idCardNumber: found.idCardNumber,
+        idCardIssueDate: found.idCardIssueDate ?? found.id_card_issue_date,
+        idCardIssuePlace: found.idCardIssuePlace ?? found.id_card_issue_place,
+        createdDate: found.createdDate,
+        lastModifiedDate: found.lastModifiedDate,
+      };
+      setProfile(mapped);
+    } else {
+      setProfile({
+        id: user.id ?? 0,
+        email: user.email,
+        fullName: user.name ?? user.email,
+        phoneNumber: (user as any).phoneNumber,
+        avatarUrl: user.avatarUrl,
+      });
+    }
+  }, [isAuthenticated, isLoading, router, user, usersData, usersLoading]);
 
   // Flash autohide
   useEffect(() => {
@@ -649,9 +630,13 @@ export default function ProfilePage() {
           <div className="flex items-center justify-between">
             <div className="min-w-0 flex-1 pl-1 sm:pl-2">
               <div className="flex items-center gap-3 mb-2">
-                <Button onClick={() => router.push(backUrl)} variant="secondary" className="flex items-center gap-2">
+                <button 
+                  onClick={() => router.push(backUrl)} 
+                  className="!bg-white !text-gray-700 hover:!bg-gray-100 border border-gray-300 rounded-md px-4 py-2 text-sm font-medium transition-colors flex items-center gap-2"
+                  style={{ backgroundColor: '#ffffff', color: '#374151' }}
+                >
                   Quay lại
-                </Button>
+                </button>
               </div>
               <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">Hồ sơ cá nhân</h1>
               <p className="text-sm text-gray-600 mt-1">Quản lý thông tin tài khoản và liên hệ của bạn</p>
@@ -711,7 +696,13 @@ export default function ProfilePage() {
                   </div>
 
                   <div className="mt-6 w-full">
-                    <Button variant="secondary" className="w-full" onClick={openEdit}>Chỉnh sửa thông tin</Button>
+                    <button 
+                      className="!bg-white !text-gray-700 hover:!bg-gray-100 border border-gray-300 rounded-md px-4 py-2 text-sm font-medium transition-colors w-full"
+                      style={{ backgroundColor: '#ffffff', color: '#374151' }}
+                      onClick={openEdit}
+                    >
+                      Chỉnh sửa thông tin
+                    </button>
                   </div>
                 </div>
               </CardBody>
@@ -765,14 +756,23 @@ export default function ProfilePage() {
         open={editModalOpen}
         onClose={() => setEditModalOpen(false)}
         title="Chỉnh sửa thông tin cá nhân"
+        size="xl"
         footer={
           <div className="flex justify-end gap-2">
-            <Button variant="secondary" onClick={() => setEditModalOpen(false)}>
+            <button 
+              className="!bg-white !text-gray-700 hover:!bg-gray-100 border border-gray-300 rounded-md px-4 py-2 text-sm font-medium transition-colors"
+              style={{ backgroundColor: '#ffffff', color: '#374151' }}
+              onClick={() => setEditModalOpen(false)}
+            >
               Hủy
-            </Button>
-            <Button variant="secondary" onClick={handleUpdate}>
+            </button>
+            <button 
+              className="!bg-white !text-gray-700 hover:!bg-gray-100 border border-gray-300 rounded-md px-4 py-2 text-sm font-medium transition-colors"
+              style={{ backgroundColor: '#ffffff', color: '#374151' }}
+              onClick={handleUpdate}
+            >
               Cập nhật
-            </Button>
+            </button>
           </div>
         }
       >
@@ -795,7 +795,7 @@ export default function ProfilePage() {
               <Field label="Họ và tên" required>
                 <input
                   type="text"
-                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 ${
                     fieldErrors.fullName ? "border-red-300" : "border-gray-300"
                   }`}
                   value={editForm.fullName}
@@ -807,7 +807,7 @@ export default function ProfilePage() {
                 <input
                   type="tel"
                   maxLength={10}
-                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 ${
                     fieldErrors.phoneNumber ? "border-red-300" : "border-gray-300"
                   }`}
                   value={editForm.phoneNumber}
@@ -842,7 +842,7 @@ export default function ProfilePage() {
                 <input
                   type="text"
                   placeholder="Hoặc dán URL ảnh"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-gray-400"
                   value={editForm.avatarUrl}
                   onChange={(e) => setEditForm((p) => ({ ...p, avatarUrl: e.target.value }))}
                 />
@@ -864,7 +864,7 @@ export default function ProfilePage() {
               <Field label="Ngày sinh" required>
                 <input
                   type="date"
-                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 ${
                     fieldErrors.dateOfBirth ? "border-red-300" : "border-gray-300"
                   }`}
                   value={editForm.dateOfBirth}
@@ -874,7 +874,7 @@ export default function ProfilePage() {
               </Field>
               <Field label="Giới tính" required>
                 <select
-                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 ${
                     fieldErrors.gender ? "border-red-300" : "border-gray-300"
                   }`}
                   value={editForm.gender}
@@ -892,7 +892,7 @@ export default function ProfilePage() {
               <Field label="Giới thiệu">
                 <textarea
                   rows={2}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 resize-y"
                   value={editForm.bio}
                   onChange={(e) => setEditForm((p) => ({ ...p, bio: e.target.value }))}
                   placeholder="Mô tả ngắn"
@@ -907,7 +907,7 @@ export default function ProfilePage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Field label="Tỉnh/Thành phố" required>
                 <select
-                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 ${
                     fieldErrors.province ? "border-red-300" : "border-gray-300"
                   }`}
                   value={selectedProvince}
@@ -922,7 +922,7 @@ export default function ProfilePage() {
               </Field>
               <Field label="Phường/Xã" required>
                 <select
-                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 ${
                     fieldErrors.ward ? "border-red-300" : "border-gray-300"
                   }`}
                   value={selectedWard}
@@ -939,7 +939,7 @@ export default function ProfilePage() {
               <Field className="sm:col-span-2" label="Địa chỉ chi tiết" required>
                 <textarea
                   rows={2}
-                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 ${
                     fieldErrors.addressDetail ? "border-red-300" : "border-gray-300"
                   }`}
                   value={addressDetail}
@@ -958,7 +958,7 @@ export default function ProfilePage() {
               <Field label="Họ tên" required={isEmergencyContactRequired}>
                 <input
                   type="text"
-                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 ${
                     fieldErrors.emergencyContactName ? "border-red-300" : "border-gray-300"
                   }`}
                   value={editForm.emergencyContactName}
@@ -970,7 +970,7 @@ export default function ProfilePage() {
                 <input
                   type="text"
                   maxLength={10}
-                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 ${
                     fieldErrors.emergencyContactPhone ? "border-red-300" : "border-gray-300"
                   }`}
                   value={editForm.emergencyContactPhone}
@@ -989,7 +989,7 @@ export default function ProfilePage() {
                 <input
                   type="text"
                   maxLength={12}
-                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 ${
                     fieldErrors.idCardNumber ? "border-red-300" : "border-gray-300"
                   }`}
                   value={editForm.idCardNumber}
@@ -1004,7 +1004,7 @@ export default function ProfilePage() {
               <Field label="Ngày cấp" required={isIdCardRequired}>
                 <input
                   type="date"
-                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 ${
                     fieldErrors.idCardIssueDate ? "border-red-300" : "border-gray-300"
                   }`}
                   value={editForm.idCardIssueDate}
@@ -1015,7 +1015,7 @@ export default function ProfilePage() {
               <Field label="Nơi cấp" required={isIdCardRequired}>
                 <input
                   type="text"
-                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 ${
                     fieldErrors.idCardIssuePlace ? "border-red-300" : "border-gray-300"
                   }`}
                   value={editForm.idCardIssuePlace}

@@ -1,7 +1,7 @@
 // Unified HTTP utilities: CookieManager + authFetch interceptor
 // Centralize token/role cookie handling and authenticated fetch wrapper
 
-export type AppRole = 'admin' | 'office' | 'security' | 'staff' | 'user'
+export type AppRole = 'admin' | 'office' | 'staff' | 'user'
 
 function isBrowser() {
   return typeof window !== 'undefined' && typeof document !== 'undefined'

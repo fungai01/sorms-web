@@ -1,1403 +1,729 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import Input from "@/components/ui/Input";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import Modal from "@/components/ui/Modal";
-import { type Booking, type BookingStatus } from '@/lib/types'
-import { useBookings, useRooms } from '@/hooks/useApi'
-import { authService } from '@/lib/auth-service'
-import { createBookingNotification } from '@/lib/notifications'
+import { Table, THead, TBody } from "@/components/ui/Table";
+import { type Booking, type BookingStatus, type User } from '@/lib/types'
+import { useBookings, useRooms, useRoomsFiltered, useUsers } from '@/hooks/useApi'
+import { apiClient } from '@/lib/api-client'
+import { formatDate, formatDateTime } from '@/lib/utils'
 
-const statusOptions: BookingStatus[] = ['PENDING','APPROVED','REJECTED','CANCELLED','CHECKED_IN','CHECKED_OUT']
+const statusOptions: BookingStatus[] = ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED', 'CHECKED_IN', 'CHECKED_OUT']
 
-// Removed mock data; always use API
+const statusLabels: Record<BookingStatus, string> = {
+  "PENDING": "Chờ duyệt",
+  "APPROVED": "Đã duyệt",
+  "REJECTED": "Đã từ chối",
+  "CANCELLED": "Đã hủy",
+  "CHECKED_IN": "Đã nhận phòng",
+  "CHECKED_OUT": "Đã trả phòng"
+}
 
 export default function BookingsPage() {
-  const [rows, setRows] = useState<Booking[]>([])
-  const [rooms, setRooms] = useState<any[]>([])
-  const [flash, setFlash] = useState<{ type: 'success' | 'error', text: string } | null>(null)
-  
-  // Track seen bookings to avoid duplicate notifications
-  const seenBookingIds = useRef<Set<number>>(new Set());
-  const lastBookingCheck = useRef<number>(Date.now());
-
   const [query, setQuery] = useState("")
-  const [dateFrom, setDateFrom] = useState("")
-  const [dateTo, setDateTo] = useState("")
-  const [filterStatus, setFilterStatus] = useState<'ALL' | BookingStatus>('ALL')
+  const [filterStatus, setFilterStatus] = useState<"ALL" | BookingStatus>("ALL")
   
-  // Refs to prevent spam requests
-  const isInitialLoadRef = useRef(false)
-  const filterDebounceRef = useRef<NodeJS.Timeout | null>(null)
-  const isProcessingRef = useRef(false)
+  // API hooks
+  const { data: bookingsData, refetch: refetchBookings, loading: loadingBookings } = useBookings(
+    filterStatus !== 'ALL' ? filterStatus : undefined
+  )
   
-  // API hooks - only refetch when filterStatus changes (debounced)
-  const { data: bookingsData, refetch: refetchBookings, loading: bookingsLoading, error: bookingsError } = useBookings(filterStatus)
-  const { data: roomsData, refetch: refetchRooms, loading: roomsLoading, error: roomsError } = useRooms()
+  const bookings = (bookingsData || []) as Booking[]
+
+  // Lấy tất cả phòng (dùng khi sửa)
+  const { data: roomsData, refetch: refetchRooms } = useRooms()
+  const allRooms = (roomsData || []) as any[]
   
-  // Debounced refetch for bookings when filter changes
-  useEffect(() => {
-    if (!isInitialLoadRef.current) {
-      isInitialLoadRef.current = true
-      return
-    }
-    
-    // Clear previous debounce
-    if (filterDebounceRef.current) {
-      clearTimeout(filterDebounceRef.current)
-    }
-    
-    // Debounce filter changes to prevent spam
-    filterDebounceRef.current = setTimeout(() => {
-      if (!isProcessingRef.current) {
-        isProcessingRef.current = true
-        refetchBookings().finally(() => {
-          isProcessingRef.current = false
-        })
-      }
-    }, 500) // Wait 500ms after last filter change
-    
-    return () => {
-      if (filterDebounceRef.current) {
-        clearTimeout(filterDebounceRef.current)
-      }
-    }
-  }, [filterStatus, refetchBookings])
-  const [sortKey, setSortKey] = useState<'id' | 'code' | 'checkin' | 'checkout'>("checkin")
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>("asc")
+  // Lấy phòng trống (dùng khi tạo mới)
+  const { data: availableRoomsData, refetch: refetchAvailableRooms } = useRoomsFiltered('AVAILABLE')
+  const availableRooms = (availableRoomsData || []) as any[]
+
+  const { data: usersData } = useUsers({ size: 1000 })
+  const users = useMemo(() => {
+    if (!usersData) return []
+    const raw = usersData as any
+    return (Array.isArray(raw?.items) ? raw.items : (Array.isArray(raw?.content) ? raw.content : (Array.isArray(raw) ? raw : []))) as User[]
+  }, [usersData])
+
+  const [flash, setFlash] = useState<{ type: 'success' | 'error', text: string } | null>(null)
   const [page, setPage] = useState(1)
   const [size, setSize] = useState(10)
 
   const [detailOpen, setDetailOpen] = useState(false)
   const [selected, setSelected] = useState<Booking | null>(null)
 
-  // Memoize selectedMeta to prevent recalculation on every render
-  const selectedMeta = useMemo(() => {
-    if (!selected) return { totalPrice: null, paymentStatus: null }
-    
-    const raw = selected as Record<string, any>
-    const totalCandidate =
-      raw?.totalPrice ??
-      raw?.total_price ??
-      raw?.totalAmount ??
-      raw?.total_amount ??
-      raw?.amount ??
-      null
-    const parsedTotal =
-      typeof totalCandidate === 'number'
-        ? totalCandidate
-        : typeof totalCandidate === 'string' && totalCandidate.trim() !== ''
-          ? Number(totalCandidate)
-          : null
-    const paymentCandidate =
-      raw?.paymentStatus ??
-      raw?.payment_status ??
-      raw?.paymentState ??
-      raw?.payment_state ??
-      null
-    return {
-      totalPrice: typeof parsedTotal === 'number' && Number.isFinite(parsedTotal) ? parsedTotal : null,
-      paymentStatus: typeof paymentCandidate === 'string' ? paymentCandidate : null
-    }
-  }, [selected])
-
   const [editOpen, setEditOpen] = useState(false)
-  const [edit, setEdit] = useState<{ id?: number, code: string, userId?: number, roomId: number, checkinDate: string, checkoutDate: string, numGuests: number, status: BookingStatus, note: string }>({ code: '', userId: undefined, roomId: 1, checkinDate: '', checkoutDate: '', numGuests: 1, status: 'PENDING', note: '' })
-  const [fieldErrors, setFieldErrors] = useState<{ [key: string]: string }>({})
-  const [confirmOpen, setConfirmOpen] = useState<{ open: boolean, id?: number, type?: 'delete' }>({ open: false })
+  const [edit, setEdit] = useState<{ 
+    id?: number, code: string, userId?: number, roomId: number, 
+    checkinDate: string, checkoutDate: string, numGuests: number, 
+    status: BookingStatus, note: string 
+  }>({ 
+    code: "", roomId: 0, checkinDate: "", checkoutDate: "", 
+    numGuests: 1, status: "PENDING", note: "" 
+  })
+  
+  const [confirmOpen, setConfirmOpen] = useState<{ open: boolean, id?: number }>({ open: false })
+  const [codeError, setCodeError] = useState<string | null>(null)
+  const [userIdError, setUserIdError] = useState<string | null>(null)
+  const [roomIdError, setRoomIdError] = useState<string | null>(null)
+  const [checkinDateError, setCheckinDateError] = useState<string | null>(null)
+  const [checkoutDateError, setCheckoutDateError] = useState<string | null>(null)
+  const [numGuestsError, setNumGuestsError] = useState<string | null>(null)
+  const [statusError, setStatusError] = useState<string | null>(null)
+  const [noteError, setNoteError] = useState<string | null>(null)
+  
+  // Searchable dropdown states
+  const [userSearch, setUserSearch] = useState("")
+  const [userDropdownOpen, setUserDropdownOpen] = useState(false)
+  const [roomSearch, setRoomSearch] = useState("")
+  const [roomDropdownOpen, setRoomDropdownOpen] = useState(false)
+
+  // Sử dụng phòng trống khi tạo mới, tất cả phòng khi sửa
+  const rooms = useMemo(() => {
+    return editOpen && !edit.id ? availableRooms : allRooms
+  }, [editOpen, edit.id, availableRooms, allRooms])
 
   const handleCloseEdit = useCallback(() => {
     setEditOpen(false)
-    // Reset về giá trị mặc định khi đóng modal
-    setEdit({ code: '', userId: undefined, roomId: 1, checkinDate: '', checkoutDate: '', numGuests: 1, status: 'PENDING', note: '' })
-    setFieldErrors({})
+    setEdit({ code: "", userId: undefined, roomId: 0, checkinDate: "", checkoutDate: "", numGuests: 1, status: "PENDING", note: "" })
+    setCodeError(null)
+    setUserIdError(null)
+    setRoomIdError(null)
+    setCheckinDateError(null)
+    setCheckoutDateError(null)
+    setNumGuestsError(null)
+    setStatusError(null)
+    setNoteError(null)
+    setUserSearch("")
+    setUserDropdownOpen(false)
+    setRoomSearch("")
+    setRoomDropdownOpen(false)
   }, [])
 
-  useEffect(() => { if (!flash) return; const t = setTimeout(() => setFlash(null), 3000); return () => clearTimeout(t) }, [flash])
+  useEffect(() => {
+    if (!flash) return
+    const t = setTimeout(() => setFlash(null), 3000)
+    return () => clearTimeout(t)
+  }, [flash])
 
-  // Memoize room name map for fast lookup - must be before useEffect that uses it
-  const roomNameMap = useMemo(() => {
-    const map = new Map<number, string>()
-    rooms.forEach(room => {
-      map.set(room.id, room.name || room.code || `Room ${room.id}`)
-    })
-    return map
-  }, [rooms])
-  
+  // Helper: Hiển thị tên khách hàng (Tên > Email > #ID)
+  const getCustomerDisplay = useCallback((b: any) => {
+    if (b.userName) return b.userName
+    if (b.userEmail) return b.userEmail
+    const user = users.find(u => String(u.id) === String(b.userId))
+    if (user) return user.full_name || user.email || `#${b.userId}`
+    return b.userId ? `#${b.userId}` : "Chưa xác định"
+  }, [users])
+
+  // Filtered users for searchable dropdown
+  const filteredUsers = useMemo(() => {
+    const q = userSearch.trim().toLowerCase()
+    if (!q) return users
+    return users.filter(u => 
+      (u.full_name || "").toLowerCase().includes(q) ||
+      (u.email || "").toLowerCase().includes(q)
+    )
+  }, [users, userSearch])
+
+  // Filtered rooms for searchable dropdown
+  const filteredRooms = useMemo(() => {
+    const q = roomSearch.trim().toLowerCase()
+    if (!q) return rooms
+    return rooms.filter(r => 
+      (r.code || "").toLowerCase().includes(q) ||
+      (r.name || "").toLowerCase().includes(q)
+    )
+  }, [rooms, roomSearch])
+
+  // Get display name for selected user
+  const getSelectedUserDisplay = useCallback(() => {
+    if (!edit.userId) return ""
+    const user = users.find(u => u.id === edit.userId)
+    return user ? (user.full_name || user.email || `#${user.id}`) : ""
+  }, [edit.userId, users])
+
+  // Get display name for selected room - luôn dùng allRooms để đảm bảo tìm thấy phòng khi sửa
+  const getSelectedRoomDisplay = useCallback(() => {
+    if (!edit.roomId || edit.roomId === 0) return ""
+    const room = allRooms.find(r => r.id === edit.roomId)
+    return room ? room.code : ""
+  }, [edit.roomId, allRooms])
+
+  // Helper: Get room code by ID (for table display) - luôn dùng allRooms
   const getRoomName = useCallback((roomId: number) => {
-    return roomNameMap.get(roomId) || `Room ${roomId}`
-  }, [roomNameMap])
-  
-  // Memoize renderStatusChip to prevent recreation
-  const renderStatusChip = useCallback((s: BookingStatus) => {
-    if (s === 'PENDING') return <Badge tone="pending">Chờ duyệt</Badge>
-    if (s === 'APPROVED') return <Badge tone="approved">Đã duyệt</Badge>
-    if (s === 'REJECTED') return <Badge tone="rejected">Đã từ chối</Badge>
-    if (s === 'CANCELLED') return <Badge tone="cancelled">Đã hủy</Badge>
-    if (s === 'CHECKED_IN') return <Badge tone="checked-in">Đã nhận phòng</Badge>
-    return <Badge tone="checked-out">Đã trả phòng</Badge>
-  }, [])
+    const room = allRooms.find(r => r.id === roomId)
+    return room ? room.code : `#${roomId}`
+  }, [allRooms])
 
-  // Check for new bookings and add to notification system
-  useEffect(() => {
-    // Initialize seen bookings on first load
-    if (rows.length > 0 && seenBookingIds.current.size === 0) {
-      rows.forEach(b => {
-        if (b.status === 'PENDING') {
-          seenBookingIds.current.add(b.id);
-        }
-      });
-      lastBookingCheck.current = Date.now();
-      return;
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    return bookings.filter(b => 
+      b.code.toLowerCase().includes(q) || 
+      getCustomerDisplay(b).toLowerCase().includes(q) ||
+      getRoomName(b.roomId).toLowerCase().includes(q)
+    ).sort((a, b) => new Date(b.checkinDate).getTime() - new Date(a.checkinDate).getTime())
+  }, [bookings, query, getCustomerDisplay, getRoomName])
+
+  const openCreate = async () => {
+    setCodeError(null)
+    setUserIdError(null)
+    setRoomIdError(null)
+    setCheckinDateError(null)
+    setCheckoutDateError(null)
+    setNumGuestsError(null)
+    setStatusError(null)
+    setNoteError(null)
+    setFlash(null)
+    setEdit({ 
+      code: `BK${Date.now().toString().slice(-6)}`, 
+      userId: users[0]?.id || undefined,
+      roomId: availableRooms[0]?.id || 0, 
+      checkinDate: new Date().toISOString().split('T')[0], 
+      checkoutDate: new Date(Date.now() + 86400000).toISOString().split('T')[0], 
+      numGuests: 1, 
+      status: "PENDING", 
+      note: "" 
+    })
+    setEditOpen(true)
+  }
+
+  const openEdit = (b: Booking) => {
+    setCodeError(null)
+    setUserIdError(null)
+    setRoomIdError(null)
+    setCheckinDateError(null)
+    setCheckoutDateError(null)
+    setNumGuestsError(null)
+    setStatusError(null)
+    setNoteError(null)
+    setFlash(null)
+    
+    // Format dates for input type="date"
+    const formatDateForInput = (dateStr: string) => {
+      if (!dateStr) return ""
+      const date = new Date(dateStr)
+      if (isNaN(date.getTime())) return ""
+      return date.toISOString().split('T')[0]
     }
+    
+    setEdit({ 
+      id: b.id, 
+      code: b.code, 
+      userId: b.userId,
+      roomId: b.roomId, 
+      checkinDate: formatDateForInput(b.checkinDate), 
+      checkoutDate: formatDateForInput(b.checkoutDate), 
+      numGuests: b.numGuests, 
+      status: b.status, 
+      note: b.note || "" 
+    })
+      setEditOpen(true)
+  }
 
-    // Check for new PENDING bookings
-    const newPendingBookings = rows.filter(b => 
-      b.status === 'PENDING' && 
-      !seenBookingIds.current.has(b.id) &&
-      new Date((b as any).created_at || (b as any).createdAt || '').getTime() > lastBookingCheck.current
-    );
+  const save = async () => {
+    // Clear previous errors
+    setCodeError(null)
+    setUserIdError(null)
+    setRoomIdError(null)
+    setCheckinDateError(null)
+    setCheckoutDateError(null)
+    setNumGuestsError(null)
+    setStatusError(null)
+    setNoteError(null)
 
-    if (newPendingBookings.length > 0) {
-      newPendingBookings.forEach(booking => {
-        seenBookingIds.current.add(booking.id);
-        
-        // Add notification to the notification system (will appear in Header dropdown)
-        const guestName = booking.userName || `User #${booking.userId}`;
-        const roomInfo = getRoomName(booking.roomId);
-        
-        createBookingNotification(
-          booking.id,
-          guestName,
-          roomInfo,
-          'PENDING'
-        );
-      });
+    // Validate
+    if (!edit.code.trim()) {
+      setCodeError('Code is required')
+      return
+    }
+    if (!edit.userId) {
+      setUserIdError('Vui lòng chọn khách hàng')
+      return
+    }
+    if (!edit.roomId || edit.roomId === 0) {
+      setRoomIdError('Vui lòng chọn phòng')
+      return
+    }
+    if (!edit.checkinDate) {
+      setCheckinDateError('Ngày check-in là bắt buộc')
+      return
+    }
+    if (!edit.checkoutDate) {
+      setCheckoutDateError('Ngày check-out là bắt buộc')
+      return
+    }
+    
+    // Validation cho tạo mới: check-in không được là ngày trước ngày hiện tại
+    if (!edit.id) {
+      const today = new Date()
+      today.setHours(0, 0, 0, 0)
+      const checkinDate = new Date(edit.checkinDate)
+      checkinDate.setHours(0, 0, 0, 0)
       
-      lastBookingCheck.current = Date.now();
+      if (checkinDate < today) {
+        setCheckinDateError('Ngày check-in không được là ngày trước ngày hiện tại')
+      return
     }
-  }, [rows, rooms, getRoomName]);
+    
+      // Check-out phải lớn hơn ngày hiện tại
+      const checkoutDate = new Date(edit.checkoutDate)
+      checkoutDate.setHours(0, 0, 0, 0)
+      
+      if (checkoutDate <= today) {
+        setCheckoutDateError('Ngày check-out phải lớn hơn ngày hiện tại')
+        return
+      }
+    }
+    
+    if (edit.checkinDate && edit.checkoutDate && new Date(edit.checkoutDate) <= new Date(edit.checkinDate)) {
+      setCheckoutDateError('Ngày check-out phải sau ngày check-in')
+              return
+            }
+    if (edit.numGuests < 1) {
+      setNumGuestsError('Số khách phải lớn hơn 0')
+              return
+            }
 
-  // Keyboard shortcuts for edit modal: Enter = Save, Esc = Close (avoid Enter in textarea)
+    // Format dates to ISO format for backend
+    const formatDateTimeForBackend = (dateStr: string) => {
+      if (!dateStr) return ""
+      const date = new Date(dateStr)
+      if (isNaN(date.getTime())) return ""
+      const year = date.getFullYear()
+      const month = String(date.getMonth() + 1).padStart(2, '0')
+      const day = String(date.getDate()).padStart(2, '0')
+      return `${year}-${month}-${day}T00:00:00`
+    }
+
+    // Khi tạo mới: gửi tất cả fields
+    // Khi sửa: chỉ gửi các field có thể sửa (không gửi code, userId, roomId)
+    const payload = edit.id ? {
+      // Chỉ gửi các field có thể sửa khi update
+                  roomId: edit.roomId,
+      checkinDate: formatDateTimeForBackend(edit.checkinDate),
+      checkoutDate: formatDateTimeForBackend(edit.checkoutDate),
+                  numGuests: edit.numGuests,
+                  status: edit.status,
+      note: edit.note.trim() || "",
+    } : {
+      // Tạo mới: gửi tất cả fields
+          code: edit.code.trim(),
+          userId: edit.userId,
+                  roomId: edit.roomId,
+      checkinDate: formatDateTimeForBackend(edit.checkinDate),
+      checkoutDate: formatDateTimeForBackend(edit.checkoutDate),
+                  numGuests: edit.numGuests,
+          status: edit.status,
+      note: edit.note.trim() || "",
+    }
+
+    const response = edit.id 
+      ? await apiClient.updateBooking(edit.id, payload)
+      : await apiClient.createBooking(payload)
+
+    if (response.success) {
+      await refetchBookings()
+      setFlash({ type: 'success', text: edit.id ? 'Đã cập nhật đặt phòng.' : 'Đã tạo đặt phòng mới.' })
+          handleCloseEdit()
+      } else {
+      const errorMsg = response.error || response.message || ''
+      const errorLower = errorMsg.toLowerCase()
+      
+      // Map error to specific field
+      if (/(code|mã)/i.test(errorMsg)) {
+        setCodeError(errorMsg)
+      } else if (/(user|khách hàng|customer|userId)/i.test(errorMsg)) {
+        setUserIdError(errorMsg)
+      } else if (/(room|phòng|roomId)/i.test(errorMsg)) {
+        setRoomIdError(errorMsg)
+      } else if (/(checkin|check-in|ngày nhận)/i.test(errorMsg)) {
+        setCheckinDateError(errorMsg)
+      } else if (/(checkout|check-out|ngày trả)/i.test(errorMsg)) {
+        setCheckoutDateError(errorMsg)
+      } else if (/(guest|khách|numGuests|số khách)/i.test(errorMsg)) {
+        setNumGuestsError(errorMsg)
+      } else if (/(status|trạng thái)/i.test(errorMsg)) {
+        setStatusError(errorMsg)
+      } else if (/(note|ghi chú)/i.test(errorMsg)) {
+        setNoteError(errorMsg)
+      } else {
+        // Nếu không match field nào, hiển thị ở field đầu tiên có thể (code hoặc userId)
+        if (!edit.id) {
+          setCodeError(errorMsg)
+        } else {
+          setCheckinDateError(errorMsg)
+        }
+      }
+    }
+  }
+
+  // Approve booking
+  const handleApprove = useCallback(async (bookingId: number) => {
+    const response = await apiClient.approveBooking(bookingId, undefined, 'Đã duyệt bởi admin')
+    if (response.success) {
+      await refetchBookings()
+      // Refresh danh sách phòng sau khi approve booking
+      await refetchRooms()
+      await refetchAvailableRooms()
+      setFlash({ type: 'success', text: 'Đã duyệt đặt phòng thành công.' })
+      // Đóng modal nếu đang mở
+      if (editOpen && edit.id === bookingId) {
+          handleCloseEdit()
+        }
+      } else {
+      setFlash({ type: 'error', text: response.error || response.message || 'Không thể duyệt đặt phòng.' })
+    }
+  }, [refetchBookings, refetchRooms, refetchAvailableRooms, editOpen, edit.id, handleCloseEdit])
+
+  // Reject booking
+  const handleReject = useCallback(async (bookingId: number) => {
+    const response = await apiClient.rejectBooking(bookingId, undefined, 'Đã từ chối bởi admin')
+    if (response.success) {
+      await refetchBookings()
+      // Refresh danh sách phòng sau khi reject booking (vì backend đã trả lại phòng về AVAILABLE)
+      await refetchRooms()
+      await refetchAvailableRooms()
+      setFlash({ type: 'success', text: 'Đã từ chối đặt phòng thành công.' })
+      // Đóng modal nếu đang mở
+      if (editOpen && edit.id === bookingId) {
+        handleCloseEdit()
+      }
+    } else {
+      setFlash({ type: 'error', text: response.error || response.message || 'Không thể từ chối đặt phòng.' })
+    }
+  }, [refetchBookings, refetchRooms, refetchAvailableRooms, editOpen, edit.id, handleCloseEdit])
+
+  // Keyboard shortcuts
   useEffect(() => {
-    if (!editOpen) return
-
     const handleKeyDown = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement | null)?.tagName?.toLowerCase()
       const isTextarea = tag === 'textarea'
-      if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !isTextarea) {
+      const isInput = tag === 'input'
+
+      if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !isTextarea && !isInput && editOpen) {
         e.preventDefault()
         save()
       } else if (e.key === 'Escape') {
-        e.preventDefault()
-        handleCloseEdit()
-      }
-    }
-
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [editOpen, edit])
-
-  // Global Escape handler: ESC closes any open modal on this page
-  useEffect(() => {
-    const onEsc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
         if (editOpen) handleCloseEdit()
         setDetailOpen(false)
         setConfirmOpen({ open: false })
       }
     }
-    document.addEventListener('keydown', onEsc)
-    return () => document.removeEventListener('keydown', onEsc)
-  }, [editOpen, handleCloseEdit])
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [editOpen, handleCloseEdit, save])
 
-  // Sync dữ liệu từ API (không cố gọi /users/{id} nữa để tránh lỗi "User not found")
-  useEffect(() => {
-    // Đồng bộ phòng
-    if (roomsData && Array.isArray(roomsData)) {
-      setRooms(roomsData as any[])
-    } else if (roomsError) {
-      setRooms([])
-    } else if (!roomsLoading && !roomsData) {
-      // Nếu không loading và không có data, set mảng rỗng
-      setRooms([])
-    }
-
-    // Đồng bộ đặt phòng - API trả về format: { items: [...], total: ... }
-    if (bookingsData) {
-      // API route trả về format: { items: [...] }
-      const data: any = bookingsData
-      const rawList = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : [])
-      
-      // Normalize dữ liệu - chuyển snake_case sang camelCase nếu cần
-      const normalizedList = rawList.map((item: any) => ({
-        id: item.id,
-        code: item.code || '',
-        userId: item.userId || item.user_id,
-        userName: item.userName || item.user_name,
-        userEmail: item.userEmail || item.user_email || item.email || '',
-        phoneNumber: item.phoneNumber || item.phone_number || item.phone || '',
-        roomId: item.roomId || item.room_id,
-        roomCode: item.roomCode || item.room_code,
-        roomTypeName: item.roomTypeName || item.room_type_name || item.roomType || '',
-        building: item.building || item.building_name || '',
-        checkinDate: item.checkinDate || item.checkin_date || item.checkInDate || '',
-        checkoutDate: item.checkoutDate || item.checkout_date || item.checkOutDate || '',
-        numGuests: item.numGuests || item.num_guests || 1,
-        purpose: item.purpose || item.booking_purpose || '',
-        note: item.note || '',
-        status: item.status || 'PENDING',
-        totalPrice: item.totalPrice || item.total_price || item.amount || null,
-        paymentStatus: item.paymentStatus || item.payment_status || '',
-        isActive: item.isActive !== undefined ? item.isActive : (item.is_active !== undefined ? item.is_active : true),
-        created_at: item.created_at || item.createdAt || '',
-        updated_at: item.updated_at || item.updatedAt || ''
-      }))
-      
-      console.log('[BookingsPage] Syncing bookings data:', {
-        hasData: !!bookingsData,
-        dataType: typeof bookingsData,
-        hasItems: !!data?.items,
-        itemsLength: rawList.length,
-        isArray: Array.isArray(data),
-        sampleItem: rawList[0],
-        normalizedSample: normalizedList[0]
-      })
-      setRows(normalizedList as Booking[])
-    } else if (bookingsError) {
-      console.error('[BookingsPage] Bookings error:', bookingsError)
-      setRows([])
-    } else if (!bookingsLoading && !bookingsData) {
-      // Nếu không loading và không có data, set mảng rỗng
-      console.warn('[BookingsPage] No bookings data and no error, setting empty array')
-      setRows([])
-    }
-  }, [bookingsData, roomsData, bookingsError, roomsError, bookingsLoading, roomsLoading])
-
-  const filtered = useMemo(() => {
-    // Backend-side filter by status is applied via useBookings(filterStatus)
-    const dir = sortOrder === 'asc' ? 1 : -1
-    return [...rows].sort((a, b) => {
-      if (sortKey === 'id') return (a.id - b.id) * dir
-      if (sortKey === 'code') return a.code.localeCompare(b.code) * dir
-      if (sortKey === 'checkin') return a.checkinDate.localeCompare(b.checkinDate) * dir
-      return a.checkoutDate.localeCompare(b.checkoutDate) * dir
-    })
-  }, [rows, sortKey, sortOrder])
-  
-  // Memoize paginated data to prevent recalculation
-  const paginatedData = useMemo(() => {
-    return filtered.slice((page - 1) * size, page * size)
-  }, [filtered, page, size])
-
-  function openCreate() {
-    setFieldErrors({})
-    setEdit({ code: '', userId: undefined, roomId: 1, checkinDate: '', checkoutDate: '', numGuests: 1, status: 'PENDING', note: '' })
-    setEditOpen(true)
+  const confirmDelete = (id: number) => {
+    setConfirmOpen({ open: true, id })
   }
 
-  function openEdit(r: Booking | any) {
-    // Reset errors trước
-    setFieldErrors({})
-    // Đóng modal trước (nếu đang mở) để reset
-    setEditOpen(false)
+  const doDelete = async () => {
+    if (!confirmOpen.id) return
     
-    // Normalize dữ liệu - xử lý cả camelCase và snake_case
-    const raw = r as any
-    const checkinDate = raw.checkinDate || raw.checkin_date || raw.checkInDate || ''
-    const checkoutDate = raw.checkoutDate || raw.checkout_date || raw.checkOutDate || ''
-    const numGuests = raw.numGuests || raw.num_guests || raw.numGuests || 1
-    const roomId = raw.roomId || raw.room_id || 1
-    const code = raw.code || ''
-    const status = raw.status || 'PENDING'
-    const note = raw.note || ''
-    const userId = raw.userId || raw.user_id
-    
-    // Format dates nếu cần (chuyển từ ISO string sang YYYY-MM-DD cho input type="date")
-    let formattedCheckinDate = checkinDate
-    let formattedCheckoutDate = checkoutDate
-    
-    if (checkinDate && checkinDate.includes('T')) {
-      formattedCheckinDate = checkinDate.split('T')[0]
-    } else if (checkinDate && checkinDate.includes(' ')) {
-      formattedCheckinDate = checkinDate.split(' ')[0]
-    }
-    
-    if (checkoutDate && checkoutDate.includes('T')) {
-      formattedCheckoutDate = checkoutDate.split('T')[0]
-    } else if (checkoutDate && checkoutDate.includes(' ')) {
-      formattedCheckoutDate = checkoutDate.split(' ')[0]
-    }
-    
-    // Set dữ liệu của booking được chọn - đảm bảo dữ liệu đầy đủ
-    const editData = { 
-      id: raw.id, 
-      code: code, 
-      userId: userId,
-      roomId: roomId, 
-      checkinDate: formattedCheckinDate, 
-      checkoutDate: formattedCheckoutDate, 
-      numGuests: numGuests, 
-      status: status, 
-      note: note
-    }
-    
-    console.log('[BookingsPage] openEdit - Raw data:', raw)
-    console.log('[BookingsPage] openEdit - Normalized data:', editData)
-    
-    setEdit(editData)
-    // Mở modal sau khi đã set dữ liệu
-    setTimeout(() => {
-      setEditOpen(true)
-    }, 10)
-  }
-
-  async function save() {
-    // Clear previous errors
-    setFieldErrors({})
-    
-    const errors: { [key: string]: string } = {}
-    
-    // Validate required fields
-    if (!edit.code.trim()) {
-      errors.code = 'Vui lòng nhập Code đặt phòng'
-    }
-    if (!edit.roomId || edit.roomId === 0) {
-      errors.roomId = 'Vui lòng chọn phòng'
-    }
-    if (!edit.checkinDate) {
-      errors.checkinDate = 'Vui lòng nhập ngày check-in'
-    }
-    if (!edit.checkoutDate) {
-      errors.checkoutDate = 'Vui lòng nhập ngày check-out'
-    }
-    if (edit.numGuests < 1) {
-      errors.numGuests = 'Số khách phải lớn hơn 0'
-    }
-    
-    // Validate date logic
-    if (edit.checkinDate && edit.checkoutDate && new Date(edit.checkoutDate) <= new Date(edit.checkinDate)) {
-      errors.checkoutDate = 'Ngày check-out phải sau ngày check-in'
-    }
-    
-    // If there are errors, show them and return
-    if (Object.keys(errors).length > 0) {
-      setFieldErrors(errors)
-      return
-    }
-    
-    // Gọi API
-    try {
-      if (edit.id) {
-        const isApprove = edit.status === 'APPROVED'
-        const isReject = edit.status === 'REJECTED'
-        const isCancel = edit.status === 'CANCELLED'
-        const isCheckin = edit.status === 'CHECKED_IN'
-        const isCheckout = edit.status === 'CHECKED_OUT'
-
-          // Nếu status là APPROVED, chỉ gọi POST /bookings/{id}/approve (không gọi PUT)
-          if (isApprove) {
-            const token = authService.getAccessToken()
-            const headers: HeadersInit = { 'Content-Type': 'application/json' }
-            if (token) {
-              headers['Authorization'] = `Bearer ${token}`
-            }
-
-            // Lấy user info để lấy approverId
-            const userInfo = authService.getUserInfo()
-            const approverId = userInfo?.id || 'SYSTEM'
-
-            // POST /bookings/{id}/approve với body: { bookingId, approverId, decision, reason }
-            const approvePayload = {
-              bookingId: edit.id,
-              approverId: String(approverId),
-              decision: 'APPROVED',
-              reason: ''
-            }
-
-            const approveRes = await fetch(`/api/system/bookings?action=approve&id=${edit.id}`, {
-              method: 'POST',
-              headers,
-              body: JSON.stringify(approvePayload)
-            })
-
-            // Parse response để kiểm tra
-            const approveData = await approveRes.json().catch(() => null)
-            
-            // Kiểm tra response code từ backend (S0000 = success)
-            const isSuccess = approveRes.ok && (
-              approveData?.responseCode === 'S0000' || 
-              approveData?.success === true ||
-              approveData?.data !== null ||
-              approveRes.status >= 200 && approveRes.status < 300
-            )
-
-            if (!isSuccess) {
-              const errorMsg = approveData?.message || approveData?.error || 'Không thể duyệt đặt phòng'
-              setFieldErrors({ general: errorMsg })
-              setFlash({ type: 'error', text: errorMsg })
-              return
-            }
-
-            // Cập nhật state ngay lập tức để hiển thị thay đổi ngay
-            setRows(prevRows => prevRows.map(booking => 
-              booking.id === edit.id 
-                ? { ...booking, status: 'APPROVED' as BookingStatus }
-                : booking
-            ))
-
-            // Refetch để đảm bảo dữ liệu đồng bộ với backend
-            refetchBookings().catch(err => {
-              console.error('Background refetch error:', err)
-              // Không hiển thị lỗi cho user vì đã cập nhật state ở trên
-            })
-
-            setFlash({ type: 'success', text: 'Đã duyệt đặt phòng thành công.' })
-            handleCloseEdit()
-        } else {
-          // Nếu status khác APPROVED, gọi PUT để cập nhật thông tin và status
-          // PUT /bookings/{id} - Body format: { id, roomId, checkinDate, checkoutDate, numGuests, note, status }
-          const updatePayload: any = {
-            id: edit.id,
-            roomId: edit.roomId,
-            checkinDate: edit.checkinDate,
-            checkoutDate: edit.checkoutDate,
-            numGuests: edit.numGuests,
-            note: edit.note.trim() || '',
-            status: edit.status
-          }
-
-          // Cập nhật thông tin đặt phòng
-          const response = await fetch('/api/system/bookings', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(updatePayload)
-          })
-          if (!response.ok) {
-            const error = await response.json()
-            const errorMsg = error.error || 'Failed to update booking'
-            setFieldErrors({ general: errorMsg })
-            return
-          }
-
-          // Cập nhật state ngay lập tức để hiển thị thay đổi ngay, không cần đợi refetch
-          setRows(prevRows => prevRows.map(booking => 
-            booking.id === edit.id 
-              ? { 
-                  ...booking, 
-                  status: edit.status,
-                  roomId: edit.roomId,
-                  checkinDate: edit.checkinDate,
-                  checkoutDate: edit.checkoutDate,
-                  numGuests: edit.numGuests,
-                  note: edit.note.trim() || ''
-                }
-              : booking
-          ))
-
-          // Nếu checkout thành công, tự động cập nhật trạng thái phòng thành AVAILABLE
-          if (isCheckout && edit.roomId) {
-            try {
-              const roomUpdateResponse = await fetch('/api/system/rooms', {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  id: edit.roomId,
-                  status: 'AVAILABLE'
-                })
-              })
-              if (!roomUpdateResponse.ok) {
-                console.warn('Failed to update room status to AVAILABLE after checkout')
-              }
-            } catch (error) {
-              console.error('Error updating room status after checkout:', error)
-            }
-          }
-
-          // Không gọi refetch ngay để tránh làm chậm UI - sẽ tự động sync khi user filter/search
-          // refetchBookings().catch(err => console.error('Background refetch error:', err))
-
-          let successMessage = 'Đã cập nhật đặt phòng.'
-          if (isReject) successMessage = 'Đã từ chối đặt phòng.'
-          else if (isCancel) successMessage = 'Đã hủy đặt phòng.'
-          else if (isCheckin) successMessage = 'Đã check-in đặt phòng.'
-          else if (isCheckout) successMessage = 'Đã check-out đặt phòng. Phòng đã được đặt về trạng thái trống.'
-          setFlash({ type: 'success', text: successMessage })
-          handleCloseEdit()
-        }
-      } else {
-        // POST /bookings - Create new booking
-        const createPayload = {
-          code: edit.code.trim(),
-          userId: edit.userId,
-          roomId: edit.roomId,
-          checkinDate: edit.checkinDate,
-          checkoutDate: edit.checkoutDate,
-          numGuests: edit.numGuests,
-          status: edit.status,
-          note: edit.note.trim() || '',
-        }
-        const response = await fetch('/api/system/bookings', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(createPayload)
-        })
-        if (!response.ok) {
-          const error = await response.json()
-          const errorMsg = error.error || 'Failed to create booking'
-          setFieldErrors({ general: errorMsg })
-          return
-        }
-
-        // Parse response để lấy booking mới
-        const createdBooking = await response.json()
-        const newBooking: Booking = {
-          id: createdBooking.id || createdBooking.data?.id || Date.now(),
-          code: createdBooking.code || createdBooking.data?.code || edit.code.trim(),
-          userId: createdBooking.userId || createdBooking.data?.userId || edit.userId || 0,
-          userName: createdBooking.userName || createdBooking.data?.userName,
-          roomId: createdBooking.roomId || createdBooking.data?.roomId || edit.roomId,
-          roomCode: createdBooking.roomCode || createdBooking.data?.roomCode,
-          checkinDate: createdBooking.checkinDate || createdBooking.data?.checkinDate || edit.checkinDate,
-          checkoutDate: createdBooking.checkoutDate || createdBooking.data?.checkoutDate || edit.checkoutDate,
-          numGuests: createdBooking.numGuests || createdBooking.data?.numGuests || edit.numGuests,
-          note: createdBooking.note || createdBooking.data?.note || edit.note.trim() || '',
-          status: createdBooking.status || createdBooking.data?.status || edit.status,
-          isActive: createdBooking.isActive !== undefined ? createdBooking.isActive : (createdBooking.data?.isActive !== undefined ? createdBooking.data.isActive : true),
-          created_at: createdBooking.created_at || createdBooking.data?.created_at || new Date().toISOString(),
-          updated_at: createdBooking.updated_at || createdBooking.data?.updated_at || new Date().toISOString()
-        }
-
-        // Thêm booking mới vào state ngay lập tức
-        setRows(prevRows => [...prevRows, newBooking])
-
-        // Không gọi refetch ngay để tránh làm chậm UI - sẽ tự động sync khi user filter/search
-        // refetchBookings().catch(err => console.error('Background refetch error:', err))
-
-        setFlash({ type: 'success', text: 'Đã tạo đặt phòng mới.' })
+    // Tìm booking để kiểm tra status
+    const booking = bookings.find(b => b.id === confirmOpen.id)
+    if (booking) {
+      // Backend chỉ cho phép delete khi status = PENDING hoặc REJECTED (theo DeleteBookingService)
+      if (booking.status !== 'PENDING' && booking.status !== 'REJECTED') {
+        setFlash({ type: 'error', text: 'Chỉ có thể xóa đặt phòng ở trạng thái "Chờ duyệt" (PENDING) hoặc "Đã từ chối" (REJECTED).' })
+        setConfirmOpen({ open: false })
+        return
       }
-      handleCloseEdit()
-    } catch (error: any) {
-      // Hiển thị lỗi trong form thay vì flash message
-      setFieldErrors({ general: error.message || 'Có lỗi xảy ra' })
     }
-  }
-
-  function confirmAction(id: number, type: 'delete') {
-    setConfirmOpen({ open: true, id, type })
-  }
-
-  async function doAction() {
-    if (!confirmOpen.id || !confirmOpen.type) return
-    const { id, type } = confirmOpen
     
-    // Gọi API
-    try {
-      if (type === 'delete') {
-        const response = await fetch(`/api/system/bookings?id=${id}`, { method: 'DELETE' })
-        if (!response.ok) {
-          const error = await response.json()
-          throw new Error(error.error || 'Failed to deactivate booking')
-        }
-
-        // Xóa booking khỏi state ngay lập tức
-        setRows(prevRows => prevRows.filter(booking => booking.id !== id))
-
-        // Không gọi refetch ngay để tránh làm chậm UI - sẽ tự động sync khi user filter/search
-        // refetchBookings().catch(err => console.error('Background refetch error:', err))
-
+    const response = await apiClient.deleteBooking(confirmOpen.id)
+    if (response.success) {
+      await refetchBookings()
+      // Refresh danh sách phòng sau khi xóa booking (vì backend đã trả lại phòng về AVAILABLE)
+      await refetchRooms()
+      await refetchAvailableRooms()
+      setConfirmOpen({ open: false })
         setFlash({ type: 'success', text: 'Đã xóa đặt phòng.' })
+    } else {
+      setFlash({ type: 'error', text: response.error || response.message || '' })
+      setConfirmOpen({ open: false })
       }
-    } catch (error: any) {
-      setFlash({ type: 'error', text: error.message || 'Có lỗi xảy ra' })
     }
     
-    setConfirmOpen({ open: false })
+  const renderStatusChip = (s: BookingStatus) => {
+    const toneMap: Record<BookingStatus, any> = {
+      "PENDING": "pending", "APPROVED": "approved", "REJECTED": "rejected",
+      "CANCELLED": "cancelled", "CHECKED_IN": "checked-in", "CHECKED_OUT": "checked-out"
   }
-
-  async function activateBooking(id: number) {
-    setFlash({ type: 'error', text: 'Chức năng kích hoạt đặt phòng chưa được backend hỗ trợ' })
+    return <Badge tone={toneMap[s] || "muted"} className="rounded-full">{statusLabels[s]}</Badge>
   }
 
   return (
     <>
-      {/* Header - Mobile Optimized */}
-      <div className="bg-white border-b border-gray-200 px-3 py-3">
+      <div className="px-6 pt-4 pb-6">
+        <div className="max-w-7xl mx-auto space-y-6">
+          {/* Header & Filters Card */}
+          <div className="bg-white shadow-sm border border-gray-200 rounded-2xl overflow-hidden">
+            <div className="header border-b border-gray-200/50 px-6 py-4">
         <div className="flex items-center justify-between">
-          <div className="min-w-0 flex-1">
-            <h1 className="text-lg font-bold text-gray-900 truncate">Quản lý đặt phòng</h1>
-            <p className="text-sm text-gray-500">{filtered.length} đặt phòng</p>
-          </div>
-          <div className="flex items-center gap-2">
-            
-            
-            <Button 
-              onClick={openCreate} 
-              className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 text-sm flex-shrink-0 rounded-lg"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <h1 className="text-3xl font-bold text-gray-900 leading-tight">Quản lý đặt phòng</h1>
+                <Button onClick={openCreate} variant="primary" className="px-5 py-2.5 text-sm rounded-xl">
+                  <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
               </svg>
-              <span className="hidden sm:inline ml-1">Thêm đặt phòng</span>
+                  Thêm đặt phòng
             </Button>
-          </div>
         </div>
       </div>
 
-      {/* Content */}
-      <div className="w-full px-4 py-3">
-        <div className="space-y-3">
-          {/* Success Messages */}
-          {flash && flash.type === 'success' && (
-            <div className={`rounded-md border p-2 sm:p-3 text-xs sm:text-sm shadow-sm bg-green-50 border-green-200 text-green-800`}>
-              {flash.text}
-            </div>
-          )}
-
-          {/* Loading indicator */}
-          {(bookingsLoading || roomsLoading) && (
-            <div className="rounded-md border p-2 sm:p-3 text-xs sm:text-sm shadow-sm bg-yellow-50 border-yellow-200 text-yellow-800">
-              Đang tải dữ liệu đặt phòng...
-            </div>
-          )}
-
-          {/* Error indicator */}
-          {bookingsError && (
-            <div className="rounded-md border p-2 sm:p-3 text-xs sm:text-sm shadow-sm bg-red-50 border-red-200 text-red-800">
-              <p className="font-semibold">Lỗi khi tải dữ liệu đặt phòng:</p>
-              <p>{bookingsError}</p>
-            </div>
-          )}
-
-          {/* Empty state */}
-          {!bookingsLoading && !bookingsError && rows.length === 0 && (
-            <div className="rounded-md border p-4 sm:p-6 text-center shadow-sm bg-gray-50 border-gray-200">
-              <svg className="w-12 h-12 mx-auto text-gray-400 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-              </svg>
-              <p className="text-sm font-medium text-gray-700">Không có dữ liệu đặt phòng</p>
-              <p className="text-xs text-gray-500 mt-1">Vui lòng thử lại hoặc tạo đặt phòng mới</p>
-            </div>
-          )}
-
-          {/* Filters */}
-          <div className="bg-gray-50 border-b border-gray-200 px-4 py-3">
-            {/* Mobile layout - Optimized */}
-            <div className="lg:hidden space-y-3">
-              {/* Hàng 1: Tìm kiếm */}
-              <div className="flex flex-row items-center">
-                <div className="flex-1 min-w-0">
-                  <div className="relative">
+            <div className="bg-white px-6 py-4">
+              <div className="flex flex-col lg:flex-row gap-4 items-center">
+                <div className="flex-1 min-w-0 w-full">
                     <Input
                       placeholder="Tìm kiếm đặt phòng..."
                       value={query}
                       onChange={(e) => setQuery(e.target.value)}
-                      className="w-full pl-4 pr-10 py-3 text-sm border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    className="w-full px-3 py-2.5 text-sm border-gray-300 rounded-xl focus:ring-0 focus:border-gray-300"
                     />
-                    <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
-                      <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                      </svg>
                     </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Hàng 2: Ngày tháng - Mobile Optimized */}
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Từ ngày</label>
-                  <Input
-                    type="date"
-                    value={dateFrom}
-                    onChange={(e) => setDateFrom(e.target.value)}
-                    className="w-full px-4 py-3 text-base border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
-                    style={{ fontSize: '16px' }} // Prevent zoom on iOS
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Đến ngày</label>
-                  <Input
-                    type="date"
-                    value={dateTo}
-                    onChange={(e) => setDateTo(e.target.value)}
-                    className="w-full px-4 py-3 text-base border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
-                    style={{ fontSize: '16px' }} // Prevent zoom on iOS
-                  />
-                </div>
-              </div>
-
-              {/* Hàng 3: Sắp xếp và Thứ tự */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Thứ tự</label>
-                  <select
-                    value={sortOrder}
-                    onChange={(e) => setSortOrder(e.target.value as 'asc' | 'desc')}
-                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="asc">Tăng dần</option>
-                    <option value="desc">Giảm dần</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Hàng 4: Trạng thái */}
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Trạng thái</label>
+                <div className="w-full lg:w-48 flex-shrink-0 relative rounded-xl border border-gray-300 bg-white overflow-hidden">
                 <select
                   value={filterStatus}
-                  onChange={(e) => setFilterStatus(e.target.value as 'ALL' | BookingStatus)}
-                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    onChange={(e) => setFilterStatus(e.target.value as any)}
+                    className="w-full px-3 py-2.5 pr-10 text-sm focus:outline-none appearance-none bg-transparent border-0"
                 >
                   <option value="ALL">Tất cả trạng thái</option>
-                  <option value="PENDING">Chờ duyệt</option>
-                  <option value="APPROVED">Đã duyệt</option>
-                  <option value="REJECTED">Đã từ chối</option>
-                  <option value="CANCELLED">Đã hủy</option>
-                  <option value="CHECKED_IN">Đã nhận phòng</option>
-                  <option value="CHECKED_OUT">Đã trả phòng</option>
+                    {statusOptions.map(s => <option key={s} value={s}>{statusLabels[s]}</option>)}
                 </select>
-              </div>
-            </div>
-
-            {/* Desktop layout */}
-            <div className="hidden lg:flex flex-row gap-4 items-center">
-              {/* Tìm kiếm */}
-              <div className="flex-1 min-w-0">
-                <div className="relative">
-                  <Input
-                    placeholder="Tìm kiếm đặt phòng..."
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    className="w-full pl-4 pr-10 py-2 text-sm border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                  />
-                  <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
-                    <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
+                    <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                     </svg>
                   </div>
                 </div>
               </div>
-              
-              {/* Từ ngày */}
-              <div className="w-40 flex-shrink-0">
-                <Input
-                  type="date"
-                  value={dateFrom}
-                  onChange={(e) => setDateFrom(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                />
+              </div>
               </div>
               
-              {/* Đến ngày */}
-              <div className="w-40 flex-shrink-0">
-                <Input
-                  type="date"
-                  value={dateTo}
-                  onChange={(e) => setDateTo(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                />
+          {/* Success/Error Messages */}
+          {flash && (
+            <div className={`py-2.5 rounded-xl px-4 border shadow-sm animate-fade-in flex items-center gap-2 ${
+              flash.type === 'success' ? 'bg-green-50 text-green-800 border-green-100' : 'bg-red-50 text-red-800 border-red-100'
+            }`}>
+              <svg className={`w-5 h-5 ${flash.type === 'success' ? 'text-green-500' : 'text-red-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                {flash.type === 'success' 
+                  ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                }
+              </svg>
+              <span className="text-sm font-medium">{flash.text}</span>
               </div>
-              
-              
-              {/* Thứ tự */}
-              <div className="w-28 flex-shrink-0">
-                <select
-                  value={sortOrder}
-                  onChange={(e) => setSortOrder(e.target.value as 'asc' | 'desc')}
-                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="asc">Tăng dần</option>
-                  <option value="desc">Giảm dần</option>
-                </select>
-              </div>
-              
-              {/* Trạng thái */}
-              <div className="w-36 flex-shrink-0">
-                <select
-                  value={filterStatus}
-                  onChange={(e) => setFilterStatus(e.target.value as 'ALL' | BookingStatus)}
-                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="ALL">Tất cả</option>
-                  <option value="PENDING">Chờ duyệt</option>
-                  <option value="APPROVED">Đã duyệt</option>
-                  <option value="REJECTED">Đã từ chối</option>
-                  <option value="CANCELLED">Đã hủy</option>
-                  <option value="CHECKED_IN">Đã nhận phòng</option>
-                  <option value="CHECKED_OUT">Đã trả phòng</option>
-                </select>
-              </div>
-            </div>
-          </div>
+          )}
 
-
-
-          {/* Table */}
-          <div className="px-4 py-3">
-            <div className="w-full">
-              <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-xl rounded-2xl overflow-hidden">
-                <CardHeader className="bg-gray-50 border-b border-gray-200 px-6 py-3">
+          {/* Table Card */}
+          <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-md rounded-2xl overflow-hidden">
+            <CardHeader className="bg-[hsl(var(--page-bg))]/40 border-b border-gray-200 !px-6 py-3">
               <div className="flex items-center justify-between">
-                    <h2 className="text-lg text-left font-bold text-gray-900">Danh sách đặt phòng</h2>
-                    <span className="text-sm text-right font-semibold text-blue-600 bg-blue-100 px-3 py-1 rounded-full">{filtered.length} đặt phòng</span>
+                <h2 className="text-xl font-bold text-gray-900">Danh sách đặt phòng</h2>
+                <span className="text-sm font-semibold text-[hsl(var(--primary))] bg-[hsl(var(--primary)/0.12)] px-3 py-1 rounded-full">
+                  {filtered.length} đặt phòng
+                </span>
               </div>
             </CardHeader>
             <CardBody className="p-0">
                   {/* Desktop Table */}
                   <div className="hidden lg:block overflow-x-auto">
-                    <table className="w-full text-sm">
-                  <colgroup>
-                        <col className="w-[10%]" />
-                        <col className="w-[12%]" />
-                        <col className="w-[12%]" />
-                        <col className="w-[15%]" />
-                       <col className="w-[15%]" />
-                        <col className="w-[10%]" />
-                        <col className="w-[10%]" />
-                        <col className="w-[20%]" />
-                  </colgroup>
-                  <thead>
-                        <tr className="bg-gray-50 text-gray-700">
-                          <th className="px-4 py-3 text-center font-semibold">Code</th>
-                          <th className="px-4 py-3 text-center font-semibold">Khách hàng</th>
-                          <th className="px-4 py-3 text-center font-semibold">Phòng</th>
-                          <th className="px-4 py-3 text-center font-semibold">Check-in</th>
-                          <th className="px-4 py-3 text-center font-semibold">Check-out</th>
-                          <th className="px-4 py-3 text-center font-semibold">Số khách</th>
-                          <th className="px-4 py-3 text-center font-semibold">Trạng thái</th>
-                          <th className="px-4 py-3 text-center font-semibold">Thao tác</th>
+                <Table>
+                  <THead>
+                    <tr>
+                      <th className="px-4 py-3 text-center text-sm font-bold">Mã Boking</th>
+                      <th className="px-4 py-3 text-left text-sm font-bold">Khách hàng</th>
+                      <th className="px-4 py-3 text-center text-sm font-bold">Phòng Đặt</th>
+                      <th className="px-4 py-3 text-center text-sm font-bold">Thời gian</th>
+                      <th className="px-4 py-3 text-center text-sm font-bold">Trạng thái</th>
+                      <th className="px-4 py-3 text-center text-sm font-bold">Thao tác</th>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {paginatedData.map((row) => (
-                          <tr key={row.id} className="hover:bg-gray-50 border-b border-gray-100">
-                            <td className="px-4 py-3 text-center font-medium text-gray-900">{row.code}</td>
-                            <td className="px-4 py-3 text-center text-gray-700">{row.userId} - {row.userName || `User`}</td>
-                            <td className="px-4 py-3 text-center text-gray-700">{getRoomName(row.roomId)}</td>
-                            <td className="px-4 py-3 text-center text-gray-700">{row.checkinDate}</td>
-                            <td className="px-4 py-3 text-center text-gray-700">{row.checkoutDate}</td>
-                            <td className="px-4 py-3 text-center text-gray-700">{row.numGuests}</td>
+                  </THead>
+                  <TBody>
+                    {filtered.slice((page - 1) * size, page * size).map((row, index) => (
+                      <tr key={row.id} className={`transition-colors ${index % 2 === 0 ? 'bg-white' : 'bg-gray-100'} hover:bg-[#f2f8fe]`}>
+                        <td className="px-4 py-3 font-medium text-center text-gray-900">{row.code}</td>
+                        <td className="px-4 py-3 text-left text-gray-700">{getCustomerDisplay(row)}</td>
+                        <td className="px-4 py-3 text-center text-gray-700 font-semibold">{getRoomName(row.roomId)}</td>
+                        <td className="px-4 py-3 text-center text-gray-700">
+                          {formatDate(row.checkinDate)} - {formatDate(row.checkoutDate)}
+                        </td>
                             <td className="px-4 py-3 text-center">{renderStatusChip(row.status)}</td>
                             <td className="px-4 py-3 text-center">
                               <div className="flex gap-2 justify-center">
-                                <Button
-                                  variant="secondary"
-                                  className="h-8 px-3 text-xs"
-                                  onClick={() => {
-                                    setSelected(row)
-                                    setDetailOpen(true)
-                                  }}
-                                >
-                                  Xem
-                                </Button>
-                                <Button
-                                  className="h-8 px-3 text-xs"
-                                  onClick={() => openEdit(row)}
-                                >
-                                  Sửa
-                                </Button>
-                                {row.isActive !== false && (
-                                  <Button
-                                    variant="danger"
-                                    className="h-8 px-3 text-xs"
-                                    onClick={() => confirmAction(row.id, 'delete')}
-                                  >
-                                    Xóa
-                                  </Button>
-                                )}
+                            <Button variant="secondary" className="h-8 px-3 text-xs bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]" onClick={() => { setSelected(row); setDetailOpen(true); }}>Xem</Button>
+                            <Button variant="secondary" className="h-8 px-3 text-xs bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]" onClick={() => openEdit(row)}>Sửa</Button>
+                            <Button variant="danger" className="h-8 px-3 text-xs" onClick={() => confirmDelete(row.id)}>Xóa</Button>
                               </div>
                             </td>
                       </tr>
                     ))}
-                  </tbody>
-                </table>
+                  </TBody>
+                </Table>
               </div>
 
-                  {/* Mobile Cards - Optimized */}
-                  <div className="lg:hidden p-3">
-                    <div className="space-y-3">
-                      {paginatedData.map((row) => (
-                        <div
-                          key={row.id}
-                          className="bg-white rounded-2xl border border-gray-200 shadow-sm hover:shadow-lg transition-all duration-300 overflow-hidden"
-                        >
-                          {/* Header với Code và Status */}
-                          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 px-4 py-3 border-b border-gray-100">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl flex items-center justify-center shadow-sm">
-                                  <span className="text-white font-bold text-sm">
-                                    {row.code.charAt(0)}
-                                  </span>
+              {/* Mobile Cards */}
+              <div className="lg:hidden space-y-3 p-4">
+                {filtered.slice((page - 1) * size, page * size).map((row) => (
+                  <div key={row.id} className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4 transition-colors hover:bg-[#f2f8fe]">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-11 h-11 rounded-xl bg-[hsl(var(--primary)/0.12)] flex items-center justify-center flex-shrink-0">
+                          <svg className="w-6 h-6 text-[hsl(var(--primary))]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                </svg>
                                 </div>
-                                <div>
-                                  <h3 className="font-bold text-gray-900 text-base">{row.code}</h3>
-                                  <p className="text-sm text-gray-600">{row.userId} - {row.userName || `User`}</p>
-                                </div>
+                        <div className="min-w-0">
+                          <h3 className="text-base font-bold text-gray-900 truncate">{row.code}</h3>
+                          <p className="text-sm text-gray-600 truncate">{getCustomerDisplay(row)}</p>
                               </div>
-                              <div className="flex-shrink-0">
-                                {renderStatusChip(row.status)}
+                                </div>
+                      <div className="flex-shrink-0">{renderStatusChip(row.status)}</div>
+                              </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <div className="rounded-xl bg-gray-50 border border-gray-200 px-3 py-2 text-sm">
+                        <span className="text-gray-600">Phòng:</span> <span className="font-bold text-gray-900">{getRoomName(row.roomId)}</span>
+                            </div>
+                      <div className="rounded-xl bg-gray-50 border border-gray-200 px-3 py-2 text-sm">
+                        <span className="text-gray-600">Khách:</span> <span className="font-bold text-gray-900">{row.numGuests}</span>
                               </div>
                             </div>
-                          </div>
-
-                          {/* Thông tin chính */}
-                          <div className="p-4">
-                            <div className="grid grid-cols-2 gap-3 mb-4">
-                              {/* Phòng */}
-                              <div className="flex items-center gap-2">
-                                <svg className="w-4 h-4 text-indigo-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-                                </svg>
-                                <div className="min-w-0 flex-1">
-                                  <p className="text-xs text-gray-500">Phòng</p>
-                                  <p className="text-sm font-semibold text-gray-900 truncate">{getRoomName(row.roomId)}</p>
-                                </div>
-                              </div>
-
-                              {/* Số khách */}
-                              <div className="flex items-center gap-2">
-                                <svg className="w-4 h-4 text-blue-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                                </svg>
-                                <div className="min-w-0 flex-1">
-                                  <p className="text-xs text-gray-500">Số khách</p>
-                                  <p className="text-sm font-semibold text-gray-900">{row.numGuests} người</p>
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Ngày tháng */}
-                            <div className="flex items-center gap-2 mb-4">
-                              <svg className="w-4 h-4 text-green-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                              </svg>
-                              <div className="min-w-0 flex-1">
-                                <p className="text-xs text-gray-500">Thời gian</p>
-                                <p className="text-sm font-semibold text-gray-900">{row.checkinDate} - {row.checkoutDate}</p>
-                              </div>
-                            </div>
-
-                            {/* Ghi chú nếu có */}
-                            {row.note && (
-                              <div className="mb-4 p-3 bg-gray-50 rounded-lg">
-                                <p className="text-xs text-gray-500 mb-1">Ghi chú</p>
-                                <p className="text-sm text-gray-700 whitespace-pre-line">{row.note}</p>
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Nút thao tác - Mobile Fixed */}
-                          <div className="px-3 py-3 bg-gray-50 border-t border-gray-100">
-                            <div className="grid grid-cols-3 gap-2">
-                              <Button
-                                variant="secondary"
-                                className="h-10 text-xs font-medium px-2"
-                                onClick={() => {
-                                  setSelected(row);
-                                  setDetailOpen(true);
-                                }}
-                              >
-                                <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                                </svg>
-                                Xem
-                              </Button>
-
-                              <Button
-                                className="h-10 text-xs font-medium px-2"
-                                onClick={() => openEdit(row)}
-                              >
-                                <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                                </svg>
-                                Sửa
-                              </Button>
-
-                              {row.isActive !== false ? (
-                                <Button
-                                  variant="danger"
-                                  className="h-10 text-xs font-medium px-2"
-                                  onClick={() => confirmAction(row.id, 'delete')}
-                                >
-                                  <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
-                                  </svg>
-                                  Xóa
-                                </Button>
-                              ) : (
-                                <Button
-                                  className="h-10 text-xs font-medium px-2 bg-green-600 hover:bg-green-700"
-                                  onClick={() => activateBooking(row.id)}
-                                >
-                                  <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                  </svg>
-                                  Kích hoạt
-                                </Button>
-                              )}
-                            </div>
+                    <div className="mt-3 grid grid-cols-3 gap-2">
+                      <Button variant="secondary" className="h-10 text-sm font-medium bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))]" onClick={() => { setSelected(row); setDetailOpen(true); }}>Xem</Button>
+                      <Button variant="secondary" className="h-10 text-sm font-medium bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))]" onClick={() => openEdit(row)}>Sửa</Button>
+                      <Button variant="danger" className="h-10 text-sm font-medium" onClick={() => confirmDelete(row.id)}>Xóa</Button>
                           </div>
                         </div>
                       ))}
                     </div>
-                  </div>
-            </CardBody>
 
-                {/* Pagination - Mobile Optimized */}
+              {/* Pagination */}
                 {filtered.length > size && (
-                  <div className="bg-gradient-to-r from-gray-50 to-blue-50 px-3 py-4 border-t border-gray-200/50">
-                    {/* Mobile Layout */}
-                    <div className="lg:hidden">
-                      <div className="text-center mb-4">
-                        <div className="text-sm text-gray-600 mb-1">Hiển thị kết quả</div>
+                <div className="bg-gradient-to-r from-gray-50 to-[hsl(var(--page-bg))] px-6 py-6 border-t border-gray-200/50 flex flex-col sm:flex-row items-center justify-between gap-6">
                         <div className="text-lg font-bold text-gray-900">
-                          <span className="text-blue-600">{(page - 1) * size + 1}</span> - <span className="text-blue-600">{Math.min(page * size, filtered.length)}</span> / <span className="text-gray-600">{filtered.length}</span>
-                        </div>
-                      </div>
-                      <div className="flex items-center justify-center gap-3">
-                        <Button
-                          variant="secondary"
-                          disabled={page === 1}
-                          onClick={() => setPage(page - 1)}
-                          className="h-10 px-4 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                          </svg>
-                          Trước
-                        </Button>
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-bold text-gray-700 bg-white px-4 py-2 rounded-xl border-2 border-blue-200 shadow-sm">
-                            {page}
-                          </span>
-                          <span className="text-sm text-gray-500">/ {Math.ceil(filtered.length / size)}</span>
-                        </div>
-                        <Button
-                          variant="secondary"
-                          disabled={page >= Math.ceil(filtered.length / size)}
-                          onClick={() => setPage(page + 1)}
-                          className="h-10 px-4 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          Sau
-                          <svg className="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                          </svg>
-                        </Button>
-                      </div>
-                    </div>
-
-                    {/* Desktop Layout */}
-                    <div className="hidden lg:flex flex-row items-center justify-between gap-6">
-                      <div className="text-left">
-                        <div className="text-sm text-gray-600 mb-1">Hiển thị kết quả</div>
-                        <div className="text-lg font-bold text-gray-900">
-                          <span className="text-blue-600">{(page - 1) * size + 1}</span> - <span className="text-blue-600">{Math.min(page * size, filtered.length)}</span> / <span className="text-gray-600">{filtered.length}</span>
-                        </div>
+                    <span className="text-[hsl(var(--primary))]">{(page - 1) * size + 1}</span> - <span className="text-[hsl(var(--primary))]">{Math.min(page * size, filtered.length)}</span> / <span className="text-gray-600">{filtered.length}</span>
                       </div>
                       <div className="flex items-center gap-4">
-                        <Button
-                          variant="secondary"
-                          disabled={page === 1}
-                          onClick={() => setPage(page - 1)}
-                          className="h-10 px-4 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                          </svg>
-                          Trước
-                        </Button>
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-bold text-gray-700 bg-white px-4 py-2 rounded-xl border-2 border-blue-200 shadow-sm">
-                            {page}
-                          </span>
-                          <span className="text-sm text-gray-500">/ {Math.ceil(filtered.length / size)}</span>
-                        </div>
-                        <Button
-                          variant="secondary"
-                          disabled={page >= Math.ceil(filtered.length / size)}
-                          onClick={() => setPage(page + 1)}
-                          className="h-10 px-4 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          Sau
-                          <svg className="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                          </svg>
-                        </Button>
-                      </div>
+                    <Button variant="secondary" disabled={page === 1} onClick={() => setPage(page - 1)} className="h-10 px-4">Trước</Button>
+                    <span className="text-sm font-bold bg-white px-4 py-2 rounded-xl border-2 border-[hsl(var(--primary)/0.25)]">Trang {page}</span>
+                    <Button variant="secondary" disabled={page >= Math.ceil(filtered.length / size)} onClick={() => setPage(page + 1)} className="h-10 px-4">Sau</Button>
                     </div>
                   </div>
                 )}
+            </CardBody>
           </Card>
-            </div>
-          </div>
         </div>
       </div>
 
-      {/* Detail Modal - Responsive */}
-      <Modal open={detailOpen} onClose={() => setDetailOpen(false)} title="Chi tiết đặt phòng" size="xl">
-        <div className="p-3 sm:p-4 md:p-6">
+      {/* Detail Modal */}
+      <Modal open={detailOpen} onClose={() => setDetailOpen(false)} title="Chi tiết đặt phòng" size="lg">
+        <div className="p-4 sm:p-6">
           {selected && (
-            <div className="space-y-4 sm:space-y-5 md:space-y-6">
-              {/* Header Section - Mobile Optimized */}
-              <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-3 sm:p-4 md:p-6 border border-blue-200">
-                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4">
-                  {/* Icon và Title */}
-                  <div className="flex items-center gap-3 w-full sm:w-auto sm:flex-1 min-w-0">
-                    <div className="w-12 h-12 sm:w-14 sm:h-14 md:w-16 md:h-16 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg flex-shrink-0">
-                      <svg className="w-6 h-6 sm:w-7 sm:h-7 md:w-8 md:h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="space-y-6">
+              {/* Header với thông tin chính */}
+              <div className="bg-gradient-to-r from-[hsl(var(--page-bg))] to-[hsl(var(--primary)/0.08)] rounded-xl p-4 sm:p-6 border border-[hsl(var(--primary)/0.25)]">
+                <div className="space-y-4">
+                  {/* Header với icon và status */}
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+                    <div className="flex items-center gap-3 w-full sm:w-auto">
+                      <div className="w-12 h-12 sm:w-14 sm:h-14 bg-[hsl(var(--primary))] rounded-xl flex items-center justify-center shadow-lg flex-shrink-0">
+                        <svg className="w-6 h-6 sm:w-7 sm:h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                       </svg>
                     </div>
                     <div className="flex-1 min-w-0">
-                      <h2 className="text-lg sm:text-xl md:text-2xl lg:text-3xl font-bold text-gray-900 mb-1 break-words">Đặt phòng {selected.code}</h2>
-                      <div className="flex flex-col xs:flex-row xs:items-center gap-1 xs:gap-2">
-                        <span className="text-xs sm:text-sm text-gray-600">ID: {selected.id}</span>
-                        <span className="hidden xs:inline text-gray-400">•</span>
-                        <span className="text-xs sm:text-sm text-gray-600 truncate">{selected.userId} - {selected.userName || 'User'}</span>
+                        <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold text-gray-900">
+                          Mã đặt phòng {selected.code}
+                        </h2>
                       </div>
                     </div>
-                  </div>
-                  {/* Status Badge */}
-                  <div className="flex-shrink-0 w-full sm:w-auto sm:ml-auto">
-                    <div className="flex justify-start sm:justify-end">
+                    <div className="flex-shrink-0 w-full sm:w-auto">
                       {renderStatusChip(selected.status)}
-                    </div>
-                  </div>
                 </div>
               </div>
 
-              {/* Thông tin khách hàng */}
-              <div className="space-y-3 sm:space-y-4">
-                <h3 className="text-base sm:text-lg font-semibold text-gray-800 border-b border-gray-200 pb-2">Thông tin khách hàng</h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
-                  {(selected as any).userEmail && (
-                    <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-                      <div className="flex items-center gap-2 mb-2">
-                        <svg className="w-4 h-4 sm:w-5 sm:h-5 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                        </svg>
-                        <span className="text-xs sm:text-sm font-semibold text-gray-700">Email</span>
-                      </div>
-                      <p className="text-sm sm:text-base font-medium text-gray-900 break-words break-all">{(selected as any).userEmail}</p>
-                    </div>
-                  )}
-                  {(selected as any).phoneNumber && (
-                    <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-                      <div className="flex items-center gap-2 mb-2">
-                        <svg className="w-4 h-4 sm:w-5 sm:h-5 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
-                        </svg>
-                        <span className="text-xs sm:text-sm font-semibold text-gray-700">Số điện thoại</span>
-                      </div>
-                      <p className="text-sm sm:text-base font-medium text-gray-900 break-words">{(selected as any).phoneNumber}</p>
-                    </div>
-                  )}
-                  <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-                    <div className="flex items-center gap-2 mb-2">
-                      <svg className="w-4 h-4 sm:w-5 sm:h-5 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                      </svg>
-                      <span className="text-xs sm:text-sm font-semibold text-gray-700">Số khách</span>
-                    </div>
-                    <p className="text-sm sm:text-base font-medium text-gray-900">{selected.numGuests} người</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Thông tin phòng */}
-              <div className="space-y-3 sm:space-y-4">
-                <h3 className="text-base sm:text-lg font-semibold text-gray-800 border-b border-gray-200 pb-2">Thông tin phòng</h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                  <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-                    <div className="flex items-center gap-2 mb-2">
-                      <svg className="w-4 h-4 sm:w-5 sm:h-5 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-                      </svg>
-                      <span className="text-xs sm:text-sm font-semibold text-gray-700">Phòng</span>
-                    </div>
-                    <p className="text-sm sm:text-base font-medium text-gray-900 break-words">
-                      {(selected as any).roomTypeName ? `${(selected as any).roomTypeName}` : getRoomName(selected.roomId)}
-                      {(selected as any).roomCode ? ` - ${(selected as any).roomCode}` : ''}
-                    </p>
-                  </div>
-                  {(selected as any).building && (
-                    <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-                      <div className="flex items-center gap-2 mb-2">
-                        <svg className="w-4 h-4 sm:w-5 sm:h-5 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-                        </svg>
-                        <span className="text-xs sm:text-sm font-semibold text-gray-700">Tòa nhà</span>
-                      </div>
-                      <p className="text-sm sm:text-base font-medium text-gray-900 break-words">{(selected as any).building}</p>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Thời gian đặt phòng */}
-              <div className="space-y-3 sm:space-y-4">
-                <h3 className="text-base sm:text-lg font-semibold text-gray-800 border-b border-gray-200 pb-2">Thời gian đặt phòng</h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                  <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-                    <div className="flex items-center gap-2 mb-2">
-                      <svg className="w-4 h-4 sm:w-5 sm:h-5 text-green-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                      </svg>
-                      <span className="text-xs sm:text-sm font-semibold text-gray-700">Ngày check-in</span>
-                    </div>
-                    <p className="text-sm sm:text-base font-medium text-gray-900 break-words">
-                      {selected.checkinDate ? (() => {
-                        const date = new Date(selected.checkinDate);
-                        return date.toLocaleDateString('vi-VN', {
-                          year: 'numeric',
-                          month: 'long',
-                          day: 'numeric'
-                        });
-                      })() : selected.checkinDate}
-                    </p>
-                  </div>
-                  <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-                    <div className="flex items-center gap-2 mb-2">
-                      <svg className="w-4 h-4 sm:w-5 sm:h-5 text-red-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                      </svg>
-                      <span className="text-xs sm:text-sm font-semibold text-gray-700">Ngày check-out</span>
-                    </div>
-                    <p className="text-sm sm:text-base font-medium text-gray-900 break-words">
-                      {selected.checkoutDate ? (() => {
-                        const date = new Date(selected.checkoutDate);
-                        return date.toLocaleDateString('vi-VN', {
-                          year: 'numeric',
-                          month: 'long',
-                          day: 'numeric'
-                        });
-                      })() : selected.checkoutDate}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Mục đích và Ghi chú */}
-              {((selected as any).purpose || selected.note) && (
-                <div className="space-y-3 sm:space-y-4">
-                  <h3 className="text-base sm:text-lg font-semibold text-gray-800 border-b border-gray-200 pb-2">Thông tin bổ sung</h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                    {(selected as any).purpose && (
-                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-                        <div className="flex items-center gap-2 mb-2">
-                          <svg className="w-4 h-4 sm:w-5 sm:h-5 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                          </svg>
-                          <span className="text-xs sm:text-sm font-semibold text-gray-700">Mục đích</span>
-                        </div>
-                        <p className="text-sm sm:text-base font-medium text-gray-900 break-words">{(selected as any).purpose}</p>
-                      </div>
-                    )}
-                    {selected.note && (
-                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-                        <div className="flex items-center gap-2 mb-2">
-                          <svg className="w-4 h-4 sm:w-5 sm:h-5 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                          </svg>
-                          <span className="text-xs sm:text-sm font-semibold text-gray-700">Ghi chú</span>
-                        </div>
-                        <p className="text-sm sm:text-base text-gray-700 whitespace-pre-line break-words">{selected.note}</p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Thông tin thanh toán */}
-              {(((selected as any).totalPrice !== null && (selected as any).totalPrice !== undefined) || (selected as any).paymentStatus || selectedMeta.totalPrice !== null || selectedMeta.paymentStatus) && (
-                <div className="space-y-3 sm:space-y-4">
-                  <h3 className="text-base sm:text-lg font-semibold text-gray-800 border-b border-gray-200 pb-2">Thông tin thanh toán</h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                    <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-                      <div className="flex items-center gap-2 mb-2">
-                        <svg className="w-4 h-4 sm:w-5 sm:h-5 text-green-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
-                        </svg>
-                        <span className="text-xs sm:text-sm font-semibold text-gray-700">Tổng tiền</span>
-                      </div>
-                      <p className="text-base sm:text-lg font-bold text-gray-900 break-words">
-                        {(() => {
-                          const totalPrice = (selected as any).totalPrice !== null && (selected as any).totalPrice !== undefined 
-                            ? (selected as any).totalPrice 
-                            : selectedMeta.totalPrice;
-                          return totalPrice !== null && totalPrice !== undefined 
-                            ? Number(totalPrice).toLocaleString('vi-VN') + ' VND'
-                            : 'Miễn phí';
-                        })()}
+                  {/* Thông tin nhanh */}
+                  <div className="grid grid-cols-2 gap-3 sm:gap-4">
+                    <div className="bg-white/70 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-[hsl(var(--primary)/0.25)]">
+                      <p className="text-sm sm:text-base font-semibold text-gray-700">
+                        <span className="text-gray-600">ID:</span>{" "}
+                        <span className="font-bold text-[hsl(var(--primary))]">{selected.id}</span>
                       </p>
-                    </div>
-                    {((selected as any).paymentStatus || selectedMeta.paymentStatus) && (
-                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-                        <div className="flex items-center gap-2 mb-2">
-                          <svg className="w-4 h-4 sm:w-5 sm:h-5 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M5 12a2 2 0 010-4h14a2 2 0 110 4M5 12a2 2 0 000 4h14a2 2 0 100-4" />
-                          </svg>
-                          <span className="text-xs sm:text-sm font-semibold text-gray-700">Trạng thái thanh toán</span>
-                        </div>
-                        <p className="text-sm sm:text-base font-medium text-gray-900 break-words">{(selected as any).paymentStatus || selectedMeta.paymentStatus}</p>
-                      </div>
-                    )}
+              </div>
+
+                    <div className="bg-white/70 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-[hsl(var(--primary)/0.25)]">
+                      <p className="text-sm sm:text-base font-semibold text-gray-700">
+                        <span className="text-gray-600">Số khách:</span>{" "}
+                        <span className="font-bold text-[hsl(var(--primary))]">{selected.numGuests}</span>
+                      </p>
+                </div>
+              </div>
+
+                  {/* Khách hàng và Phòng */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-[hsl(var(--primary)/0.25)]">
+                      <p className="text-sm sm:text-base font-semibold text-gray-700 break-words leading-relaxed">
+                        <span className="text-gray-600">Khách hàng:</span>{" "}
+                        <span className="font-bold text-[hsl(var(--primary))]">{getCustomerDisplay(selected)}</span>
+                    </p>
                   </div>
+                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-[hsl(var(--primary)/0.25)]">
+                      <p className="text-sm sm:text-base font-semibold text-gray-700 break-words leading-relaxed">
+                        <span className="text-gray-600">Phòng:</span>{" "}
+                        <span className="font-bold text-[hsl(var(--primary))]">{getRoomName(selected.roomId)}</span>
+                      </p>
+                </div>
+              </div>
+
+                  {/* Thời gian */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-[hsl(var(--primary)/0.25)]">
+                      <p className="text-sm sm:text-base font-semibold text-gray-700">
+                        <span className="text-gray-600">Check-in:</span>{" "}
+                        <span className="font-bold text-[hsl(var(--primary))]">{formatDate(selected.checkinDate)}</span>
+                      </p>
+                        </div>
+                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-[hsl(var(--primary)/0.25)]">
+                      <p className="text-sm sm:text-base font-semibold text-gray-700">
+                        <span className="text-gray-600">Check-out:</span>{" "}
+                        <span className="font-bold text-[hsl(var(--primary))]">{formatDate(selected.checkoutDate)}</span>
+                      </p>
+                      </div>
+                        </div>
+                      </div>
+                  </div>
+
+              {selected.note && (
+                <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-gray-200">
+                  <p className="text-sm text-gray-800 whitespace-pre-line">
+                    <span className="font-semibold text-gray-600">Ghi chú:</span>{" "}
+                    {selected.note}
+                  </p>
                 </div>
               )}
 
-              {/* Thông tin hệ thống */}
               {(selected.created_at || selected.updated_at) && (
-                <div className="space-y-3 sm:space-y-4">
-                  <h3 className="text-base sm:text-lg font-semibold text-gray-800 border-b border-gray-200 pb-2">Thông tin hệ thống</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                     {selected.created_at && (
-                      <div className="bg-gray-50 rounded-lg p-3 sm:p-4 border border-gray-200">
-                        <div className="flex items-center gap-2 mb-2">
-                          <svg className="w-4 h-4 sm:w-5 sm:h-5 text-gray-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                          </svg>
-                          <span className="text-xs sm:text-sm font-semibold text-gray-600">Ngày tạo</span>
-                        </div>
-                        <p className="text-xs sm:text-sm text-gray-700 break-words">
-                          {new Date(selected.created_at).toLocaleString('vi-VN', { 
-                            hour: '2-digit', 
-                            minute: '2-digit', 
-                            day: 'numeric',
-                            month: 'numeric',
-                            year: 'numeric'
-                          })}
+                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-gray-200">
+                      <div className="text-xs sm:text-sm font-semibold text-gray-500 mb-1">Ngày tạo</div>
+                      <p className="text-sm font-medium text-gray-900">
+                        {formatDateTime(selected.created_at)}
                         </p>
                       </div>
                     )}
                     {selected.updated_at && (
-                      <div className="bg-gray-50 rounded-lg p-3 sm:p-4 border border-gray-200">
-                        <div className="flex items-center gap-2 mb-2">
-                          <svg className="w-4 h-4 sm:w-5 sm:h-5 text-gray-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                          </svg>
-                          <span className="text-xs sm:text-sm font-semibold text-gray-600">Cập nhật lần cuối</span>
-                        </div>
-                        <p className="text-xs sm:text-sm text-gray-700 break-words">
-                          {new Date(selected.updated_at).toLocaleString('vi-VN', {
-                            hour: '2-digit', 
-                            minute: '2-digit', 
-                            day: 'numeric',
-                            month: 'numeric',
-                            year: 'numeric'
-                          })}
+                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-gray-200">
+                      <div className="text-xs sm:text-sm font-semibold text-gray-500 mb-1">Cập nhật gần nhất</div>
+                      <p className="text-sm font-medium text-gray-900">
+                        {formatDateTime(selected.updated_at)}
                         </p>
                       </div>
                     )}
-                  </div>
                 </div>
               )}
             </div>
@@ -1405,182 +731,279 @@ export default function BookingsPage() {
         </div>
       </Modal>
 
-      {/* Edit Modal - Mobile Optimized */}
-      <Modal open={editOpen} onClose={handleCloseEdit} title={edit.id ? 'Sửa đặt phòng' : 'Thêm đặt phòng mới'}>
+      {/* Edit Modal */}
+      <Modal open={editOpen} onClose={handleCloseEdit} title={edit.id ? 'Sửa đặt phòng' : 'Thêm đặt phòng mới'} size="lg">
         <div className="p-4 sm:p-6">
           <div className="space-y-4" key={edit.id || 'new'}>
             {/* Form */}
-            <div className="space-y-4">
-              {/* General Error Message */}
-              {fieldErrors.general && (
-                <div className="rounded-md border p-3 text-sm shadow-sm bg-red-50 border-red-200 text-red-800">
-                  {fieldErrors.general}
-                </div>
-              )}
-              
-              {/* Code và Số khách */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-3">
+              {/* Code */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Code *</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Code <span className="text-red-500">*</span></label>
                   <Input
-                    key={`code-${edit.id || 'new'}-${edit.code}`}
+                  key={`code-${edit.id || 'new'}`}
                     value={edit.code}
-                    onChange={(e) => {
-                      setEdit({ ...edit, code: e.target.value })
-                      if (fieldErrors.code) {
-                        setFieldErrors(prev => ({ ...prev, code: '' }))
-                      }
-                    }}
+                  onChange={(e) => { setEdit({ ...edit, code: e.target.value }); setCodeError(null); }}
                     placeholder="Nhập code đặt phòng"
-                    className={`w-full px-4 py-3 text-base border rounded-xl focus:ring-2 focus:ring-blue-500 ${
-                      fieldErrors.code ? 'border-red-500' : 'border-gray-300'
-                    }`}
+                  disabled={!!edit.id}
+                  className={`w-full ${codeError ? 'border-red-500 focus:ring-red-500' : ''} ${edit.id ? 'bg-gray-100 cursor-not-allowed' : ''}`}
                   />
-                  {fieldErrors.code && (
-                    <p className="text-xs text-red-500 mt-1">{fieldErrors.code}</p>
+                {codeError && (
+                  <div className="mt-1 text-sm font-medium text-red-600">{codeError}</div>
                   )}
                 </div>
+
+              {/* Khách hàng và Phòng */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* Searchable User Dropdown */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Số khách *</label>
-                  <Input
-                    key={`numGuests-${edit.id || 'new'}-${edit.numGuests}`}
-                    type="number"
-                    min="1"
-                    max="10"
-                    value={edit.numGuests}
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Khách hàng <span className="text-red-500">*</span></label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={userDropdownOpen && !edit.id ? userSearch : getSelectedUserDisplay()}
                     onChange={(e) => {
-                      setEdit({ ...edit, numGuests: Number(e.target.value) })
-                      if (fieldErrors.numGuests) {
-                        setFieldErrors(prev => ({ ...prev, numGuests: '' }))
-                      }
-                    }}
-                    placeholder="Số lượng khách"
-                    className={`w-full px-4 py-3 text-base border rounded-xl focus:ring-2 focus:ring-blue-500 ${
-                      fieldErrors.numGuests ? 'border-red-500' : 'border-gray-300'
-                    }`}
-                  />
-                  {fieldErrors.numGuests && (
-                    <p className="text-xs text-red-500 mt-1">{fieldErrors.numGuests}</p>
+                        if (!edit.id) {
+                          setUserSearch(e.target.value)
+                          if (!userDropdownOpen) setUserDropdownOpen(true)
+                        }
+                      }}
+                      onFocus={() => {
+                        if (!edit.id) {
+                          setUserDropdownOpen(true)
+                          setUserSearch("")
+                          setUserIdError(null)
+                        }
+                      }}
+                      onBlur={() => setTimeout(() => setUserDropdownOpen(false), 200)}
+                      placeholder="Gõ để tìm khách hàng..."
+                      disabled={!!edit.id}
+                      className={`w-full px-3 py-2 pr-10 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] ${userIdError ? 'border-red-500' : 'border-gray-300'} ${edit.id ? 'bg-gray-100 cursor-not-allowed' : 'bg-white'}`}
+                    />
+                    <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                      <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                      </svg>
+                    </div>
+                    {userDropdownOpen && !edit.id && (
+                      <div className="absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                        {filteredUsers.length === 0 ? (
+                          <div className="px-3 py-2 text-sm text-gray-500">Không tìm thấy khách hàng</div>
+                        ) : (
+                          filteredUsers.map(user => (
+                            <div
+                              key={user.id}
+                              onMouseDown={(e) => {
+                                e.preventDefault()
+                                setEdit({ ...edit, userId: user.id })
+                                setUserSearch("")
+                                setUserDropdownOpen(false)
+                              }}
+                              className={`px-3 py-2 text-sm cursor-pointer hover:bg-[hsl(var(--primary)/0.1)] ${edit.userId === user.id ? 'bg-[hsl(var(--primary)/0.15)] font-medium' : ''}`}
+                            >
+                              {user.full_name || user.email || `#${user.id}`}
+                            </div>
+                          ))
                   )}
                 </div>
+                    )}
+                  </div>
+                  {userIdError && (
+                    <div className="mt-1 text-sm font-medium text-red-600">{userIdError}</div>
+                  )}
               </div>
 
-              {/* Phòng và Trạng thái */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* Searchable Room Dropdown */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Phòng *</label>
-                  <select
-                    key={`roomId-${edit.id || 'new'}-${edit.roomId}`}
-                    value={edit.roomId}
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Phòng <span className="text-red-500">*</span></label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={roomDropdownOpen && !edit.id ? roomSearch : getSelectedRoomDisplay()}
                     onChange={(e) => {
-                      setEdit({ ...edit, roomId: Number(e.target.value) })
-                      if (fieldErrors.roomId) {
-                        setFieldErrors(prev => ({ ...prev, roomId: '' }))
-                      }
-                    }}
-                    className={`w-full px-4 py-3 text-base border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white ${
-                      fieldErrors.roomId ? 'border-red-500' : 'border-gray-300'
-                    }`}
-                  >
-                    <option value="">Chọn phòng</option>
-                    {rooms.map(room => (
-                      <option key={room.id} value={room.id}>{room.code} - {room.name || 'Phòng'}</option>
-                    ))}
-                  </select>
-                  {fieldErrors.roomId && (
-                    <p className="text-xs text-red-500 mt-1">{fieldErrors.roomId}</p>
+                        if (!edit.id) {
+                          setRoomSearch(e.target.value)
+                          if (!roomDropdownOpen) setRoomDropdownOpen(true)
+                        }
+                      }}
+                      onFocus={() => {
+                        if (!edit.id) {
+                          setRoomDropdownOpen(true)
+                          setRoomSearch("")
+                          setRoomIdError(null)
+                        }
+                      }}
+                      onBlur={() => setTimeout(() => setRoomDropdownOpen(false), 200)}
+                      placeholder="Gõ để tìm phòng..."
+                      disabled={!!edit.id}
+                      className={`w-full px-3 py-2 pr-10 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] ${roomIdError ? 'border-red-500' : 'border-gray-300'} ${edit.id ? 'bg-gray-100 cursor-not-allowed' : 'bg-white'}`}
+                    />
+                    <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                      <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                      </svg>
+                    </div>
+                    {roomDropdownOpen && !edit.id && (
+                      <div className="absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                        {filteredRooms.length === 0 ? (
+                          <div className="px-3 py-2 text-sm text-gray-500">Không tìm thấy phòng</div>
+                        ) : (
+                          filteredRooms.map(room => (
+                            <div
+                              key={room.id}
+                              onMouseDown={(e) => {
+                                e.preventDefault()
+                                setEdit({ ...edit, roomId: room.id })
+                                setRoomSearch("")
+                                setRoomDropdownOpen(false)
+                                setRoomIdError(null)
+                              }}
+                              className={`px-3 py-2 text-sm cursor-pointer hover:bg-[hsl(var(--primary)/0.1)] ${edit.roomId === room.id ? 'bg-[hsl(var(--primary)/0.15)] font-medium' : ''}`}
+                            >
+                              {room.code}
+                            </div>
+                          ))
                   )}
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Trạng thái</label>
-                  <select
-                    key={`status-${edit.id || 'new'}-${edit.status}`}
-                    value={edit.status}
-                    onChange={(e) => setEdit({ ...edit, status: e.target.value as BookingStatus })}
-                    className="w-full px-4 py-3 text-base border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-                  >
-                    <option value="PENDING">Chờ duyệt</option>
-                    <option value="APPROVED">Đã duyệt</option>
-                    <option value="REJECTED">Đã từ chối</option>
-                    <option value="CANCELLED">Đã hủy</option>
-                    <option value="CHECKED_IN">Đã nhận phòng</option>
-                    <option value="CHECKED_OUT">Đã trả phòng</option>
-                  </select>
+                    )}
+                  </div>
+                  {roomIdError && (
+                    <div className="mt-1 text-sm font-medium text-red-600">{roomIdError}</div>
+                  )}
                 </div>
               </div>
 
               {/* Ngày check-in và check-out */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Ngày check-in *</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Ngày check-in <span className="text-red-500">*</span></label>
                   <Input
-                    key={`checkinDate-${edit.id || 'new'}-${edit.checkinDate}`}
+                    key={`checkinDate-${edit.id || 'new'}`}
                     type="date"
                     value={edit.checkinDate}
-                    onChange={(e) => {
-                      setEdit({ ...edit, checkinDate: e.target.value })
-                      if (fieldErrors.checkinDate) {
-                        setFieldErrors(prev => ({ ...prev, checkinDate: '' }))
-                      }
-                    }}
-                    className={`w-full px-4 py-3 text-base border rounded-xl focus:ring-2 focus:ring-blue-500 ${
-                      fieldErrors.checkinDate ? 'border-red-500' : 'border-gray-300'
-                    }`}
-                    style={{ fontSize: '16px' }} // Prevent zoom on iOS
+                    onChange={(e) => { setEdit({ ...edit, checkinDate: e.target.value }); setCheckinDateError(null); }}
+                    placeholder="Chọn ngày check-in"
+                    min={!edit.id ? new Date().toISOString().split('T')[0] : undefined}
+                    className={`w-full ${checkinDateError ? 'border-red-500 focus:ring-red-500' : ''}`}
                   />
-                  {fieldErrors.checkinDate && (
-                    <p className="text-xs text-red-500 mt-1">{fieldErrors.checkinDate}</p>
+                  {checkinDateError && (
+                    <div className="mt-1 text-sm font-medium text-red-600">{checkinDateError}</div>
                   )}
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Ngày check-out *</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Ngày check-out <span className="text-red-500">*</span></label>
                   <Input
-                    key={`checkoutDate-${edit.id || 'new'}-${edit.checkoutDate}`}
+                    key={`checkoutDate-${edit.id || 'new'}`}
                     type="date"
                     value={edit.checkoutDate}
-                    onChange={(e) => {
-                      setEdit({ ...edit, checkoutDate: e.target.value })
-                      if (fieldErrors.checkoutDate) {
-                        setFieldErrors(prev => ({ ...prev, checkoutDate: '' }))
-                      }
-                    }}
-                    className={`w-full px-4 py-3 text-base border rounded-xl focus:ring-2 focus:ring-blue-500 ${
-                      fieldErrors.checkoutDate ? 'border-red-500' : 'border-gray-300'
-                    }`}
-                    style={{ fontSize: '16px' }} // Prevent zoom on iOS
+                    onChange={(e) => { setEdit({ ...edit, checkoutDate: e.target.value }); setCheckoutDateError(null); }}
+                    placeholder="Chọn ngày check-out"
+                    min={!edit.id ? (() => {
+                      const tomorrow = new Date()
+                      tomorrow.setDate(tomorrow.getDate() + 1)
+                      return tomorrow.toISOString().split('T')[0]
+                    })() : undefined}
+                    className={`w-full ${checkoutDateError ? 'border-red-500 focus:ring-red-500' : ''}`}
                   />
-                  {fieldErrors.checkoutDate && (
-                    <p className="text-xs text-red-500 mt-1">{fieldErrors.checkoutDate}</p>
+                  {checkoutDateError && (
+                    <div className="mt-1 text-sm font-medium text-red-600">{checkoutDateError}</div>
                   )}
                 </div>
               </div>
 
-              {/* Ghi chú - Full width */}
+              {/* Số khách và Trạng thái */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Số khách <span className="text-red-500">*</span></label>
+                  <Input
+                    key={`numGuests-${edit.id || 'new'}`}
+                    type="number"
+                    min="1"
+                    max="20"
+                    value={edit.numGuests}
+                    onChange={(e) => { setEdit({ ...edit, numGuests: Number(e.target.value) }); setNumGuestsError(null); }}
+                    placeholder="Số lượng khách"
+                    className={`w-full ${numGuestsError ? 'border-red-500 focus:ring-red-500' : ''}`}
+                  />
+                  {numGuestsError && (
+                    <div className="mt-1 text-sm font-medium text-red-600">{numGuestsError}</div>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Trạng thái <span className="text-red-500">*</span></label>
+                  <div className="relative">
+                    <select
+                      key={`status-${edit.id || 'new'}`}
+                      value={edit.status}
+                      onChange={(e) => { setEdit({ ...edit, status: e.target.value as BookingStatus }); setStatusError(null); }}
+                      disabled={!!edit.id}
+                      className={`w-full px-3 py-2 pr-10 border rounded-lg text-sm focus:outline-none appearance-none ${edit.id ? 'bg-gray-100 cursor-not-allowed' : 'bg-white'} ${statusError ? 'border-red-500' : 'border-gray-300'}`}
+                    >
+                      {statusOptions.map(status => (
+                        <option key={status} value={status}>{statusLabels[status]}</option>
+                      ))}
+                    </select>
+                    <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                      <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </div>
+                  </div>
+                  {statusError && (
+                    <div className="mt-1 text-sm font-medium text-red-600">{statusError}</div>
+                  )}
+                  {/* Hiển thị 2 button Duyệt/Không duyệt khi đang edit và status = PENDING */}
+                  {edit.id && edit.status === 'PENDING' && (
+                    <div className="mt-2 flex gap-2">
+                      <Button
+                        variant="primary"
+                        onClick={() => handleApprove(edit.id!)}
+                        className="flex-1 bg-green-600 hover:bg-green-700 text-white text-sm py-2"
+                      >
+                        Duyệt
+                      </Button>
+                      <Button
+                        variant="danger"
+                        onClick={() => handleReject(edit.id!)}
+                        className="flex-1 text-sm py-2"
+                      >
+                        Không duyệt
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Ghi chú - chỉ hiển thị trên desktop */}
+              <div className="hidden sm:block">
                 <label className="block text-sm font-medium text-gray-700 mb-1">Ghi chú</label>
                 <textarea
-                  key={`note-${edit.id || 'new'}-${edit.note}`}
+                  key={`note-${edit.id || 'new'}`}
                   value={edit.note}
-                  onChange={(e) => setEdit({ ...edit, note: e.target.value })}
-                  placeholder="Nhập ghi chú (tùy chọn)"
-                  className="w-full px-4 py-3 text-base border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-                  rows={3}
+                  onChange={(e) => { setEdit({ ...edit, note: e.target.value }); setNoteError(null); }}
+                  placeholder="Nhập ghi chú đặt phòng"
+                  rows={2}
+                  className={`w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] ${noteError ? 'border-red-500' : 'border-gray-300'}`}
                 />
+                {noteError && (
+                  <div className="mt-1 text-sm font-medium text-red-600">{noteError}</div>
+                )}
               </div>
             </div>
 
-            {/* Action Buttons - Same Row */}
-            <div className="flex gap-3 pt-4 border-t border-gray-200">
+            {/* Buttons */}
+            <div className="flex flex-row gap-3 pt-3 border-t border-gray-200">
               <Button 
                 variant="secondary" 
                 onClick={handleCloseEdit}
-                className="flex-1 h-12 text-base font-medium"
+                className="flex-1"
               >
-                Hủy
+                Hủy bỏ
               </Button>
               <Button 
                 onClick={save}
-                className="flex-1 h-12 text-base font-medium bg-blue-600 hover:bg-blue-700"
+                variant="primary"
+                className="flex-1"
               >
                 {edit.id ? 'Cập nhật' : 'Tạo mới'}
               </Button>
@@ -1589,20 +1012,17 @@ export default function BookingsPage() {
         </div>
       </Modal>
 
-      {/* Confirmation Modal */}
-      <Modal open={confirmOpen.open} onClose={() => setConfirmOpen({ open: false })} title="Xác nhận xóa đặt phòng">
+      {/* Delete Confirmation Modal */}
+      <Modal open={confirmOpen.open} onClose={() => setConfirmOpen({ open: false })} title="Xác nhận xóa">
         <div className="p-6">
           <p className="text-gray-600 mb-6">
-            Bạn có chắc chắn muốn xóa đặt phòng này không?
+            Bạn có chắc muốn xóa đặt phòng này? Đặt phòng sẽ bị xóa vĩnh viễn khỏi hệ thống.
           </p>
           <div className="flex justify-end gap-3">
             <Button variant="secondary" onClick={() => setConfirmOpen({ open: false })}>
               Hủy
             </Button>
-            <Button 
-              variant="danger" 
-              onClick={doAction}
-            >
+            <Button variant="danger" onClick={doDelete}>
               Xóa
             </Button>
           </div>

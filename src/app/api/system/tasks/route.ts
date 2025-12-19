@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiClient } from '@/lib/api-client'
-import { verifyToken, isAdmin } from '@/lib/auth-utils'
+import { verifyToken, getAuthorizationHeader } from '@/lib/auth-utils'
+import { API_CONFIG } from '@/lib/config'
 
-// GET - Lấy danh sách staff tasks hoặc task theo ID
+const BASE = API_CONFIG.BASE_URL
+
+// GET - list tasks or get by id / assignee / status / related
 export async function GET(req: NextRequest) {
   try {
+    const auth = getAuthorizationHeader(req)
     const { searchParams } = new URL(req.url)
     const id = searchParams.get('id')
     const assignedTo = searchParams.get('assignedTo')
@@ -12,129 +16,145 @@ export async function GET(req: NextRequest) {
     const relatedType = searchParams.get('relatedType')
     const relatedId = searchParams.get('relatedId')
 
-    // Lấy task theo ID
     if (id) {
-      const taskId = parseInt(id)
-      if (isNaN(taskId)) {
+      const taskId = Number(id)
+      if (!taskId || Number.isNaN(taskId)) {
         return NextResponse.json({ error: 'Invalid task ID' }, { status: 400 })
       }
-      const response = await apiClient.getStaffTask(taskId)
-      if (response.success) {
-        return NextResponse.json(response.data)
+      const res = await fetch(`${BASE}/staff-tasks/${taskId}`, {
+        headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) },
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
       }
-      return NextResponse.json({ error: response.error }, { status: 500 })
+      return NextResponse.json(data?.data ?? data)
     }
 
-    // Lấy tasks theo assignee
     if (assignedTo) {
-      const assigneeId = parseInt(assignedTo)
-      if (isNaN(assigneeId)) {
+      const assigneeId = Number(assignedTo)
+      if (!assigneeId || Number.isNaN(assigneeId)) {
         return NextResponse.json({ error: 'Invalid assignee ID' }, { status: 400 })
       }
-      const response = await apiClient.getStaffTasksByAssignee(assigneeId)
-      if (response.success) {
-        const data: any = response.data
-        const items = Array.isArray(data) ? data : []
-        return NextResponse.json({ items, total: items.length })
+      const res = await fetch(`${BASE}/staff-tasks/by-assignee/${assigneeId}`, {
+        headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) },
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        return NextResponse.json({ error: data?.message || `Backend error: ${res.status}`, items: [], total: 0 }, { status: 500 })
       }
-      return NextResponse.json({ error: response.error }, { status: 500 })
-    }
-
-    // Lấy tasks theo status
-    if (status) {
-      const response = await apiClient.getStaffTasksByStatus(status)
-      if (response.success) {
-        const data: any = response.data
-        const items = Array.isArray(data) ? data : []
-        return NextResponse.json({ items, total: items.length })
-      }
-      return NextResponse.json({ error: response.error }, { status: 500 })
-    }
-
-    // Lấy tasks theo related entity
-    if (relatedType && relatedId) {
-      const relatedIdNum = parseInt(relatedId)
-      if (isNaN(relatedIdNum)) {
-        return NextResponse.json({ error: 'Invalid related ID' }, { status: 400 })
-      }
-      const response = await apiClient.getStaffTasksByRelated(relatedType, relatedIdNum)
-      if (response.success) {
-        const data: any = response.data
-        const items = Array.isArray(data) ? data : []
-        return NextResponse.json({ items, total: items.length })
-      }
-      return NextResponse.json({ error: response.error }, { status: 500 })
-    }
-
-    // Lấy tất cả tasks
-    const response = await apiClient.getStaffTasks()
-    if (response.success) {
-      const data: any = response.data
-      const items = Array.isArray(data) ? data : []
+      const items = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
       return NextResponse.json({ items, total: items.length })
     }
 
-    return NextResponse.json({ error: response.error }, { status: 500 })
-  } catch (error: any) {
-    console.error('GET /api/system/tasks error:', error)
-    return NextResponse.json({ error: error.message || 'Internal server error' }, { status: 500 })
+    if (status) {
+      const res = await fetch(`${BASE}/staff-tasks/by-status?status=${encodeURIComponent(status)}`, {
+        headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) },
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        return NextResponse.json({ error: data?.message || `Backend error: ${res.status}`, items: [], total: 0 }, { status: 500 })
+      }
+      const items = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
+      return NextResponse.json({ items, total: items.length })
+    }
+
+    if (relatedType && relatedId) {
+      const relatedIdNum = Number(relatedId)
+      if (!relatedIdNum || Number.isNaN(relatedIdNum)) {
+        return NextResponse.json({ error: 'Invalid related ID' }, { status: 400 })
+      }
+      const res = await fetch(`${BASE}/staff-tasks/by-related?relatedType=${encodeURIComponent(relatedType)}&relatedId=${relatedIdNum}`, {
+        headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) },
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        return NextResponse.json({ error: data?.message || `Backend error: ${res.status}`, items: [], total: 0 }, { status: 500 })
+      }
+      const items = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : [])
+      return NextResponse.json({ items, total: items.length })
+    }
+
+    // Default: get all tasks
+    const res = await fetch(`${BASE}/staff-tasks`, {
+      headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) },
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      console.error('[GET /api/system/tasks] Backend error:', data?.message || res.status)
+      return NextResponse.json({ 
+        error: data?.message || `Backend error: ${res.status}`,
+        items: [],
+        total: 0
+      }, { status: 500 })
+    }
+    // Backend returns ApiResponse<List<StaffTaskResponse>>, so data might be wrapped
+    const responseData = data?.data ?? data
+    const items = Array.isArray(responseData) ? responseData : (Array.isArray(data) ? data : [])
+    return NextResponse.json({ items, total: items.length })
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message || 'Internal server error' }, { status: 500 })
   }
 }
 
-// POST - Tạo staff task mới
+// POST - create staff task
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json()
-
-    // Lấy user info từ token để set createdBy nếu không có
-    try {
-      const userInfo = await verifyToken(req)
-      if (userInfo?.id && !body.createdBy) {
-        body.createdBy = userInfo.id
-      }
-    } catch (e) {
-      console.warn('Could not get user info from token:', e)
+    const auth = getAuthorizationHeader(req)
+    const body = await req.json().catch(() => null)
+    if (!body || typeof body !== 'object') {
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
     }
 
-    const response = await apiClient.createStaffTask(body)
-
-    if (response.success) {
-      return NextResponse.json(response.data, { status: 201 })
+    const userInfo = await verifyToken(req).catch(() => null)
+    if (userInfo?.id && !body.taskCreatedBy) {
+      body.taskCreatedBy = userInfo.id
     }
 
-    return NextResponse.json({ error: response.error }, { status: 500 })
+    const res = await fetch(`${BASE}/staff-tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) },
+      body: JSON.stringify(body),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
+    }
+    return NextResponse.json(data?.data ?? data, { status: 201 })
   } catch (error: any) {
-    console.error('POST /api/system/tasks error:', error)
-    return NextResponse.json({ error: error.message || 'Internal server error' }, { status: 500 })
+    return NextResponse.json({ error: error?.message || 'Internal server error' }, { status: 500 })
   }
 }
 
-// PUT - Cập nhật staff task
+// PUT - update staff task
 export async function PUT(req: NextRequest) {
   try {
-    const body = await req.json()
-    const { id, ...updateData } = body
-
-    if (!id) {
+    const auth = getAuthorizationHeader(req)
+    const body = await req.json().catch(() => null)
+    if (!body || typeof body !== 'object' || !body.id) {
       return NextResponse.json({ error: 'Task ID is required' }, { status: 400 })
     }
 
-    const response = await apiClient.updateStaffTask(id, updateData)
-
-    if (response.success) {
-      return NextResponse.json(response.data)
+    const { id, ...updateData } = body
+    const res = await fetch(`${BASE}/staff-tasks/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) },
+      body: JSON.stringify(updateData),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
     }
-
-    return NextResponse.json({ error: response.error }, { status: 500 })
+    return NextResponse.json(data?.data ?? data)
   } catch (error: any) {
-    console.error('PUT /api/system/tasks error:', error)
-    return NextResponse.json({ error: error.message || 'Internal server error' }, { status: 500 })
+    return NextResponse.json({ error: error?.message || 'Internal server error' }, { status: 500 })
   }
 }
 
-// DELETE - Xóa staff task
+// DELETE - delete staff task
 export async function DELETE(req: NextRequest) {
   try {
+    const auth = getAuthorizationHeader(req)
     const { searchParams } = new URL(req.url)
     const id = searchParams.get('id')
 
@@ -142,20 +162,21 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: 'Task ID is required' }, { status: 400 })
     }
 
-    const taskId = parseInt(id)
-    if (isNaN(taskId)) {
+    const taskId = Number(id)
+    if (!taskId || Number.isNaN(taskId)) {
       return NextResponse.json({ error: 'Invalid task ID' }, { status: 400 })
     }
 
-    const response = await apiClient.deleteStaffTask(taskId)
-
-    if (response.success) {
-      return NextResponse.json({ message: 'Task deleted successfully' })
+    const res = await fetch(`${BASE}/staff-tasks/${taskId}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) },
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
     }
-
-    return NextResponse.json({ error: response.error }, { status: 500 })
+    return NextResponse.json({ message: 'Task deleted successfully' })
   } catch (error: any) {
-    console.error('DELETE /api/system/tasks error:', error)
-    return NextResponse.json({ error: error.message || 'Internal server error' }, { status: 500 })
+    return NextResponse.json({ error: error?.message || 'Internal server error' }, { status: 500 })
   }
 }

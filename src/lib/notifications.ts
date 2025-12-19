@@ -59,8 +59,8 @@ export const saveNotifications = (notifications: Notification[]): void => {
   
   try {
     localStorage.setItem(NOTIFICATIONS_KEY, JSON.stringify(notifications));
-  } catch (error) {
-    console.error('Failed to save notifications:', error);
+  } catch {
+    // ignore storage errors
   }
 };
 

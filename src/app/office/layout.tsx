@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import ConditionalLayout from "@/components/layouts/ConditionalLayout";
+import ConditionalLayout from "@/components/layouts/Layout";
 
 export default function OfficeLayout({ children }: { children: ReactNode }) {
   return (

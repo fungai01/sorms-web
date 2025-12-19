@@ -20,23 +20,23 @@ export default function LoginPage() {
     const errorParam = params.get('error');
     
     if (errorParam === 'inactive') {
-      setError('Tài khoản của bạn chưa được kích hoạt. Vui lòng liên hệ admin để được kích hoạt.');
+      setError('Tài khoản của bạn chưa được kích hoạt. Vui lòng liên hệ quản trị viên.');
     } else if (errorParam === 'no_session') {
       setError('Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại.');
     } else if (errorParam === 'create_user_failed') {
-      setError('Không thể tạo tài khoản. Vui lòng thử lại.');
+      setError('Không tạo được tài khoản. Vui lòng thử lại.');
     } else if (errorParam === 'EmailNotProvided') {
       setError('Không tìm thấy email trong thông tin đăng nhập. Vui lòng thử lại.');
     } else if (errorParam === 'InvalidEmailDomain') {
-      setError('Tên miền email của bạn không được phép đăng nhập vào hệ thống.');
+      setError('Tên miền email của bạn không được phép sử dụng.');
     } else if (errorParam === 'code_expired') {
-      setError('Mã xác thực đã hết hạn hoặc đã được sử dụng. Vui lòng thử đăng nhập lại.');
+      setError('Mã xác thực đã hết hạn. Vui lòng thử lại.');
     } else if (errorParam === 'redirect_uri_mismatch') {
-      setError('Lỗi cấu hình xác thực. Vui lòng thử lại hoặc liên hệ admin.');
+      setError('Lỗi cấu hình xác thực. Vui lòng thử lại hoặc liên hệ quản trị viên.');
     } else if (errorParam === 'auth_failed') {
-      setError('Xác thực thất bại. Vui lòng thử đăng nhập lại.');
+      setError('Xác thực thất bại. Vui lòng thử lại.');
     } else if (errorParam === 'user_not_found') {
-      setError('Tài khoản của bạn chưa được đăng ký trong hệ thống. Vui lòng liên hệ admin để được tạo tài khoản.');
+      setError('Tài khoản của bạn chưa được đăng ký. Vui lòng liên hệ quản trị viên.');
     }
   }, []);
 
@@ -107,9 +107,9 @@ export default function LoginPage() {
           window.removeEventListener('message', messageListener);
           
           // Kiểm tra xem có message nào được gửi không
-          // Nếu không có message và popup đã đóng, có nghĩa là user đã hủy
+          // If there's no message and the popup is closed, it means the user cancelled
           setIsLoading(false);
-          setError('Bạn đã hủy đăng nhập với Google. Vui lòng thử lại nếu muốn đăng nhập.');
+          setError('Bạn đã hủy đăng nhập Google. Nếu muốn đăng nhập, vui lòng thử lại.');
         }
       }, 500);
 
@@ -123,12 +123,12 @@ export default function LoginPage() {
           popup.close();
         }
         setIsLoading(false);
-        setError('Đăng nhập quá thời gian. Vui lòng thử lại.');
+        setError('Quá thời gian đăng nhập. Vui lòng thử lại.');
       }, 600000); // 10 phút
 
     } catch (error: any) {
       console.error("Sign in error:", error);
-      setError(error.message || "Có lỗi xảy ra khi đăng nhập. Vui lòng thử lại.");
+      setError(error.message || 'Đã xảy ra lỗi trong quá trình đăng nhập. Vui lòng thử lại.');
       setIsLoading(false);
     }
   };
@@ -145,8 +145,8 @@ export default function LoginPage() {
         suppressHydrationWarning
       />
 
-      {/* Gradient Overlay */}
-      <div className="absolute inset-0 bg-gradient-to-br from-blue-900/80 via-indigo-900/70 to-purple-900/80 z-[1]" />
+      {/* Gradient Overlay - cool blue/indigo only */}
+      <div className="absolute inset-0 bg-gradient-to-br from-blue-900/80 via-blue-800/70 to-indigo-900/80 z-[1]" />
 
       {/* Pattern Background */}
       <div
@@ -171,7 +171,7 @@ export default function LoginPage() {
 
           {/* Title */}
           <h1 className="text-3xl font-bold text-center text-gray-800 mb-2">
-            Đăng nhập SORMS
+            Đăng nhập vào SORMS
           </h1>
           <p className="text-center text-gray-600 mb-8">
             Hệ thống quản lý nhà công vụ thông minh
@@ -184,14 +184,14 @@ export default function LoginPage() {
             </div>
           )}
 
-          {/* Google Sign-In Button */}
+          {/* Google Sign-In Button - use soft primary blue palette */}
           <button
             onClick={handleGoogleSignIn}
             disabled={isLoading}
-            className={`w-full py-3 px-4 rounded-xl font-semibold transition-all duration-300 border-2 ${
+            className={`w-full py-3 px-4 rounded-xl font-semibold transition-all duration-300 ${
               isLoading
-                ? "bg-gray-300 text-gray-500 cursor-not-allowed border-gray-300"
-                : "bg-white text-gray-700 border-gray-300 hover:border-gray-400 hover:bg-gray-50 shadow-md hover:shadow-lg hover:scale-[1.01] active:scale-[0.99]"
+                ? "bg-gray-300 text-gray-500 cursor-not-allowed"
+                : "bg-primary text-primary-foreground hover:bg-primary/90 shadow-md hover:shadow-lg hover:scale-[1.01] active:scale-[0.99]"
             }`}
           >
             {isLoading ? (

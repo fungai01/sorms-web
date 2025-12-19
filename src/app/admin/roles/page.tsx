@@ -8,6 +8,7 @@ import { Table, THead, TBody } from "@/components/ui/Table";
 import Modal from "@/components/ui/Modal";
 import { useRoles } from "@/hooks/useApi";
 import Input from "@/components/ui/Input";
+import { apiClient } from "@/lib/api-client";
 
 type Role = {
   id?: number;
@@ -140,45 +141,47 @@ function RolesInner() {
     isProcessingRef.current = true;
     try {
       if (editing) {
+        if (!editing.id) {
+          throw new Error('Thiếu ID vai trò, không thể cập nhật.');
+        }
+
         const prevActive = editing.isActive !== false;
         const nextActive = form.isActive !== false;
-        const resp = await fetch('/api/system/roles', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          // Luôn dùng code gốc để tránh thay đổi nhầm định danh
-          body: JSON.stringify({ ...form, code: editing.code, id: editing.id })
-        })
-        if (!resp.ok) {
-          const errorData = await resp.json().catch(() => ({}))
-          throw new Error(errorData.error || 'Cập nhật vai trò thất bại')
+
+        const updateResp = await apiClient.updateRole(String(editing.id), {
+          code: editing.code,
+          name: form.name.trim(),
+          description: form.description,
+        });
+        if (!updateResp.success) {
+          throw new Error(updateResp.error || updateResp.message || 'Cập nhật vai trò thất bại');
         }
 
         // Nếu trạng thái active thay đổi, gọi thêm endpoint activate/deactivate
-        if (prevActive !== nextActive && editing.id != null) {
-          const action = nextActive ? 'activate' : 'deactivate';
-          const toggleResp = await fetch(`/api/system/roles?action=${action}&id=${encodeURIComponent(String(editing.id))}`, {
-            method: 'PUT',
-          });
-          if (!toggleResp.ok) {
-            const toggleError = await toggleResp.json().catch(() => ({}));
-            throw new Error(toggleError.error || 'Cập nhật trạng thái kích hoạt thất bại');
+        if (prevActive !== nextActive) {
+          const toggleResp = nextActive
+            ? await apiClient.activateRole(String(editing.id))
+            : await apiClient.deactivateRole(String(editing.id));
+
+          if (!toggleResp.success) {
+            throw new Error(
+              toggleResp.error ||
+                toggleResp.message ||
+                'Cập nhật trạng thái kích hoạt thất bại'
+            );
           }
         }
 
         setFlash({ type: 'success', text: 'Đã cập nhật vai trò thành công.' });
       } else {
-        const resp = await fetch('/api/system/roles', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(form)
-        })
-        if (!resp.ok) {
-          const errorData = await resp.json().catch(() => ({}))
-          throw new Error(
-            errorData.error ||
-            errorData.message ||
-            `Tạo vai trò mới thất bại (HTTP ${resp.status})`
-          )
+        const createResp = await apiClient.createRole({
+          code: form.code.trim(),
+          name: form.name.trim(),
+          description: form.description || '',
+          isActive: form.isActive,
+        });
+        if (!createResp.success) {
+          throw new Error(createResp.error || createResp.message || 'Tạo vai trò mới thất bại');
         }
         setFlash({ type: 'success', text: 'Đã tạo vai trò mới thành công.' });
       }
@@ -205,16 +208,13 @@ function RolesInner() {
     if (!productToDelete || isProcessingRef.current) return;
     isProcessingRef.current = true;
     try {
-      const params = new URLSearchParams()
-      if (productToDelete.id != null) {
-        params.set('id', String(productToDelete.id))
-      } else {
-        params.set('code', productToDelete.code)
+      if (!productToDelete.id) {
+        throw new Error('Thiếu ID vai trò, không thể vô hiệu hóa.');
       }
-      const resp = await fetch(`/api/system/roles?${params.toString()}`, { method: 'DELETE' })
-      if (!resp.ok) {
-        const errorData = await resp.json().catch(() => ({}))
-        throw new Error(errorData.error || 'Vô hiệu hóa vai trò thất bại')
+
+      const resp = await apiClient.deactivateRole(String(productToDelete.id));
+      if (!resp.success) {
+        throw new Error(resp.error || resp.message || 'Vô hiệu hóa vai trò thất bại');
       }
       setFlash({ type: 'success', text: 'Đã vô hiệu hóa vai trò thành công.' });
       await refetch()
@@ -231,17 +231,13 @@ function RolesInner() {
     if (isProcessingRef.current) return;
     isProcessingRef.current = true;
     try {
-      const params = new URLSearchParams()
-      if (role.id != null) {
-        params.set('id', String(role.id))
-      } else {
-        params.set('code', role.code)
+      if (!role.id) {
+        throw new Error('Thiếu ID vai trò, không thể kích hoạt.');
       }
-      params.set('action', 'activate')
-      const resp = await fetch(`/api/system/roles?${params.toString()}`, { method: 'PUT' })
-      if (!resp.ok) {
-        const errorData = await resp.json().catch(() => ({}))
-        throw new Error(errorData.error || 'Kích hoạt vai trò thất bại')
+
+      const resp = await apiClient.activateRole(String(role.id));
+      if (!resp.success) {
+        throw new Error(resp.error || resp.message || 'Kích hoạt vai trò thất bại');
       }
       setFlash({ type: 'success', text: 'Đã kích hoạt vai trò thành công.' });
       await refetch()
@@ -288,24 +284,39 @@ function RolesInner() {
 
   return (
     <>
-      {/* Header - match admin style with Demo/Live toggle */}
-      <div className="bg-white border-b border-gray-200 px-3 py-3">
-        <div className="flex items-center justify-between">
+      <div className="px-6 pt-4 pb-6">
+        <div className="max-w-7xl mx-auto space-y-6">
+          {/* Header + Filters wrapper (match Rooms layout) */}
+          <div className="bg-white shadow-sm border border-gray-200 rounded-2xl overflow-hidden">
+            {/* Header */}
+            <div className="border-b border-gray-200/50 px-6 py-4">
+              <div className="flex items-center justify-between gap-3">
           <div className="min-w-0 flex-1">
-            <h1 className="text-lg font-bold text-gray-900 truncate">Phân quyền</h1>
-            <p className="text-sm text-gray-500">{filtered.length} vai trò</p>
+                  <h1 className="text-3xl font-bold text-gray-900 leading-tight truncate">
+                    Quản lý vai trò
+                  </h1>
+                  <p className="mt-1 text-sm text-gray-500">
+                    {filtered.length} vai trò trong hệ thống
+                  </p>
           </div>
-          <div className="flex items-center gap-2">
-            <Button className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 text-sm flex-shrink-0 rounded-lg" onClick={openCreate}>
-              Tạo vai trò
-            </Button>
+                <div className="flex items-center gap-2 flex-shrink-0">
             <button
               aria-label="Xuất Excel (CSV)"
               title="Xuất Excel (CSV)"
-              className="px-3 py-2 rounded-lg border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-50 whitespace-nowrap"
+                    className="hidden sm:inline-flex items-center px-4 py-2 rounded-xl border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-50"
               onClick={() => {
-                const csv = [['Code', 'Tên', 'Mô tả', 'Trạng thái'], ...filtered.map(r => [r.code, r.name, r.description || '', r.isActive !== false ? 'Hoạt động' : 'Vô hiệu'])]
-                const blob = new Blob([csv.map(r => r.join(',')).join('\n')], { type: 'text/csv' })
+                      const csv = [
+                        ['Code', 'Tên', 'Mô tả', 'Trạng thái'],
+                        ...filtered.map(r => [
+                          r.code,
+                          r.name,
+                          r.description || '',
+                          r.isActive !== false ? 'Hoạt động' : 'Vô hiệu',
+                        ]),
+                      ]
+                      const blob = new Blob([csv.map(r => r.join(',')).join('\n')], {
+                        type: 'text/csv',
+                      })
                 const url = URL.createObjectURL(blob)
                 const a = document.createElement('a')
                 a.href = url
@@ -316,111 +327,118 @@ function RolesInner() {
             >
               Xuất Excel
             </button>
+                  <Button
+                    onClick={openCreate}
+                    variant="primary"
+                    className="px-5 py-2.5 text-sm rounded-xl flex items-center gap-1.5"
+                  >
+                    <svg
+                      className="w-4 h-4"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M12 6v6m0 0v6m0-6h6m-6 0H6"
+                      />
+                    </svg>
+                    Tạo vai trò
+                  </Button>
           </div>
         </div>
       </div>
 
-      {/* Content */}
-      <div className="w-full px-4 py-3">
-        <div className="space-y-3">
+            {/* Bỏ bộ lọc: không hiển thị thanh search/sort */}
+          </div>
+
+          {/* Flash message */}
         {flash && (
-          <div className={`rounded-md border p-2 sm:p-3 text-xs sm:text-sm shadow-sm ${flash.type==='success' ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
-            {flash.text}
+            <div>
+              <div
+                className={`py-2.5 rounded-xl px-4 border shadow-sm animate-fade-in flex items-center gap-2 text-xs sm:text-sm ${
+                  flash.type === 'success'
+                    ? 'bg-green-50 text-green-800 border-green-100'
+                    : 'bg-red-50 text-red-800 border-red-100'
+                }`}
+              >
+                <svg
+                  className={`w-4 h-4 sm:w-5 sm:h-5 ${
+                    flash.type === 'success' ? 'text-green-500' : 'text-red-500'
+                  }`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  {flash.type === 'success' ? (
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M5 13l4 4L19 7"
+                    />
+                  ) : (
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M12 9v4m0 4h.01M12 5a7 7 0 110 14 7 7 0 010-14z"
+                    />
+                  )}
+                </svg>
+                <span className="font-medium">{flash.text}</span>
+              </div>
           </div>
         )}
 
           {/* Loading indicator */}
           {loading && (
-            <div className="rounded-md border p-2 sm:p-3 text-xs sm:text-sm shadow-sm bg-yellow-50 border-yellow-200 text-yellow-800">
+            <div className="rounded-xl border p-2.5 sm:p-3 text-xs sm:text-sm shadow-sm bg-yellow-50 border-yellow-200 text-yellow-800">
               Đang tải vai trò...
             </div>
           )}
 
-      {/* Filters */}
-      <div className="bg-gray-50 border-b border-gray-200 px-4 py-3 rounded-lg">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-          <div>
-            <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1">Tìm kiếm</label>
-            <div className="relative">
-              <Input 
-                className="w-full h-9 pl-3 pr-9 text-sm border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
-                placeholder="Tìm theo code, tên..." 
-                value={query} 
-                onChange={(e) => setQuery(e.target.value)} 
-              />
-              <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
-                <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                </svg>
-              </div>
-            </div>
-          </div>
-          <div>
-            <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1">Sắp xếp</label>
-            <div className="flex gap-2">
-              <select
-                className="h-9 rounded-md border border-gray-300 bg-white px-3 text-sm flex-1"
-                value={sortKey}
-                onChange={(e) => setSortKey(e.target.value as any)}
-              >
-                <option value="code">Code</option>
-                <option value="name">Tên</option>
-              </select>
-              <select 
-                className="h-9 rounded-md border border-gray-300 bg-white px-3 text-sm flex-1" 
-                value={sortOrder} 
-                onChange={(e) => setSortOrder(e.target.value as any)}
-              >
-                <option value="asc">Tăng dần</option>
-                <option value="desc">Giảm dần</option>
-              </select>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-xl rounded-2xl overflow-hidden">
-        <CardHeader className="bg-gray-50 border-b border-gray-200 px-6 py-3">
+          {/* Table & list */}
+          <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-md rounded-2xl overflow-hidden">
+            <CardHeader className="bg-[hsl(var(--page-bg))]/40 border-b border-gray-200 !px-6 py-3">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg text-left font-bold text-gray-900">Danh sách vai trò</h2>
-            <span className="text-sm text-right font-semibold text-blue-700 bg-blue-100 px-3 py-1 rounded-full">{filtered.length} vai trò</span>
+                <h2 className="text-xl font-bold text-gray-900">Danh sách vai trò</h2>
+                <span className="text-sm font-semibold text-[hsl(var(--primary))] bg-[hsl(var(--primary)/0.12)] px-3 py-1 rounded-full">
+                  {filtered.length} vai trò
+                </span>
           </div>
         </CardHeader>
         <CardBody className="p-0">
+              {/* Desktop Table */}
           <div className="hidden lg:block overflow-x-auto">
-            <table className="min-w-[800px] w-full text-xs sm:text-sm">
-              <colgroup>
-                <col className="w-[10%]" />
-                <col className="w-[10%]" />
-                <col className="w-[15%]" />
-                <col className="w-[15%]" />
-                <col className="w-[20%]" />
-              </colgroup>
-              <thead>
-                <tr className="bg-gray-50 border-b border-gray-200">
-                  <th className="px-4 sm:px-6 py-1.5 sm:py-2 text-left font-semibold text-gray-700">Code</th>
-                  <th className="px-4 sm:px-6 py-1.5 sm:py-2 text-left font-semibold text-gray-700">Tên</th>
-                  <th className="px-4 sm:px-6 py-1.5 sm:py-2 text-left font-semibold text-gray-700">Mô tả</th>
-                  <th className="px-4 sm:px-6 py-1.5 sm:py-2 text-left font-semibold text-gray-700">Trạng thái</th>
-                  <th className="px-4 sm:px-6 py-1.5 sm:py-2 text-left font-semibold text-gray-700">Thao tác</th>
+                <Table>
+                  <THead>
+                    <tr>
+                      <th className="px-4 py-3 text-center text-sm font-bold">Code</th>
+                      <th className="px-4 py-3 text-center text-sm font-bold">Tên vai trò</th>
+                      <th className="px-4 py-3 text-center text-sm font-bold">Mô tả</th>
+                      <th className="px-4 py-3 text-center text-sm font-bold">Trạng thái</th>
+                      <th className="px-4 py-3 text-center text-sm font-bold">Thao tác</th>
                 </tr>
-              </thead>
-              <tbody>
-                {paginatedData.map((r, idx) => (
-                  <tr key={r.code || `role-${idx}`} className="border-b border-gray-100 hover:bg-gray-50">
-                    <td className="px-4 sm:px-6 py-1.5 sm:py-2">
-                      <span 
-                        role="button" 
-                        tabIndex={0} 
-                        className="cursor-pointer underline underline-offset-2 text-blue-600 hover:text-blue-700 text-xs sm:text-sm" 
-                        onClick={() => { setSelected(r); setDetailOpen(true); }}
+                  </THead>
+                  <TBody>
+                    {filtered.slice((page - 1) * size, page * size).map((r, index) => (
+                      <tr
+                        key={r.code || `role-${index}`}
+                        className={`transition-colors ${
+                          index % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                        } hover:bg-[#f2f8fe]`}
                       >
+                        <td className="px-4 py-3 font-medium text-gray-900">
                         {r.code}
-                      </span>
+                        </td>
+                        <td className="px-4 py-3 text-gray-700">{r.name}</td>
+                        <td className="px-4 py-3 text-gray-600 truncate" title={r.description}>
+                          {r.description || '-'}
                     </td>
-                    <td className="px-4 sm:px-6 py-1.5 sm:py-2 text-xs sm:text-sm text-gray-700">{r.name}</td>
-                    <td className="px-4 sm:px-6 py-1.5 sm:py-2 text-xs sm:text-sm text-gray-500 truncate" title={r.description}>{r.description}</td>
-                    <td className="px-4 sm:px-6 py-1.5 sm:py-2">
+                        <td className="px-4 py-3 text-center">
                       {r.isActive !== false ? (
                         <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
                           Hoạt động
@@ -431,50 +449,81 @@ function RolesInner() {
                         </span>
                       )}
                     </td>
-                    <td className="px-4 sm:px-6 py-1.5 sm:py-2">
-                      <div className="flex flex-col sm:flex-row gap-1 sm:gap-2">
-                        <Button variant="secondary" className="h-8 px-3 text-xs" onClick={() => { setSelected(r); setDetailOpen(true); }}>Xem</Button>
-                        <Button className="h-8 px-3 text-xs" onClick={() => openEdit(r)}>Sửa</Button>
+                        <td className="px-4 py-3">
+                          <div className="flex gap-2 justify-center">
+                            <Button
+                              variant="secondary"
+                              className="h-8 px-3 text-xs bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]"
+                              onClick={() => {
+                                setSelected(r)
+                                setDetailOpen(true)
+                              }}
+                            >
+                              Xem
+                            </Button>
+                            <Button
+                              variant="secondary"
+                              className="h-8 px-3 text-xs bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]"
+                              onClick={() => openEdit(r)}
+                            >
+                              Sửa
+                            </Button>
                         {r.isActive !== false ? (
-                          <Button variant="danger" className="h-8 px-3 text-xs" onClick={() => handleOpenDelete(r)}>Vô hiệu</Button>
-                        ) : (
-                          <Button className="h-8 px-3 text-xs bg-green-600 hover:bg-green-700" onClick={() => activateRole(r)}>Kích hoạt</Button>
+                              <Button
+                                variant="danger"
+                                className="h-8 px-3 text-xs"
+                                onClick={() => handleOpenDelete(r)}
+                              >
+                                Vô hiệu
+                              </Button>
+                            ) : (
+                              <Button
+                                className="h-8 px-3 text-xs bg-green-600 hover:bg-green-700 text-white"
+                                onClick={() => activateRole(r)}
+                              >
+                                Kích hoạt
+                              </Button>
                         )}
                       </div>
                     </td>
                   </tr>
                 ))}
-              </tbody>
-            </table>
+                  </TBody>
+                </Table>
           </div>
 
-          {/* Mobile list */}
-          <div className="lg:hidden p-3 space-y-3">
-            {paginatedData.map((r, idx) => (
-              <div key={r.code || `role-mobile-${idx}`} className="bg-white rounded-2xl border border-gray-200 shadow-sm hover:shadow-lg transition-all duration-300 overflow-hidden">
-                <div className="bg-gradient-to-r from-blue-50 to-indigo-50 px-4 py-3 border-b border-gray-100">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-sm">
-                        <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+              {/* Mobile Cards */}
+              <div className="lg:hidden space-y-3 p-3">
+                {filtered.slice((page - 1) * size, page * size).map((r, index) => (
+                  <div
+                    key={r.code || `role-mobile-${index}`}
+                    className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4 transition-colors hover:bg-[#f2f8fe] active:bg-[#f2f8fe]"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-11 h-11 rounded-xl bg-[hsl(var(--primary)/0.12)] flex items-center justify-center flex-shrink-0">
+                          <svg
+                            className="w-6 h-6 text-[hsl(var(--primary))]"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
+                            />
                         </svg>
                       </div>
-                      <div>
-                        <div className="text-sm font-semibold text-gray-900 truncate">{r.code}</div>
-                        <div className="text-xs text-gray-600 truncate">{r.name}</div>
+                        <div className="min-w-0">
+                          <h3 className="text-base font-bold text-gray-900 truncate">
+                            {r.name || r.code}
+                          </h3>
+                          <p className="text-xs text-gray-500 truncate">{r.code}</p>
                       </div>
                     </div>
-                  </div>
-                </div>
-
-                <div className="p-3 space-y-2 text-sm">
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-600">Mô tả</span>
-                    <span className="font-medium truncate max-w-[60%] text-right" title={r.description}>{r.description || '—'}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-600">Trạng thái</span>
+                      <div className="flex-shrink-0">
                     {r.isActive !== false ? (
                       <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
                         Hoạt động
@@ -487,76 +536,192 @@ function RolesInner() {
                   </div>
                 </div>
 
-                <div className="px-3 py-3 bg-gray-50 border-t border-gray-100">
-                  <div className="grid grid-cols-3 gap-2">
-                    <Button variant="secondary" className="h-10 text-xs font-medium px-2" onClick={() => { setSelected(r); setDetailOpen(true); }}>Xem</Button>
-                    <Button className="h-10 text-xs font-medium px-2" onClick={() => openEdit(r)}>Sửa</Button>
+                    <div className="mt-3 space-y-2 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Mô tả</span>
+                        <span
+                          className="font-medium truncate max-w-[60%] text-right"
+                          title={r.description}
+                        >
+                          {r.description || '—'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-3 gap-2">
+                      <Button
+                        variant="secondary"
+                        className="h-10 text-xs font-medium bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]"
+                        onClick={() => {
+                          setSelected(r)
+                          setDetailOpen(true)
+                        }}
+                      >
+                        Xem
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        className="h-10 text-xs font-medium bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]"
+                        onClick={() => openEdit(r)}
+                      >
+                        Sửa
+                      </Button>
                     {r.isActive !== false ? (
-                      <Button variant="danger" className="h-10 text-xs font-medium px-2" onClick={() => handleOpenDelete(r)}>Vô hiệu</Button>
-                    ) : (
-                      <Button className="h-10 text-xs font-medium px-2 bg-green-600 hover:bg-green-700" onClick={() => activateRole(r)}>Kích hoạt</Button>
-                    )}
-                  </div>
+                        <Button
+                          variant="danger"
+                          className="h-10 text-xs font-medium"
+                          onClick={() => handleOpenDelete(r)}
+                        >
+                          Vô hiệu
+                        </Button>
+                      ) : (
+                        <Button
+                          className="h-10 text-xs font-medium bg-green-600 hover:bg-green-700 text-white"
+                          onClick={() => activateRole(r)}
+                        >
+                          Kích hoạt
+                        </Button>
+                      )}
                 </div>
               </div>
             ))}
           </div>
 
-          <div className="mt-3 sm:mt-4 flex flex-col sm:flex-row items-center justify-between gap-3 sm:gap-0 text-xs sm:text-sm">
-            <div className="flex items-center gap-2 text-xs sm:text-sm">
+              {/* Pagination */}
+              {filtered.length > size && (
+                <div className="bg-gradient-to-r from-gray-50 to-[hsl(var(--page-bg))] px-6 py-6 border-t border-gray-200/50">
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-6">
+                    <div className="text-center sm:text-left">
+                      <div className="text-sm text-gray-600 mb-1">Hiển thị kết quả</div>
+                      <div className="text-lg font-bold text-gray-900">
+                        <span className="text-[hsl(var(--primary))]">
+                          {(page - 1) * size + 1}
+                        </span>{' '}
+                        -{' '}
+                        <span className="text-[hsl(var(--primary))]">
+                          {Math.min(page * size, filtered.length)}
+                        </span>{' '}
+                        / <span className="text-gray-600">{filtered.length}</span>
+                      </div>
+                    </div>
+                    <div className="flex flex-col sm:flex-row items-center gap-4">
+                      <div className="flex items-center gap-2 text-sm">
                 <span>Hàng:</span>
                 <select 
-                  className="h-7 sm:h-8 rounded-md border border-gray-300 bg-white px-2 sm:px-3 text-xs" 
+                          className="h-9 rounded-lg border border-gray-300 bg-white px-3 text-sm"
                   value={size} 
-                  onChange={(e) => { setPage(1); setSize(parseInt(e.target.value, 10)); }}
+                          onChange={(e) => {
+                            setPage(1)
+                            setSize(parseInt(e.target.value, 10))
+                          }}
                 >
                   <option value={10}>10</option>
                   <option value={20}>20</option>
                   <option value={50}>50</option>
                 </select>
-                <span className="text-gray-500">trên {filtered.length}</span>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <Button
+                          variant="secondary"
+                          disabled={page === 1}
+                          onClick={() => setPage(p => Math.max(1, p - 1))}
+                          className="h-10 px-4 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <svg
+                            className="w-4 h-4 mr-2"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M15 19l-7-7 7-7"
+                            />
+                          </svg>
+                          Trước
+                        </Button>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-bold text-gray-700 bg-white px-4 py-2 rounded-xl border-2 border-[hsl(var(--primary)/0.25)] shadow-sm">
+                            Trang {page}
+                          </span>
+                          <span className="text-sm text-gray-500">
+                            / {Math.ceil(filtered.length / size)}
+                          </span>
+                        </div>
+                        <Button
+                          variant="secondary"
+                          disabled={page >= Math.ceil(filtered.length / size)}
+                          onClick={() =>
+                            setPage(p => Math.min(Math.ceil(filtered.length / size), p + 1))
+                          }
+                          className="h-10 px-4 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          Sau
+                          <svg
+                            className="w-4 h-4 ml-2"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M9 5l7 7-7 7"
+                            />
+                          </svg>
+                        </Button>
+                      </div>
               </div>
-              <div className="flex items-center gap-1 sm:gap-2">
-                <Button variant="secondary" className="h-7 sm:h-8 px-2 sm:px-3 text-xs" disabled={page === 1} onClick={() => setPage(p => Math.max(1, p - 1))}>Trước</Button>
-                <span className="px-2">Trang {page} / {Math.max(1, Math.ceil(filtered.length / size))}</span>
-                <Button variant="secondary" className="h-7 sm:h-8 px-2 sm:px-3 text-xs" disabled={page >= Math.ceil(filtered.length / size)} onClick={() => setPage(p => Math.min(Math.ceil(filtered.length / size), p + 1))}>Sau</Button>
               </div>
             </div>
+              )}
         </CardBody>
       </Card>
+        </div>
+      </div>
 
       {/* Modal for Create/Update */}
       <Modal
         open={open}
         onClose={() => setOpen(false)}
-        title={editing ? "Sửa vai trò" : "Tạo vai trò"}
+        title={editing ? 'Sửa vai trò' : 'Tạo vai trò'}
         footer={
           <div className="flex justify-end gap-2">
-            <Button
-              variant="secondary"
-              onClick={() => setOpen(false)}
-            >
+            <Button variant="secondary" onClick={() => setOpen(false)}>
               Hủy
             </Button>
-            <Button
-              onClick={save}
-            >
+            <Button onClick={save}>
               Lưu
             </Button>
           </div>
         }
       >
         <div className="space-y-4">
-          {/* Header giống bookings */}
+          {/* Header giống bookings/rooms style */}
           <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-3 sm:p-4 border border-blue-200">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-sm">
-                <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                <svg
+                  className="w-5 h-5 text-white"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
+                  />
                 </svg>
               </div>
               <div className="min-w-0 flex-1">
-                <h3 className="text-base sm:text-lg font-semibold text-gray-900 truncate">{form.code || '—'}</h3>
+                <h3 className="text-base sm:text-lg font-semibold text-gray-900 truncate">
+                  {form.code || '—'}
+                </h3>
                 <div className="text-sm text-gray-600 truncate">{form.name || '—'}</div>
               </div>
             </div>
@@ -571,7 +736,9 @@ function RolesInner() {
               onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))}
               disabled={!!editing}
             />
-            {!form.code.trim() && <div className="mt-1 text-xs text-red-600">Code bắt buộc.</div>}
+            {!form.code.trim() && (
+              <div className="mt-1 text-xs text-red-600">Code bắt buộc.</div>
+            )}
             {editing && (
               <div className="mt-1 text-xs text-gray-500">
                 Code là định danh của vai trò và không thể thay đổi sau khi tạo.
@@ -584,7 +751,9 @@ function RolesInner() {
               value={form.name}
               onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
             />
-            {!form.name.trim() && <div className="mt-1 text-xs text-red-600">Tên bắt buộc.</div>}
+            {!form.name.trim() && (
+              <div className="mt-1 text-xs text-red-600">Tên bắt buộc.</div>
+            )}
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Mô tả</label>
@@ -606,7 +775,10 @@ function RolesInner() {
               checked={form.isActive}
               onChange={(e) => setForm(f => ({ ...f, isActive: e.target.checked }))}
             />
-            <label htmlFor="role-active" className="inline-flex items-center rounded-full bg-green-50 px-3 py-1 text-xs font-semibold text-green-700 border border-green-200">
+            <label
+              htmlFor="role-active"
+              className="inline-flex items-center rounded-full bg-green-50 px-3 py-1 text-xs font-semibold text-green-700 border border-green-200"
+            >
               Vai trò đang hoạt động
             </label>
           </div>
@@ -614,7 +786,11 @@ function RolesInner() {
       </Modal>
 
       {/* Confirm Delete Modal */}
-      <Modal open={openDeleteModal} onClose={() => setOpenDeleteModal(false)} title="Xác nhận vô hiệu hóa">
+      <Modal
+        open={openDeleteModal}
+        onClose={() => setOpenDeleteModal(false)}
+        title="Xác nhận vô hiệu hóa"
+      >
         <div className="text-sm text-gray-700">
           Bạn có chắc muốn vô hiệu hóa vai trò này? Vai trò sẽ không bị xóa hoàn toàn và có thể được kích hoạt lại sau.
         </div>
@@ -635,20 +811,36 @@ function RolesInner() {
       </Modal>
 
       {/* Detail Modal */}
-      <Modal open={detailOpen} onClose={() => setDetailOpen(false)} title="Chi tiết vai trò">
+      <Modal
+        open={detailOpen}
+        onClose={() => setDetailOpen(false)}
+        title="Chi tiết vai trò"
+      >
         {selected ? (
           <div className="space-y-4 p-1">
-            {/* Header giống bookings */}
+            {/* Header giống bookings/rooms */}
             <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-3 sm:p-4 border border-blue-200">
               <div className="flex items-center gap-3">
                 <div className="w-12 h-12 sm:w-14 sm:h-14 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg flex-shrink-0">
-                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                  <svg
+                    className="w-6 h-6 text-white"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
+                    />
                   </svg>
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="text-base sm:text-lg font-semibold text-gray-900 truncate">{selected.code}</h3>
+                    <h3 className="text-base sm:text-lg font-semibold text-gray-900 truncate">
+                      {selected.code}
+                    </h3>
                   </div>
                   <div className="text-sm text-gray-600 truncate">{selected.name}</div>
                 </div>
@@ -663,7 +855,9 @@ function RolesInner() {
               </div>
               <div className="rounded-lg border border-gray-200 p-3 bg-white">
                 <div className="text-gray-500">Trạng thái</div>
-                <div className="font-medium text-gray-900">{selected.isActive !== false ? 'Hoạt động' : 'Vô hiệu'}</div>
+                <div className="font-medium text-gray-900">
+                  {selected.isActive !== false ? 'Hoạt động' : 'Vô hiệu'}
+                </div>
               </div>
               <div className="rounded-lg border border-gray-200 p-3 bg-white sm:col-span-2">
                 <div className="text-gray-500">Tên</div>
@@ -677,8 +871,6 @@ function RolesInner() {
           </div>
         ) : null}
       </Modal>
-      </div>
-      </div>
     </>
   );
 }

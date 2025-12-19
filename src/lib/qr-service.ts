@@ -5,7 +5,7 @@ export async function getBookingQr(bookingId: number) {
 
   if (!res.ok) {
     const error = await res.json().catch(() => ({}))
-    throw new Error(error.error || 'Không thể lấy mã QR')
+    throw new Error(error.error || error.message || `HTTP ${res.status}`)
   }
 
   return res.json()

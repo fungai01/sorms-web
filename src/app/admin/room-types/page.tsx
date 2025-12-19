@@ -1,20 +1,20 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import Input from "@/components/ui/Input";
 import Button from "@/components/ui/Button";
+import Badge from "@/components/ui/Badge";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import Modal from "@/components/ui/Modal";
+import { Table, THead, TBody } from "@/components/ui/Table";
 import { type RoomType } from "@/lib/types";
 import { useRoomTypes } from '@/hooks/useApi'
 import { apiClient } from '@/lib/api-client'
 
 export default function RoomTypesPage() {
-  const [rows, setRows] = useState<RoomType[]>([])
   const { data: roomTypesData, refetch: refetchRoomTypes } = useRoomTypes()
+  const rows = roomTypesData || []
   const [query, setQuery] = useState("")
-  const [sortKey, setSortKey] = useState<'code' | 'name' | 'maxOccupancy'>('code')
-  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc")
   const [page, setPage] = useState(1)
   const [size, setSize] = useState(10)
 
@@ -26,12 +26,23 @@ export default function RoomTypesPage() {
   const [confirmOpen, setConfirmOpen] = useState<{ open: boolean, id?: number }>({ open: false })
   const [codeError, setCodeError] = useState<string | null>(null)
   const [nameError, setNameError] = useState<string | null>(null)
+  const [basePriceError, setBasePriceError] = useState<string | null>(null)
+  const [maxOccupancyError, setMaxOccupancyError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!flash) return
     const t = setTimeout(() => setFlash(null), 3000)
     return () => clearTimeout(t)
   }, [flash])
+
+  const handleCloseEdit = useCallback(() => {
+    setEditOpen(false)
+    setEdit({ code: "", name: "", basePrice: 0, maxOccupancy: 1, description: "" })
+    setCodeError(null)
+    setNameError(null)
+    setBasePriceError(null)
+    setMaxOccupancyError(null)
+  }, [])
 
   // Keyboard shortcuts for edit modal: Enter = Save, Esc = Close (avoid Enter in textarea)
   useEffect(() => {
@@ -46,62 +57,39 @@ export default function RoomTypesPage() {
         save()
       } else if (e.key === 'Escape') {
         e.preventDefault()
-        setEditOpen(false)
+        handleCloseEdit()
       }
     }
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [editOpen, edit])
+  }, [editOpen, handleCloseEdit])
 
   // Global Escape handler: ESC closes any open modal on this page
   useEffect(() => {
     const onEsc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault()
-        setEditOpen(false)
+        handleCloseEdit()
         setDetailOpen(false)
         setConfirmOpen({ open: false })
       }
     }
     document.addEventListener('keydown', onEsc)
     return () => document.removeEventListener('keydown', onEsc)
-  }, [])
-
-  // Sync with hooks data
-  useEffect(() => {
-    if (roomTypesData) setRows(roomTypesData as RoomType[])
-  }, [roomTypesData])
+  }, [handleCloseEdit])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    const list = q
+    return q
       ? rows.filter(r => r.code.toLowerCase().includes(q) || r.name.toLowerCase().includes(q) || (r.description || "").toLowerCase().includes(q))
       : rows
-    const dir = sortOrder === 'asc' ? 1 : -1
-    return [...list].sort((a, b) => {
-      if (sortKey === 'code') return a.code.localeCompare(b.code) * dir
-      if (sortKey === 'name') return a.name.localeCompare(b.name) * dir
-      if (sortKey === 'maxOccupancy') return (a.maxOccupancy - b.maxOccupancy) * dir
-      return 0
-    })
-  }, [rows, query, sortKey, sortOrder])
+  }, [rows, query])
 
   async function openCreate() {
-    // Luôn lấy dữ liệu mới nhất từ DB rồi mới sinh mã mới
     try {
-      const res = await fetch('/api/system/room-types', { credentials: 'include' })
-      const data = await res.json()
-      const items: any[] = Array.isArray(data?.items)
-        ? data.items
-        : Array.isArray(data?.data?.content)
-          ? data.data.content
-          : Array.isArray(data?.content)
-            ? data.content
-            : Array.isArray(data)
-              ? data
-              : []
-
+      const response = await apiClient.getRoomTypes()
+      const items = (response.data as any[]) || []
       const numbers = items.map((r: any) => {
         const n = parseInt(String(r.code ?? ''), 10)
         return Number.isNaN(n) ? Number(r.id ?? 0) : n
@@ -109,8 +97,7 @@ export default function RoomTypesPage() {
       const maxNum = numbers.length ? Math.max(...numbers) : 0
       const nextCode = String(maxNum + 1)
       setEdit({ code: nextCode, name: "", basePrice: 0, maxOccupancy: 1, description: "" })
-    } catch (e) {
-      // Fallback tính từ dữ liệu hiện có trên UI nếu fetch thất bại
+    } catch {
       const numbers = rows.map(r => {
         const n = parseInt(r.code, 10)
         return Number.isNaN(n) ? r.id : n
@@ -121,6 +108,8 @@ export default function RoomTypesPage() {
     } finally {
       setCodeError(null)
       setNameError(null)
+      setBasePriceError(null)
+      setMaxOccupancyError(null)
       setEditOpen(true)
     }
   }
@@ -136,21 +125,26 @@ export default function RoomTypesPage() {
     })
     setCodeError(null)
     setNameError(null)
+    setBasePriceError(null)
+    setMaxOccupancyError(null)
     setEditOpen(true)
   }
 
   async function save() {
-    if (!edit.code.trim() || !edit.name.trim()) {
-      if (!edit.code.trim()) setCodeError('Vui lòng nhập Code.')
-      if (!edit.name.trim()) setNameError('Vui lòng nhập Dãy Tòa nhà công vụ.')
+    if (!edit.code.trim()) {
+      setCodeError('Code is required')
+      return
+    }
+    if (!edit.name.trim()) {
+      setNameError('Name is required')
       return
     }
     if (edit.basePrice < 0) {
-      setFlash({ type: 'error', text: 'Giá cơ bản không được âm.' })
+      setBasePriceError('Base price cannot be negative.')
       return
     }
     if (edit.maxOccupancy < 1) {
-      setFlash({ type: 'error', text: 'Số người tối đa phải lớn hơn 0.' })
+      setMaxOccupancyError('Max occupancy must be greater than 0.')
       return
     }
     const payload = {
@@ -161,105 +155,20 @@ export default function RoomTypesPage() {
       description: edit.description.trim() || "",
     }
 
-    // helper: suggest next available code from DB
-    const suggestNextCode = async () => {
-      try {
-        const res = await fetch('/api/system/room-types', { credentials: 'include' })
-        const data = await res.json()
-        const items: any[] = Array.isArray(data?.items)
-          ? data.items
-          : Array.isArray(data?.data?.content)
-            ? data.data.content
-            : Array.isArray(data?.content)
-              ? data.content
-              : Array.isArray(data)
-                ? data
-                : []
-        const numbers = items.map((r: any) => {
-          const n = parseInt(String(r.code ?? ''), 10)
-          return Number.isNaN(n) ? Number(r.id ?? 0) : n
-        })
-        const maxNum = numbers.length ? Math.max(...numbers) : 0
-        return String(maxNum + 1)
-      } catch {
-        // fallback from current rows
-        const numbers = rows.map(r => {
-          const n = parseInt(r.code, 10)
-          return Number.isNaN(n) ? r.id : n
-        })
-        const maxNum = numbers.length ? Math.max(...numbers) : 0
-        return String(maxNum + 1)
-      }
-    }
+    const response = edit.id
+      ? await apiClient.updateRoomType(edit.id, payload)
+      : await apiClient.createRoomType(payload)
 
-    if (edit.id) {
-      const response = await fetch('/api/system/room-types', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: edit.id, ...payload })
-      })
-      if (response.ok) {
-        await refetchRoomTypes()
-        setFlash({ type: 'success', text: 'Đã cập nhật Dãy Tòa nhà công vụ.' })
-        setEditOpen(false)
-      } else {
-        const errorData = await response.json().catch(() => ({}))
-        const errText = (errorData && (errorData.error || errorData.message)) || 'Có lỗi xảy ra khi cập nhật.'
-        setFlash({ type: 'error', text: errText })
-      }
+    if (response.success) {
+      await refetchRoomTypes()
+      setFlash({ type: 'success', text: edit.id ? 'Đã cập nhật dãy tòa.' : 'Đã tạo dãy tòa mới.' })
+      handleCloseEdit()
     } else {
-      // Pre-check duplicate code trước khi gọi API
-      const codeLower = payload.code.toLowerCase()
-      const existsLocal = rows.some(r => r.code.toLowerCase() === codeLower)
-      if (existsLocal) {
-        const next = await suggestNextCode()
-        setEdit(prev => ({ ...prev, code: next }))
-        setCodeError(`Mã (code) đã tồn tại. Đã tự động đặt thành ${next}.`)
-        setFlash({ type: 'error', text: `Mã (code) đã tồn tại. Đã tự động đặt thành ${next}. Vui lòng kiểm tra lại.` })
-        return
-      }
-      try {
-        const resList = await fetch('/api/system/room-types', { credentials: 'include' })
-        const data = await resList.json().catch(() => ({}))
-        const items: any[] = Array.isArray(data?.items)
-          ? data.items
-          : Array.isArray(data?.data?.content)
-            ? data.data.content
-            : Array.isArray(data?.content)
-              ? data.content
-              : Array.isArray(data)
-                ? data
-                : []
-        if (items.some((r: any) => String(r.code ?? '').toLowerCase() === codeLower)) {
-          const next = await suggestNextCode()
-          setEdit(prev => ({ ...prev, code: next }))
-          setCodeError(`Mã (code) đã tồn tại. Đã tự động đặt thành ${next}.`)
-          setFlash({ type: 'error', text: `Mã (code) đã tồn tại. Đã tự động đặt thành ${next}. Vui lòng kiểm tra lại.` })
-          return
-        }
-      } catch {}
-
-      const response = await fetch('/api/system/room-types', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      })
-      if (response.ok) {
-        await refetchRoomTypes()
-        setFlash({ type: 'success', text: 'Đã tạo Dãy Tòa nhà công vụ mới.' })
-        setEditOpen(false)
+      const errorMsg = response.error || ''
+      if (/(exist|duplicate|already|đã tồn tại|trùng)/i.test(errorMsg)) {
+        setCodeError(errorMsg)
       } else {
-        const status = response.status
-        const errorData = await response.json().catch(() => ({}))
-        const rawMsg = (errorData && (errorData.error || errorData.message)) || ''
-        if (status === 409 || /(exist|duplicate|already|đã tồn tại|trùng)/i.test(rawMsg)) {
-          const next = await suggestNextCode()
-          setEdit(prev => ({ ...prev, code: next }))
-          setCodeError(`Mã (code) đã tồn tại. Đã tự động đặt thành ${next}.`)
-          setFlash({ type: 'error', text: `Mã (code) đã tồn tại. Đã tự động đặt thành ${next}. Vui lòng kiểm tra lại.` })
-        } else {
-          setFlash({ type: 'error', text: rawMsg || 'Có lỗi xảy ra khi tạo mới.' })
-        }
+        setFlash({ type: 'error', text: errorMsg })
       }
     }
   }
@@ -270,546 +179,363 @@ export default function RoomTypesPage() {
 
   async function doDelete() {
     if (!confirmOpen.id) return
-    const response = await fetch(`/api/system/room-types?id=${confirmOpen.id}`, { method: 'DELETE' })
-    if (response.ok) {
+    const response = await apiClient.deleteRoomType(confirmOpen.id)
+    if (response.success) {
       await refetchRoomTypes()
-      setFlash({ type: 'success', text: 'Đã xóa Dãy Tòa nhà công vụ thành công.' })
+      setConfirmOpen({ open: false })
+      setFlash({ type: 'success', text: 'Đã xóa dãy tòa.' })
     } else {
-      const errorData = await response.json()
-      setFlash({ type: 'error', text: errorData.error || 'Có lỗi xảy ra khi xóa.' })
+      setFlash({ type: 'error', text: response.error || '' })
     }
-    setConfirmOpen({ open: false })
   }
 
   return (
     <>
-      {/* Header */}
-      <div className="bg-white border-b border-gray-200 px-4 py-3">
-        <div className="flex items-center justify-between">
-          <div className="min-w-0 flex-1">
-            <h1 className="text-lg font-bold text-gray-900 truncate">Quản lý Tòa nhà công vụ</h1>
-            <p className="text-xs text-gray-500">{filtered.length} Tòa nhà công vụ</p>
-          </div>
-          <Button 
-            onClick={openCreate} 
-            className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 text-sm flex-shrink-0"
-          >
-            <svg className="w-4 h-4 sm:mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-            </svg>
-            <span className="hidden sm:inline">Thêm Tòa nhà công vụ</span>
-            <span className="sm:hidden">Thêm</span>
-          </Button>
-        </div>
-      </div>
+      <div className="px-6 pt-4 pb-6">
+        <div className="max-w-7xl mx-auto space-y-6">
+          {/* Header + Filters Card */}
+          <div className="bg-white shadow-sm border border-gray-200 rounded-2xl overflow-hidden">
+            {/* Header */}
+            <div className="header border-b border-gray-200/50 px-6 py-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <h1 className="text-3xl font-bold text-gray-900 leading-tight">Quản lý dãy tòa</h1>
+                </div>
+                <Button 
+                  onClick={openCreate}
+                  variant="primary"
+                  className="px-5 py-2.5 text-sm rounded-xl"
+                >
+                  <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                  </svg>
+                  Thêm dãy tòa
+                </Button>
+              </div>
+            </div>
 
-      {/* Content */}
-      <div className="max-w-7xl mx-auto px-4 py-3">
-        <div className="space-y-3">
+            {/* Filters */}
+            <div className="bg-white px-6 py-4">
+              {/* Mobile: search only */}
+              <div className="lg:hidden">
+                <Input
+                  placeholder="Tìm kiếm dãy tòa..."
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  className="w-full px-3 py-2.5 text-sm border-gray-300 rounded-xl focus:ring-0 focus:border-gray-300"
+                />
+              </div>
+
+              {/* Desktop: search only */}
+              <div className="hidden lg:flex flex-row gap-4 items-center">
+                <div className="flex-1 min-w-0">
+                  <Input
+                    placeholder="Tìm kiếm dãy tòa..."
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    className="w-full px-3 py-2.5 text-sm border-gray-300 rounded-xl focus:ring-0 focus:border-gray-300"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
           {/* Success Messages */}
           {flash && flash.type === 'success' && (
-            <div className={`rounded-md border p-2 sm:p-3 text-xs sm:text-sm shadow-sm bg-green-50 border-green-200 text-green-800`}>
-              {flash.text}
+            <div>
+              <div className="py-2.5 bg-green-50 text-green-800 rounded-xl px-4 border border-green-100 shadow-sm animate-fade-in flex items-center gap-2">
+                <svg className="w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                <span className="text-sm font-medium">{flash.text}</span>
+              </div>
             </div>
           )}
 
-          {/* Filters */}
-          <div className="bg-gray-50 border-b border-gray-200 px-4 py-3">
-            {/* Mobile layout */}
-            <div className="lg:hidden space-y-3">
-              {/* Hàng 1: Tìm kiếm */}
-              <div className="flex flex-row items-center">
-                <div className="flex-1 min-w-0">
-                  <div className="relative">
-                    <Input
-                      placeholder="Tìm kiếm..."
-                      value={query}
-                      onChange={(e) => setQuery(e.target.value)}
-                      className="w-full pl-3 pr-8 py-2 text-sm border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                    />
-                    <div className="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none">
-                      <svg
-                        className="w-4 h-4 text-gray-400"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                        />
-                      </svg>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Hàng 2: Sắp xếp và Thứ tự */}
-              <div className="flex flex-row gap-2 items-center">
-                {/* Sắp xếp */}
-                <div className="flex-1">
-                  <select
-                    value={sortKey}
-                    onChange={(e) =>
-                      setSortKey(e.target.value as "code" | "name" | "maxOccupancy")
-                    }
-                    className="w-full px-2 py-2 text-xs border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="code">Code</option>
-                    <option value="name">Tên</option>
-                    <option value="maxOccupancy">Số người</option>
-                  </select>
-                </div>
-
-                {/* Thứ tự */}
-                <div className="w-32 flex-shrink-0">
-                  <select
-                    value={sortOrder}
-                    onChange={(e) => setSortOrder(e.target.value as "asc" | "desc")}
-                    className="w-full px-2 py-2 text-xs border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="asc">Tăng dần</option>
-                    <option value="desc">Giảm dần</option>
-                  </select>
-                </div>
+          {/* Error Messages */}
+          {flash && flash.type === 'error' && (
+            <div>
+              <div className="py-2.5 bg-red-50 text-red-800 rounded-xl px-4 border border-red-100 shadow-sm animate-fade-in flex items-center gap-2">
+                <svg className="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+                <span className="text-sm font-medium">{flash.text}</span>
               </div>
             </div>
-
-            {/* Desktop layout */}
-            <div className="hidden lg:flex flex-row gap-2 items-center">
-              {/* Tìm kiếm */}
-              <div className="flex-1 min-w-0">
-                <div className="relative">
-                  <Input
-                    placeholder="Tìm kiếm Tòa..."
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    className="w-full pl-4 pr-10 py-2 text-sm border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                  />
-                  <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
-                    <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                    </svg>
-                  </div>
-                </div>
-              </div>
-              
-              {/* Sắp xếp */}
-              <div className="w-36 flex-shrink-0">
-                <select
-                  value={sortKey}
-                  onChange={(e) => setSortKey(e.target.value as 'code' | 'name' | 'maxOccupancy')}
-                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="code">Theo Code</option>
-                  <option value="name">Theo Tên</option>
-                  <option value="maxOccupancy">Theo Số người</option>
-                </select>
-              </div>
-              
-              {/* Thứ tự */}
-              <div className="w-28 flex-shrink-0">
-                <select
-                  value={sortOrder}
-                  onChange={(e) => setSortOrder(e.target.value as "asc" | "desc")}
-                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="asc">Tăng dần</option>
-                  <option value="desc">Giảm dần</option>
-                </select>
-              </div>
-            </div>
-          </div>
-
+          )}
 
           {/* Table */}
-          <div className="px-4 py-3">
-            <div className="max-w-7xl mx-auto">
-              <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-xl rounded-2xl overflow-hidden">
-              <CardHeader className="bg-gray-50 border-b border-gray-200 px-6 py-3">
-  <div className="grid grid-cols-2 items-center">
-    {/* Cột trái */}
-    <h2 className="text-lg font-bold text-gray-900 text-left">
-      Danh sách Tòa nhà công vụ
-    </h2>
-
-    {/* Cột phải */}
-    <span className="text-sm font-semibold text-blue-600 bg-blue-100 px-3 py-1 rounded-full text-right justify-self-end">
-      {filtered.length} Dãy Tòa nhà công vụ
-    </span>
-  </div>
-</CardHeader>
-
-
-                <CardBody className="p-0">
-                  {/* Desktop Table */}
-                  <div className="hidden lg:block overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <colgroup>
-                        <col className="w-[10%]" />
-                        <col className="w-[10%]" />
-                        <col className="w-[10%]" />
-                        <col className="w-[10%]" />
-                        <col className="w-[15%]" />
-                        <col className="w-[15%]" />
-                      </colgroup>
-                      <thead> 
-                        <tr className="bg-gray-50 text-gray-700">
-                          <th className="px-4 py-3 text-center font-semibold">Code</th>
-                          <th className="px-4 py-3 text-center font-semibold">Tòa</th>
-                          <th className="px-4 py-3 text-center font-semibold">Giá cơ bản</th>
-                          <th className="px-4 py-3 text-center font-semibold">Số người</th>
-                          <th className="px-4 py-3 text-center font-semibold">Trạng thái</th>
-                          <th className="px-4 py-3 text-center font-semibold">Thao tác</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filtered.slice((page - 1) * size, page * size).map((row) => (
-                          <tr key={row.id} className="hover:bg-gray-50 border-b border-gray-100">
-                            <td className="px-4 py-3 text-center font-medium text-gray-900">{row.code}</td>
-                            <td className="px-4 py-3 text-center text-gray-700">{row.name}</td>
-                            <td className="px-4 py-3 text-center">
-                              {row.basePrice === 0 ? (
-                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                  Miễn phí
-                                </span>
-                              ) : (
-                                <span className="text-gray-700">{row.basePrice.toLocaleString('vi-VN')} VND</span>
-                              )}
-                            </td>
-                            <td className="px-4 py-3 text-center text-gray-700">{row.maxOccupancy}</td>
-                            <td className="px-4 py-3 text-center">
-                              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                Hoạt động
-                              </span>
-                            </td>
-                            <td className="px-4 py-3 text-center">
-                              <div className="flex gap-2 justify-center">
-                                <Button
-                                  variant="secondary"
-                                  className="h-8 px-3 text-xs"
-                                  onClick={() => {
-                                    setSelected(row)
-                                    setDetailOpen(true)
-                                  }}
-                                >
-                                  Xem
-                                </Button>
-                                <Button
-                                  className="h-8 px-3 text-xs"
-                                  onClick={() => openEdit(row)}
-                                >
-                                  Sửa
-                                </Button>
-                                <Button
-                                  variant="danger"
-                                  className="h-8 px-3 text-xs"
-                                  onClick={() => confirmDelete(row.id)}
-                                >
-                                  Xóa
-                                </Button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  {/* Mobile Cards - Booking Style */}
-                  <div className="lg:hidden p-4">
-                    <div className="grid grid-cols-1 gap-4">
-                      {filtered.slice((page - 1) * size, page * size).map((row) => (
-                        <div
-                          key={row.id}
-                          className="bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-lg transition-all duration-200 overflow-hidden"
-                        >
-                          {/* Header với gradient */}
-                          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 px-4 py-3 border-b border-blue-100">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-md">
-                                  <span className="text-white font-bold text-sm">
-                                    {row.code.charAt(0)}
-                                  </span>
-                                </div>
-                                <div>
-                                  <h3 className="text-lg font-bold text-gray-900">{row.code}</h3>
-                                  <p className="text-sm text-gray-600">{row.name}</p>
-                                </div>
-                              </div>
-                            </div>
+          <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-md rounded-2xl overflow-hidden">
+            <CardHeader className="bg-[hsl(var(--page-bg))]/40 border-b border-gray-200 !px-6 py-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-bold text-gray-900">Danh sách dãy tòa</h2>
+                <span className="text-sm font-semibold text-[hsl(var(--primary))] bg-[hsl(var(--primary)/0.12)] px-3 py-1 rounded-full">
+                  {filtered.length} dãy tòa
+                </span>
+              </div>
+            </CardHeader>
+            <CardBody className="p-0">
+              {/* Desktop Table */}
+              <div className="hidden lg:block overflow-x-auto">
+                <Table>
+                  <THead>
+                    <tr>
+                      <th className="px-4 py-3 text-center text-sm font-bold">Code</th>
+                      <th className="px-4 py-3 text-center text-sm font-bold">Tên dãy tòa</th>
+                      <th className="px-4 py-3 text-center text-sm font-bold">Giá cơ bản</th>
+                      <th className="px-4 py-3 text-center text-sm font-bold">Số người tối đa</th>
+                      <th className="px-4 py-3 text-center text-sm font-bold">Trạng thái</th>
+                      <th className="px-4 py-3 text-center text-sm font-bold">Thao tác</th>
+                    </tr>
+                  </THead>
+                  <TBody>
+                    {filtered.slice((page - 1) * size, page * size).map((row, index) => (
+                      <tr key={row.id} className={`transition-colors ${index % 2 === 0 ? 'bg-white' : 'bg-gray-100'} hover:bg-[#f2f8fe]`}>
+                        <td className="px-4 py-3 font-medium text-center text-gray-900">{row.code}</td>
+                        <td className="px-4 py-3 text-center text-gray-700">{row.name}</td>
+                        <td className="px-4 py-3 text-center text-gray-700">
+                          {row.basePrice === 0 ? (
+                            <Badge tone="success" className="rounded-full">Miễn phí</Badge>
+                          ) : (
+                            <span>{row.basePrice.toLocaleString('vi-VN')} VND</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-center text-gray-700">{row.maxOccupancy}</td>
+                        <td className="px-4 py-3 text-center">
+                          <Badge tone="active" className="rounded-full">Hoạt động</Badge>
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <div className="flex gap-2 justify-center">
+                            <Button
+                              variant="secondary"
+                              className="h-8 px-3 text-xs bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]"
+                              onClick={() => {
+                                setSelected(row)
+                                setDetailOpen(true)
+                              }}
+                            >
+                              Xem
+                            </Button>
+                            <Button
+                              variant="secondary"
+                              className="h-8 px-3 text-xs bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]"
+                              onClick={() => openEdit(row)}
+                            >
+                              Sửa
+                            </Button>
+                            <Button
+                              variant="danger"
+                              className="h-8 px-3 text-xs"
+                              onClick={() => confirmDelete(row.id)}
+                            >
+                              Xóa
+                            </Button>
                           </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </TBody>
+                </Table>
+              </div>
 
-                          {/* Thông tin chính */}
-                          <div className="p-4 space-y-3">
-                            {/* Giá và số người */}
-                            <div className="grid grid-cols-2 gap-3">
-                              <div className="flex items-center gap-2">
-                                <svg className="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
-                                </svg>
-                                <div>
-                                  <div className="text-xs text-gray-500">Giá</div>
-                                  <div className="text-sm font-semibold text-gray-900">
-                                    {row.basePrice === 0 ? 'Miễn phí' : `${row.basePrice.toLocaleString('vi-VN')} VND`}
-                                  </div>
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <svg className="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                                </svg>
-                                <div>
-                                  <div className="text-xs text-gray-500">Số người</div>
-                                  <div className="text-sm font-semibold text-gray-900">{row.maxOccupancy}</div>
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Mô tả nếu có */}
-                            {row.description && (
-                              <div className="bg-gray-50 rounded-lg p-3">
-                                <div className="flex items-center gap-2 mb-2">
-                                  <svg className="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                                  </svg>
-                                  <span className="text-sm font-medium text-gray-700">Mô tả</span>
-                                </div>
-                                <p className="text-sm text-gray-600">{row.description}</p>
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Nút thao tác - Mobile Fixed */}
-                          <div className="px-3 py-3 bg-gray-50 border-t border-gray-100">
-                            <div className="grid grid-cols-3 gap-2">
-                              <Button
-                                variant="secondary"
-                                className="h-10 text-xs font-medium px-2"
-                                onClick={() => {
-                                  setSelected(row);
-                                  setDetailOpen(true);
-                                }}
-                              >
-                                <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                                </svg>
-                                Xem
-                              </Button>
-
-                              <Button
-                                className="h-10 text-xs font-medium px-2"
-                                onClick={() => openEdit(row)}
-                              >
-                                <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                                </svg>
-                                Sửa
-                              </Button>
-
-                              <Button
-                                variant="danger"
-                                className="h-10 text-xs font-medium px-2"
-                                onClick={() => confirmDelete(row.id)}
-                              >
-                                <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                </svg>
-                                Xóa
-                              </Button>
-                            </div>
-                          </div>
+              {/* Mobile Cards */}
+              <div className="lg:hidden space-y-3 p-4">
+                {filtered.slice((page - 1) * size, page * size).map((row) => (
+                  <div
+                    key={row.id}
+                    className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4 transition-colors hover:bg-[#f2f8fe] active:bg-[#f2f8fe]"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        {/* Icon tòa nhà */}
+                        <div className="w-11 h-11 rounded-xl bg-[hsl(var(--primary)/0.12)] flex items-center justify-center flex-shrink-0">
+                          <svg className="w-6 h-6 text-[hsl(var(--primary))]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h4a1 1 0 011 1v7a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM14 5a1 1 0 011-1h4a1 1 0 011 1v7a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 16a1 1 0 011-1h4a1 1 0 011 1v3a1 1 0 01-1 1H5a1 1 0 01-1-1v-3zM14 16a1 1 0 011-1h4a1 1 0 011 1v3a1 1 0 01-1 1h-4a1 1 0 01-1-1v-3z" />
+                          </svg>
                         </div>
-                      ))}
-                    </div>
-                  </div>
 
-                </CardBody>
-
-                {/* Pagination - Mobile Optimized */}
-                {filtered.length > size && (
-                  <div className="bg-gradient-to-r from-gray-50 to-blue-50 px-3 py-4 border-t border-gray-200/50">
-                    {/* Mobile Layout */}
-                    <div className="lg:hidden">
-                      <div className="text-center mb-4">
-                        <div className="text-sm text-gray-600 mb-1">Hiển thị kết quả</div>
-                        <div className="text-lg font-bold text-gray-900">
-                          <span className="text-blue-600">{(page - 1) * size + 1}</span> - <span className="text-blue-600">{Math.min(page * size, filtered.length)}</span> / <span className="text-gray-600">{filtered.length}</span>
+                        <div className="min-w-0">
+                          <h3 className="text-base font-bold text-gray-900 truncate">
+                            Dãy {row.name?.trim() ? row.name : row.code}
+                          </h3>
+                          {!row.name?.trim() && (
+                            <p className="text-sm text-gray-600 truncate">Chưa có tên</p>
+                          )}
                         </div>
                       </div>
-                      <div className="flex items-center justify-center gap-3">
-                        <Button
-                          variant="secondary"
-                          disabled={page === 1}
-                          onClick={() => setPage(page - 1)}
-                          className="h-10 px-4 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                          </svg>
-                          Trước
-                        </Button>
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-bold text-gray-700 bg-white px-3 py-2 rounded-xl border-2 border-blue-200 shadow-sm">
-                            {page}
+
+                      <div className="flex-shrink-0">
+                        <Badge tone="active" className="rounded-full">Hoạt động</Badge>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 space-y-2">
+                      <div className="rounded-xl bg-gray-50 border border-gray-200 px-3 py-2">
+                        <div className="text-sm text-gray-700 truncate">
+                          <span className="font-semibold text-gray-600">Giá cơ bản:</span>{" "}
+                          <span className="inline-block font-semibold text-green-800 bg-green-100 border border-green-200 rounded-md px-2 py-0.5">
+                            {row.basePrice === 0 ? 'Miễn phí' : `${row.basePrice.toLocaleString('vi-VN')} VND`}
                           </span>
-                          <span className="text-sm text-gray-500">/ {Math.ceil(filtered.length / size)}</span>
                         </div>
-                        <Button
-                          variant="secondary"
-                          disabled={page >= Math.ceil(filtered.length / size)}
-                          onClick={() => setPage(page + 1)}
-                          className="h-10 px-4 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          Sau
-                          <svg className="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                          </svg>
-                        </Button>
+                      </div>
+                      <div className="rounded-xl bg-gray-50 border border-gray-200 px-3 py-2">
+                        <div className="text-sm text-gray-700 truncate">
+                          <span className="font-semibold text-gray-600">Số người tối đa:</span>{" "}
+                          <span className="font-semibold text-gray-900">{row.maxOccupancy}</span>
+                        </div>
                       </div>
                     </div>
 
-                    {/* Desktop Layout */}
-                    <div className="hidden lg:flex flex-row items-center justify-between gap-4 sm:gap-6">
-                      <div className="text-center sm:text-left">
-                        <div className="text-xs sm:text-sm text-gray-600 mb-1">Hiển thị kết quả</div>
-                        <div className="text-sm sm:text-lg font-bold text-gray-900">
-                          <span className="text-blue-600">{(page - 1) * size + 1}</span> - <span className="text-blue-600">{Math.min(page * size, filtered.length)}</span> / <span className="text-gray-600">{filtered.length}</span>
+                    {row.description && (
+                      <div className="mt-3 rounded-xl bg-gray-50 border border-gray-200 px-3 py-2">
+                        <div className="text-sm text-gray-700">
+                          <span className="font-semibold text-gray-600">Mô tả:</span>{" "}
+                          <span className="text-gray-900">{row.description}</span>
                         </div>
                       </div>
-                      <div className="flex items-center gap-2 sm:gap-4">
-                        <Button
-                          variant="secondary"
-                          disabled={page === 1}
-                          onClick={() => setPage(page - 1)}
-                          className="h-8 sm:h-10 px-3 sm:px-4 text-xs sm:text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          <svg className="w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                          </svg>
-                          <span className="hidden sm:inline">Trước</span>
-                        </Button>
-                        <div className="flex items-center gap-1 sm:gap-2">
-                          <span className="text-xs sm:text-sm font-bold text-gray-700 bg-white px-2 sm:px-4 py-1 sm:py-2 rounded-lg sm:rounded-xl border-2 border-blue-200 shadow-sm">
-                            {page}
-                          </span>
-                          <span className="text-xs sm:text-sm text-gray-500">/ {Math.ceil(filtered.length / size)}</span>
-                        </div>
-                        <Button
-                          variant="secondary"
-                          disabled={page >= Math.ceil(filtered.length / size)}
-                          onClick={() => setPage(page + 1)}
-                          className="h-8 sm:h-10 px-3 sm:px-4 text-xs sm:text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          <span className="hidden sm:inline">Sau</span>
-                          <svg className="w-3 h-3 sm:w-4 sm:h-4 ml-1 sm:ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                          </svg>
-                        </Button>
-                      </div>
+                    )}
+
+                    <div className="mt-3 grid grid-cols-3 gap-2">
+                      <Button
+                        variant="secondary"
+                        className="h-10 text-sm font-medium bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]"
+                        onClick={() => {
+                          setSelected(row)
+                          setDetailOpen(true)
+                        }}
+                      >
+                        Xem
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        className="h-10 text-sm font-medium bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]"
+                        onClick={() => openEdit(row)}
+                      >
+                        Sửa
+                      </Button>
+                      <Button
+                        variant="danger"
+                        className="h-10 text-sm font-medium"
+                        onClick={() => confirmDelete(row.id)}
+                      >
+                        Xóa
+                      </Button>
                     </div>
                   </div>
-                )}
-              </Card>
-            </div>
-          </div>
+                ))}
+              </div>
+
+              {/* Pagination */}
+              {filtered.length > size && (
+                <div className="bg-gradient-to-r from-gray-50 to-[hsl(var(--page-bg))] px-6 py-6 border-t border-gray-200/50">
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-6">
+                    <div className="text-center sm:text-left">
+                      <div className="text-sm text-gray-600 mb-1">Hiển thị kết quả</div>
+                      <div className="text-lg font-bold text-gray-900">
+                        <span className="text-[hsl(var(--primary))]">{(page - 1) * size + 1}</span>
+                        {" "}-{" "}
+                        <span className="text-[hsl(var(--primary))]">{Math.min(page * size, filtered.length)}</span>
+                        {" "} / <span className="text-gray-600">{filtered.length}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <Button
+                        variant="secondary"
+                        disabled={page === 1}
+                        onClick={() => setPage(page - 1)}
+                        className="h-10 px-4 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                        </svg>
+                        Trước
+                      </Button>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-bold text-gray-700 bg-white px-4 py-2 rounded-xl border-2 border-[hsl(var(--primary)/0.25)] shadow-sm">
+                          Trang {page}
+                        </span>
+                        <span className="text-sm text-gray-500">/ {Math.ceil(filtered.length / size)}</span>
+                      </div>
+                      <Button
+                        variant="secondary"
+                        disabled={page >= Math.ceil(filtered.length / size)}
+                        onClick={() => setPage(page + 1)}
+                        className="h-10 px-4 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Sau
+                        <svg className="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                        </svg>
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </CardBody>
+          </Card>
         </div>
       </div>
 
       {/* Detail Modal */}
-      <Modal open={detailOpen} onClose={() => setDetailOpen(false)} title="Chi tiết Dãy Tòa">
+      <Modal open={detailOpen} onClose={() => setDetailOpen(false)} title="Chi tiết dãy tòa">
         <div className="p-4 sm:p-6">
           {selected && (
             <div className="space-y-6">
               {/* Header với thông tin chính */}
-              <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-4 sm:p-6 border border-blue-200">
-                {/* Thông tin Dãy Tòa chính */}
+              <div className="bg-gradient-to-r from-[hsl(var(--page-bg))] to-[hsl(var(--primary)/0.08)] rounded-xl p-4 sm:p-6 border border-[hsl(var(--primary)/0.25)]">
+                {/* Thông tin dãy tòa chính */}
                 <div className="space-y-4">
                   {/* Header với icon */}
                   <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
                     <div className="flex items-center gap-3 w-full sm:w-auto">
-                      <div className="w-12 h-12 sm:w-14 sm:h-14 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg flex-shrink-0">
+                      <div className="w-12 h-12 sm:w-14 sm:h-14 bg-[hsl(var(--primary))] rounded-xl flex items-center justify-center shadow-lg flex-shrink-0">
                         <svg className="w-6 h-6 sm:w-7 sm:h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h4a1 1 0 011 1v7a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM14 5a1 1 0 011-1h4a1 1 0 011 1v7a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 16a1 1 0 011-1h4a1 1 0 011 1v3a1 1 0 01-1 1H5a1 1 0 01-1-1v-3zM14 16a1 1 0 011-1h4a1 1 0 011 1v3a1 1 0 01-1 1h-4a1 1 0 01-1-1v-3z" />
                         </svg>
                       </div>
                       <div className="flex-1 min-w-0">
-                        <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold text-gray-900">Loại {selected.code}</h2>
-                        <p className="text-base sm:text-lg lg:text-xl text-gray-600 truncate">{selected.name}</p>
+                        <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold text-gray-900">
+                          Dãy {selected.name?.trim() ? selected.name : selected.code}
+                        </h2>
                       </div>
                     </div>
                   </div>
 
                   {/* Thông tin nhanh */}
                   <div className="grid grid-cols-2 gap-3 sm:gap-4">
-                    <div className="bg-white/70 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-blue-200">
-                      <div className="flex items-center gap-2 mb-2">
-                        <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
-                        </svg>
-                        <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">ID</span>
-                      </div>
-                      <p className="text-lg sm:text-xl font-bold text-blue-900">{selected.id}</p>
+                    <div className="bg-white/70 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-[hsl(var(--primary)/0.25)]">
+                      <p className="text-sm sm:text-base font-semibold text-gray-700">
+                        <span className="text-gray-600">ID:</span>{" "}
+                        <span className="font-bold text-[hsl(var(--primary))]">{selected.id}</span>
+                      </p>
                     </div>
 
-                    <div className="bg-white/70 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-blue-200">
-                      <div className="flex items-center gap-2 mb-2">
-                        <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                        </svg>
-                        <span className="text-xs sm:text-sm font-semibold text-blue-700 uppercase">Số người</span>
-                      </div>
-                      <p className="text-lg sm:text-xl font-bold text-blue-900">{selected.maxOccupancy}</p>
+                    <div className="bg-white/70 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-[hsl(var(--primary)/0.25)]">
+                      <p className="text-sm sm:text-base font-semibold text-gray-700">
+                        <span className="text-gray-600">Số người tối đa:</span>{" "}
+                        <span className="font-bold text-[hsl(var(--primary))]">{selected.maxOccupancy}</span>
+                      </p>
                     </div>
                   </div>
 
+                  {/* Giá cơ bản */}
+                  <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-[hsl(var(--primary)/0.25)]">
+                    <p className="text-sm sm:text-base font-semibold text-gray-700 break-words leading-relaxed">
+                      <span className="text-gray-600">Giá cơ bản:</span>{" "}
+                      <span className="font-bold text-[hsl(var(--primary))]">
+                        {selected.basePrice === 0 ? 'Miễn phí' : `${selected.basePrice.toLocaleString('vi-VN')} VND`}
+                      </span>
+                    </p>
+                  </div>
                 </div>
               </div>
 
               {selected.description && (
                 <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-gray-200">
-                  <div className="text-xs sm:text-sm font-semibold text-gray-500 mb-1">Mô tả</div>
-                  <p className="text-sm text-gray-800 whitespace-pre-line">{selected.description}</p>
-                </div>
-              )}
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-gray-200">
-                  <div className="text-xs sm:text-sm font-semibold text-gray-500 mb-1">Trạng thái</div>
-                  <p className="text-sm font-medium text-gray-900">
-                    Đang hoạt động
+                  <p className="text-sm text-gray-800 whitespace-pre-line">
+                    <span className="font-semibold text-gray-600">Mô tả:</span>{" "}
+                    {selected.description}
                   </p>
-                </div>
-                <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-gray-200">
-                  <div className="text-xs sm:text-sm font-semibold text-gray-500 mb-1">Giá cơ bản</div>
-                  <p className="text-sm font-medium text-gray-900">
-                    {selected.basePrice === 0 ? 'Miễn phí' : `${selected.basePrice.toLocaleString('vi-VN')} VND`}
-                  </p>
-                </div>
-              </div>
-
-              {(selected.createdDate || selected.lastModifiedDate) && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                  {selected.createdDate && (
-                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-gray-200">
-                      <div className="text-xs sm:text-sm font-semibold text-gray-500 mb-1">Ngày tạo</div>
-                      <p className="text-sm font-medium text-gray-900">
-                        {new Date(selected.createdDate).toLocaleString('vi-VN')}
-                      </p>
-                    </div>
-                  )}
-                  {selected.lastModifiedDate && (
-                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-gray-200">
-                      <div className="text-xs sm:text-sm font-semibold text-gray-500 mb-1">Cập nhật gần nhất</div>
-                      <p className="text-sm font-medium text-gray-900">
-                        {new Date(selected.lastModifiedDate).toLocaleString('vi-VN')}
-                      </p>
-                    </div>
-                  )}
                 </div>
               )}
             </div>
@@ -818,35 +544,39 @@ export default function RoomTypesPage() {
       </Modal>
 
       {/* Edit Modal */}
-      <Modal open={editOpen} onClose={() => setEditOpen(false)} title={edit.id ? 'Sửa Dãy Tòa nhà công vụ mới' : 'Thêm Dãy Tòa  nhà công vụ mới'}>
+      <Modal open={editOpen} onClose={handleCloseEdit} title={edit.id ? 'Sửa dãy tòa' : 'Thêm dãy tòa mới'}>
         <div className="p-4 sm:p-6">
           <div className="space-y-4">
             {/* Form */}
             <div className="space-y-3">
-              {/* Code và Dãy Tòa */}
+              {/* Code và Tên dãy tòa */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Code *</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Code <span className="text-red-500">*</span>
+                  </label>
                   <Input
                     value={edit.code}
                     onChange={(e) => { setEdit({ ...edit, code: e.target.value }); setCodeError(null); }}
-                    placeholder="Nhập code Dãy Tòa nhà công vụ mới"
+                    placeholder="Nhập code dãy tòa"
                     className={`w-full ${codeError ? 'border-red-500 focus:ring-red-500' : ''}`}
                   />
                   {codeError && (
-                    <div className="mt-1 text-xs text-red-600">{codeError}</div>
+                    <div className="mt-1 text-sm font-medium text-red-600">{codeError}</div>
                   )}
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Tên Dãy Tòa *</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Tên Dãy Tòa <span className="text-red-500">*</span>
+                  </label>
                   <Input
                     value={edit.name}
                     onChange={(e) => { setEdit({ ...edit, name: e.target.value }); setNameError(null); }}
-                    placeholder="Nhập tên dãy Tòa nhà công vụ"
-                    className="w-full"
+                    placeholder="Nhập tên dãy tòa"
+                    className={`w-full ${nameError ? 'border-red-500 focus:ring-red-500' : ''}`}
                   />
                   {nameError && (
-                    <div className="mt-1 text-xs text-red-600">{nameError}</div>
+                    <div className="mt-1 text-sm font-medium text-red-600">{nameError}</div>
                   )}
                 </div>
               </div>
@@ -854,27 +584,37 @@ export default function RoomTypesPage() {
               {/* Giá cơ bản và Số người */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Giá cơ bản *</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Giá cơ bản <span className="text-red-500">*</span>
+                  </label>
                   <Input
                     type="number"
                     min="0"
                     value={edit.basePrice}
-                    onChange={(e) => setEdit({ ...edit, basePrice: Number(e.target.value) })}
+                    onChange={(e) => { setEdit({ ...edit, basePrice: Number(e.target.value) }); setBasePriceError(null); }}
                     placeholder="Giá cơ bản (0 = miễn phí)"
-                    className="w-full"
+                    className={`w-full ${basePriceError ? 'border-red-500 focus:ring-red-500' : ''}`}
                   />
+                  {basePriceError && (
+                    <div className="mt-1 text-sm font-medium text-red-600">{basePriceError}</div>
+                  )}
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Số người tối đa *</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Số người tối đa <span className="text-red-500">*</span>
+                  </label>
                   <Input
                     type="number"
                     min="1"
                     max="20"
                     value={edit.maxOccupancy}
-                    onChange={(e) => setEdit({ ...edit, maxOccupancy: Number(e.target.value) })}
+                    onChange={(e) => { setEdit({ ...edit, maxOccupancy: Number(e.target.value) }); setMaxOccupancyError(null); }}
                     placeholder="Số người tối đa"
-                    className="w-full"
+                    className={`w-full ${maxOccupancyError ? 'border-red-500 focus:ring-red-500' : ''}`}
                   />
+                  {maxOccupancyError && (
+                    <div className="mt-1 text-sm font-medium text-red-600">{maxOccupancyError}</div>
+                  )}
                 </div>
               </div>
 
@@ -884,9 +624,9 @@ export default function RoomTypesPage() {
                 <textarea
                   value={edit.description}
                   onChange={(e) => setEdit({ ...edit, description: e.target.value })}
-                  placeholder="Nhập mô tả Dãy Tòa"
+                  placeholder="Nhập mô tả dãy tòa"
                   rows={2}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]"
                 />
               </div>
             </div>
@@ -895,14 +635,15 @@ export default function RoomTypesPage() {
             <div className="flex flex-row gap-3 pt-3 border-t border-gray-200">
               <Button 
                 variant="secondary" 
-                onClick={() => setEditOpen(false)}
+                onClick={handleCloseEdit}
                 className="flex-1"
               >
                 Hủy bỏ
               </Button>
               <Button 
                 onClick={save}
-                className="flex-1 bg-blue-600 hover:bg-blue-700"
+                variant="primary"
+                className="flex-1"
               >
                 {edit.id ? 'Cập nhật' : 'Tạo mới'}
               </Button>
@@ -915,7 +656,7 @@ export default function RoomTypesPage() {
       <Modal open={confirmOpen.open} onClose={() => setConfirmOpen({ open: false })} title="Xác nhận xóa">
         <div className="p-6">
           <p className="text-gray-600 mb-6">
-            Bạn có chắc muốn xóa Dãy Tòa nhà công vụ này? Dãy Tòa nhà công vụ sẽ bị xóa vĩnh viễn khỏi hệ thống.
+            Bạn có chắc muốn xóa dãy tòa này? Dãy tòa sẽ bị xóa vĩnh viễn khỏi hệ thống.
           </p>
           <div className="flex justify-end gap-3">
             <Button variant="secondary" onClick={() => setConfirmOpen({ open: false })}>

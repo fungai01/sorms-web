@@ -182,25 +182,19 @@ export default function OpenDoorPage() {
       formData.append('image', file);
 
       // Call API to open door
-      console.log('[Open Door] Sending request to API...');
-      const response = await fetch(`/api/security/open-door`, {
+      const response = await fetch(`/api/system/security/open-door`, {
         method: 'POST',
         credentials: 'include',
         body: formData,
       });
 
-      console.log('[Open Door] Response status:', response.status, response.statusText);
-
       let data: any = {};
       try {
         const text = await response.text();
-        console.log('[Open Door] Response text:', text);
         if (text) {
           data = JSON.parse(text);
-          console.log('[Open Door] Parsed response data:', data);
         }
       } catch (parseError) {
-        console.error('[Open Door] Failed to parse response:', parseError);
         if (!response.ok) {
           const errorMsg = `Lỗi từ server: ${response.status} ${response.statusText}`;
           setDoorStatus({
