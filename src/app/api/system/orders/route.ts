@@ -145,7 +145,11 @@ export async function POST(req: NextRequest) {
     if (action === 'cart') {
       const auth = getAuthorizationHeader(req)
       const options: RequestInit = auth ? { headers: { Authorization: auth } } : {}
-      const response = await apiClient.createOrderCart(body.bookingId)
+      const response = await apiClient.createOrderCart({
+        bookingId: body.bookingId,
+        requestedBy: body.requestedBy,
+        note: body.note
+      })
       if (!response.success) {
         return NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
       }

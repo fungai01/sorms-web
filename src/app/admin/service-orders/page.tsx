@@ -346,10 +346,11 @@ export default function ServiceOrdersPage() {
             return
           }
           
-          const addItemResponse = await apiClient.addOrderItemToCart(orderId, {
-            serviceId: service.id,
-            quantity: Number(item.quantity)
-          })
+          const addItemResponse = await apiClient.addOrderItem(
+            orderId,
+            service.id,
+            Number(item.quantity)
+          )
           
           if (!addItemResponse.success) {
             const errorMsg = addItemResponse.error || `Thêm dịch vụ ${item.service_name} thất bại`

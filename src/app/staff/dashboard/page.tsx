@@ -127,7 +127,7 @@ export default function StaffPage() {
     setFlash({ type: 'success', text: 'Đã nhận công việc thành công!' });
       
     // Create notification
-    createTaskNotification(task.title, 'ACCEPTED', task.assignedBy);
+    createTaskNotification(task.id, task.title, task.assignedBy, 'ASSIGNED');
   };
 
   const handleRejectTask = async (id: number) => {
@@ -171,7 +171,7 @@ export default function StaffPage() {
     setFlash({ type: 'success', text: 'Đã từ chối công việc!' });
     
     // Create notification
-    createTaskNotification(task.title, 'REJECTED', task.assignedBy, rejectionReason);
+    createTaskNotification(task.id, task.title, task.assignedBy, 'CANCELLED');
   };
 
   const handleStartTask = async (id: number) => {
@@ -206,7 +206,7 @@ export default function StaffPage() {
     })));
     
     // Create notification
-    createTaskNotification(task.title, 'IN_PROGRESS', task.assignedBy);
+    createTaskNotification(task.id, task.title, task.assignedBy, 'IN_PROGRESS');
   };
 
   const handleAdjustSchedule = (id: number) => {
@@ -259,7 +259,7 @@ export default function StaffPage() {
     setFlash({ type: 'success', text: 'Đã hoàn thành công việc!' });
     
     // Create notification
-    createTaskNotification(selectedTask.title, 'COMPLETED', selectedTask.assignedBy);
+    createTaskNotification(selectedTask.id, selectedTask.title, selectedTask.assignedBy, 'DONE');
   };
 
   const getStatusBadge = (status: string) => {

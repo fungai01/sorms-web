@@ -814,8 +814,15 @@ class ApiClient {
   }
 
   // Cart-based order workflow
-  async createOrderCart(bookingId: number) {
-    return this.post('/orders/cart', { bookingId })
+  async createOrderCart(params: { bookingId: number; requestedBy?: string; note?: string } | number) {
+    if (typeof params === 'number') {
+      return this.post('/orders/cart', { bookingId: params })
+    }
+    return this.post('/orders/cart', {
+      bookingId: params.bookingId,
+      requestedBy: params.requestedBy,
+      note: params.note
+    })
   }
 
   async addOrderItem(orderId: number, serviceId: number, quantity: number, serviceDate?: string, serviceTime?: string, assignedStaffId?: number) {

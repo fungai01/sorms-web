@@ -48,13 +48,13 @@ export default function RequestServicePage() {
       }
 
       // Step 1: Create order cart
-      const cartResponse = await apiClient.createOrderCart(Number(bookingId));
+      const cartResponse = await apiClient.createOrderCart({ bookingId: Number(bookingId) });
       if (!cartResponse.success) {
         alert(cartResponse.error || "Không thể tạo giỏ hàng. Vui lòng thử lại.");
         return;
       }
       
-      const orderId = cartResponse.data?.id;
+      const orderId = (cartResponse.data as any)?.id;
       if (!orderId) {
         alert("Không thể lấy ID đơn hàng. Vui lòng thử lại.");
         return;
