@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { apiClient, ApiResponse } from '@/lib/api-client'
 
 interface UseApiState<T> {
@@ -16,11 +16,21 @@ export function useApi<T>(
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  // Use useRef to store the latest apiCall function to avoid recreating fetchData
+  const apiCallRef = useRef(apiCall)
+  useEffect(() => {
+    apiCallRef.current = apiCall
+  })
+
+  // Memoize dependencies string to detect actual changes
+  const depsString = JSON.stringify(dependencies)
+  const prevDepsRef = useRef<string>('')
+  
   const fetchData = useCallback(async () => {
     try {
       setLoading(true)
       setError(null)
-      const response = await apiCall()
+      const response = await apiCallRef.current()
       
       if (response.success) {
         setData(response.data || null)
@@ -37,11 +47,22 @@ export function useApi<T>(
     } finally {
       setLoading(false)
     }
-  }, dependencies)
+  }, []) // Empty deps - fetchData never changes
 
   useEffect(() => {
-    fetchData()
-  }, [fetchData])
+    // Always fetch on initial mount (when prevDepsRef is empty)
+    if (prevDepsRef.current === '') {
+      prevDepsRef.current = depsString
+      fetchData()
+      return
+    }
+    
+    // Only fetch if dependencies actually changed
+    if (prevDepsRef.current !== depsString) {
+      prevDepsRef.current = depsString
+      fetchData()
+    }
+  }, [depsString, fetchData])
 
   return {
     data,
@@ -148,7 +169,8 @@ export function useAllBookings() {
 }
 
 export function useUserBookings() {
-  return useApi(() => fetchFromProxy('/api/user/bookings'))
+  // Use system bookings endpoint with user context
+  return useApi(() => fetchFromProxy('/api/system/bookings'))
 }
 
 export function useServices(params?: { q?: string; sortBy?: string; sortOrder?: string; isActive?: boolean }) {
@@ -173,6 +195,19 @@ export function useServiceOrders(status?: string) {
 export function useServiceOrdersByBooking(bookingId: number) {
   const endpoint = `/api/system/orders?my=true&bookingId=${bookingId}`
   return useApi(() => fetchList(endpoint), [bookingId])
+}
+
+// User service orders - get all orders for current user
+export function useMyServiceOrders(bookingId?: number) {
+  const endpoint = bookingId 
+    ? `/api/system/orders?my=true&bookingId=${bookingId}`
+    : `/api/system/orders?my=true`
+  return useApi(() => fetchList(endpoint), [endpoint])
+}
+
+// Single service order detail
+export function useServiceOrder(orderId: number) {
+  return useApi(() => apiClient.getServiceOrder(orderId), [orderId])
 }
 
 export function useStaffUsers() {

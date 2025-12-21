@@ -20,7 +20,7 @@ export default function RoleGuard({ children }: { children: React.ReactNode }) {
     const checkAccess = async () => {
       try {
         // Public routes that don't require authentication
-        const publicRoutes = ["/security/checkin", "/security/open-door"];
+        const publicRoutes = ["/verification/checkin", "/verification/open-door"];
         if (publicRoutes.includes(pathname)) {
           setIsChecking(false);
           return;
@@ -82,8 +82,8 @@ export default function RoleGuard({ children }: { children: React.ReactNode }) {
           return;
         }
 
-        // Skip role check for public security routes
-        if (pathname === "/security/checkin" || pathname === "/security/open-door") {
+        // Skip role check for public verification routes
+        if (pathname === "/verification/checkin" || pathname === "/verification/open-door") {
           setIsChecking(false);
           return;
         }

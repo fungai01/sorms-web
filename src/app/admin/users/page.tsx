@@ -1,6 +1,7 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState, useCallback, startTransition } from "react";
+import * as React from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
 import { useUsers } from "@/hooks/useApi";
@@ -56,28 +57,33 @@ function UsersInner() {
   const isInitialLoadRef = useRef(false)
   const queryDebounceRef = useRef<NodeJS.Timeout | null>(null)
   const isProcessingRef = useRef(false)
+  const hasFetchedRef = useRef(false)
   
   const [debouncedQuery, setDebouncedQuery] = useState("")
   const [sortKey, setSortKey] = useState<"name" | "email">("name");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [filterStatus, setFilterStatus] = useState<"ALL" | "ACTIVE" | "INACTIVE">("ALL");
 
-  // Load users with hook - debounced query
-  const { data: usersData, loading, error, refetch: refetchUsers } = useUsers({
+  // Memoize users params to prevent recreating object on every render
+  const usersParams = useMemo(() => ({
     page: page - 1,
     size,
     keyword: debouncedQuery.trim() || undefined,
     status: filterStatus === "ALL" ? undefined : filterStatus,
-  });
+  }), [page, size, debouncedQuery, filterStatus]);
+
+  // Load users with hook - debounced query
+  const { data: usersData, loading, error, refetch: refetchUsers } = useUsers(usersParams);
   
-  // Debounce query changes
+  // Debounce query changes - but skip initial load to prevent duplicate requests
   useEffect(() => {
+    // On initial load, set debouncedQuery immediately without debounce
     if (!isInitialLoadRef.current) {
-      isInitialLoadRef.current = true
       setDebouncedQuery(query)
       return
     }
     
+    // For subsequent changes, debounce
     if (queryDebounceRef.current) {
       clearTimeout(queryDebounceRef.current)
     }
@@ -334,26 +340,38 @@ function UsersInner() {
       return
     }
     
-    if (isAuthenticated && user?.email) {
-      refetchUsers()
-    } else if (!isAuthenticated) {
+    if (!isAuthenticated) {
       console.warn('⚠️ Session not authenticated, redirecting to login')
       router.push('/login')
+      return
     }
+    
+    // Don't refetch if useUsers hook will automatically fetch on mount
+    // Only refetch if auth state changed from unauthenticated to authenticated
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authLoading, isAuthenticated, user?.email])
+  }, [authLoading, isAuthenticated])
 
   useEffect(() => {
+    // Only initialize from URL params once on mount
+    if (isInitialLoadRef.current) return;
+    
     const q = searchParams.get("q") || "";
     const s = (searchParams.get("sort") as any) || "id";
     const o = (searchParams.get("order") as any) || "asc";
     const p = parseInt(searchParams.get("page") || "1", 10);
     const sz = parseInt(searchParams.get("size") || "10", 10);
-    setQuery(q);
-    if (s === "id" || s === "name" || s === "email") setSortKey(s);
-    if (o === "asc" || o === "desc") setSortOrder(o);
-    if (!Number.isNaN(p) && p > 0) setPage(p);
-    if (!Number.isNaN(sz) && [10,20,50].includes(sz)) setSize(sz as 10|20|50);
+    
+    // Use React.startTransition to batch all state updates together
+    // This prevents multiple re-renders and multiple API calls
+    React.startTransition(() => {
+      setQuery(q);
+      if (s === "id" || s === "name" || s === "email") setSortKey(s);
+      if (o === "asc" || o === "desc") setSortOrder(o);
+      if (!Number.isNaN(p) && p > 0) setPage(p);
+      if (!Number.isNaN(sz) && [10,20,50].includes(sz)) setSize(sz as 10|20|50);
+    });
+    
+    isInitialLoadRef.current = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

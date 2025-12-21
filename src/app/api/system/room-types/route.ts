@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiClient } from '@/lib/api-client'
-import { getAuthorizationHeader } from '@/lib/auth-utils'
+import { getAuthorizationHeader } from '@/lib/auth-service'
 
 // GET - Fetch all room types or specific room type by ID
 export async function GET(request: NextRequest) {

@@ -1,22 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { verifyToken, getAuthorizationHeader } from '@/lib/auth-utils'
+import { getAuthorizationHeader, verifyToken } from '@/lib/auth-service'
 import { API_CONFIG } from '@/lib/config'
-import { mapRoleToAppRole } from '@/lib/auth-service'
 
-// POST  /api/system/security/bookings/[bookingId]/checkin
-// Proxy multipart/form-data to backend:    POST {BASE_URL}/bookings/{id}/checkin
-export async function POST(
-  req: NextRequest,
-  context: { params: Promise<{ bookingId: string }> }
-) {
+// POST  /api/system/verification/open-door
+// Proxy multipart/form-data to backend:    POST {BASE_URL}/door/open
+export async function POST(req: NextRequest) {
   try {
-    // IMPORTANT: Backend has disabled authentication for check-in endpoint
-    // Try to get token, but don't require it
+    // Backend has disabled authentication for open-door endpoint
     let authHeader: string | null = getAuthorizationHeader(req) || null
     let token: string | null = null
-    let userInfo: any = null
     
-    // Try multiple sources for token: header first, then cookies (optional)
     if (!authHeader) {
       const accessTokenCookie = req.cookies.get('access_token')?.value
       const authAccessTokenCookie = req.cookies.get('auth_access_token')?.value
@@ -29,9 +22,9 @@ export async function POST(
       } else if (userInfoCookie) {
         try {
           const decoded = decodeURIComponent(userInfoCookie)
-          const parsedUserInfo = JSON.parse(decoded)
-          if (parsedUserInfo && parsedUserInfo.token) {
-            token = parsedUserInfo.token
+          const userInfo = JSON.parse(decoded)
+          if (userInfo && userInfo.token) {
+            token = userInfo.token
           }
         } catch {
           // ignore cookie parse error
@@ -42,7 +35,6 @@ export async function POST(
         authHeader = `Bearer ${token}`
       }
     } else {
-      // Extract token from Bearer header if present
       if (authHeader.startsWith('Bearer ')) {
         token = authHeader.substring(7)
       } else {
@@ -51,57 +43,42 @@ export async function POST(
       }
     }
     
-    // Verify token validity - only send Authorization header if token is valid
     let isValidToken = false
     if (token) {
       try {
-        userInfo = await verifyToken(req)
+        const userInfo = await verifyToken(req)
         if (userInfo?.id) {
           isValidToken = true
         } else {
-          authHeader = null
+          authHeader = null as any
         }
       } catch {
-        authHeader = null
+        authHeader = null as any
       }
     }
-
-    // Params
-    const { bookingId: bookingIdStr } = await context.params
-    const bookingId = Number(bookingIdStr)
-    if (!bookingId || Number.isNaN(bookingId)) {
-      return NextResponse.json({ error: 'Invalid bookingId' }, { status: 400 })
-    }
-
-    // Read multipart form-data from request (AFTER getting token)
+    
     const incomingForm = await req.formData()
-    const faceImage = incomingForm.get('faceImage') as File | null
-    const incomingBookingId = incomingForm.get('bookingId')?.toString()
-    const userId = incomingForm.get('userId')?.toString()
-    const faceRef = incomingForm.get('faceRef')?.toString()
+    const image = incomingForm.get('image') as File | null
 
-    // Construct outgoing form-data
-    const outgoing = new FormData()
-    outgoing.append('bookingId', String(incomingBookingId || bookingId))
-
-    const finalUserId = userId || (userInfo?.id) || null
-    if (finalUserId) {
-      outgoing.append('userId', String(finalUserId))
+    if (!image) {
+      return NextResponse.json(
+        { error: 'Image is required for door access' },
+        { status: 400 }
+      )
     }
+
+    const outgoing = new FormData()
     
-    const faceRefValue = (faceRef === 'false' || faceRef === 'False' || faceRef === 'FALSE') ? 'false' : 'true'
-    outgoing.append('faceRef', faceRefValue)
-    
-    if (faceImage && faceImage.size > 0) {
-      const imageBlob = await faceImage.arrayBuffer()
-      const imageFile = new File([imageBlob], faceImage.name || 'face-image.jpg', {
-        type: faceImage.type || 'image/jpeg',
-        lastModified: faceImage.lastModified,
+    if (image && image.size > 0) {
+      const imageBlob = await image.arrayBuffer()
+      const imageFile = new File([imageBlob], image.name || 'door-image.jpg', {
+        type: image.type || 'image/jpeg',
+        lastModified: image.lastModified,
       })
-      outgoing.append('faceImage', imageFile)
+      outgoing.append('image', imageFile)
     } else {
       return NextResponse.json(
-        { error: 'Face image is required for check-in' },
+        { error: 'Image file is required and must not be empty' },
         { status: 400 }
       )
     }
@@ -113,15 +90,15 @@ export async function POST(
     if (authHeader && isValidToken) {
       headers['Authorization'] = authHeader
     }
-
-    const backendUrl = `${API_CONFIG.BASE_URL}/bookings/${bookingId}/checkin`
+    
+    const backendUrl = `${API_CONFIG.BASE_URL}/door/open`
     
     const beRes = await fetch(backendUrl, {
       method: 'POST',
       headers,
       body: outgoing,
     })
-
+    
     const contentType = beRes.headers.get('content-type') || ''
     const status = beRes.status
 
@@ -159,5 +136,4 @@ export async function POST(
     )
   }
 }
-
 

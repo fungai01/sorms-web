@@ -7,7 +7,6 @@ import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import Modal from "@/components/ui/Modal";
 import { useAuth } from "@/hooks/useAuth";
-import { useUsers } from "@/hooks/useApi";
 import {
   UserIcon,
   EnvelopeIcon,
@@ -146,24 +145,23 @@ function SectionCard({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <Card className="bg-white/90 backdrop-blur-sm border border-gray-200/60 shadow-sm rounded-2xl">
-      <CardHeader className="border-b border-gray-200/60 py-4">
+    <Card className="bg-white border border-gray-200 shadow-md rounded-xl hover:shadow-lg transition-shadow">
+      <CardHeader className="border-b border-gray-200 py-4">
         <button
           type="button"
           onClick={() => collapsible && setOpen((o) => !o)}
-          className={`!bg-transparent !text-gray-900 w-full flex items-center justify-between hover:!bg-transparent hover:!text-gray-900 focus:outline-none focus:ring-0 ${collapsible ? 'cursor-pointer' : ''}`}
-          style={{ backgroundColor: 'transparent', color: '#111827' }}
+          className={`bg-transparent text-gray-900 w-full flex items-center justify-between hover:bg-transparent hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] rounded-lg px-2 py-1 ${collapsible ? 'cursor-pointer' : ''}`}
         >
-          <div className="flex items-center gap-2">
-            {Icon ? <Icon className="h-5 w-5 text-gray-600" style={{ color: '#4b5563' }} /> : null}
-            <h2 className="text-base font-semibold !text-gray-900" style={{ color: '#111827' }}>{title}</h2>
+          <div className="flex items-center gap-3">
+            {Icon ? <Icon className="h-5 w-5 text-[hsl(var(--primary))]" /> : null}
+            <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
           </div>
           {collapsible && (
-            <ChevronDownIcon className={`h-5 w-5 !text-gray-500 transition-transform ${open ? '' : '-rotate-90'}`} style={{ color: '#6b7280' }} />
+            <ChevronDownIcon className={`h-5 w-5 text-gray-500 transition-transform duration-200 ${open ? '' : '-rotate-90'}`} />
           )}
         </button>
       </CardHeader>
-      {(!collapsible || open) && <CardBody>{children}</CardBody>}
+      {(!collapsible || open) && <CardBody className="py-5">{children}</CardBody>}
     </Card>
   );
 }
@@ -174,9 +172,9 @@ function InfoRow({ label, value, loading, hideIfEmpty = true }: { label: string;
   }
   return (
     <div>
-      <div className="text-xs font-medium text-gray-500 uppercase tracking-wide">{label}</div>
-      <div className="mt-1 text-sm text-gray-900 min-h-5">
-        {loading ? <Skeleton className="h-4 w-40" /> : value || "—"}
+      <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">{label}</div>
+      <div className="text-sm text-gray-900 min-h-5">
+        {loading ? <Skeleton className="h-4 w-40" /> : (value || <span className="text-gray-400">—</span>)}
       </div>
     </div>
   );
@@ -185,7 +183,6 @@ function InfoRow({ label, value, loading, hideIfEmpty = true }: { label: string;
 export default function ProfilePage() {
   const router = useRouter();
   const { user, isAuthenticated, isLoading } = useAuth();
-  const { data: usersData, loading: usersLoading } = useUsers();
   
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(false);
@@ -199,6 +196,7 @@ export default function ProfilePage() {
   const [addressDetail, setAddressDetail] = useState("");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [loadingCommunes, setLoadingCommunes] = useState(false);
+  const [activeTab, setActiveTab] = useState<"emergency" | "identity" | null>(null);
 
   const displayName = useMemo(() => {
     if (!profile) return "";
@@ -317,60 +315,106 @@ export default function ProfilePage() {
     else setAddressDetail("");
   }, [selectedProvince, selectedWard, provinces, wards]);
 
-  // Load profile from API using hook
+  // Load profile from API - only current user's data
   useEffect(() => {
-    if (isLoading || usersLoading) return;
+    if (isLoading) return;
     if (!isAuthenticated || !user) {
       router.push("/login");
       return;
     }
     if (!user.email) return;
     
-    const data = usersData as any;
-    const items: any[] = Array.isArray(data?.items) ? data.items : Array.isArray(data?.data?.items) ? data.data.items : Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
-    const found = items.find((u) => (u.email || "").toLowerCase() === user.email!.toLowerCase());
-    
-    if (found) {
-      const mapped: UserProfile = {
-        id: found.id,
-        email: found.email,
-        fullName: found.fullName ?? found.full_name ?? user.name ?? user.email,
-        phoneNumber: found.phoneNumber ?? found.phone_number,
-        status: found.status,
-        firstName: found.firstName ?? found.first_name,
-        lastName: found.lastName ?? found.last_name,
-        dateOfBirth: found.dateOfBirth ?? found.date_of_birth,
-        gender: found.gender,
-        address: found.address,
-        city: found.city,
-        state: found.state,
-        postalCode: found.postalCode ?? found.postal_code,
-        country: found.country,
-        avatarUrl: found.avatarUrl ?? found.avatar_url ?? user.avatarUrl,
-        bio: found.bio,
-        preferredLanguage: found.preferredLanguage ?? found.preferred_language,
-        timezone: found.timezone,
-        emergencyContactName: found.emergencyContactName,
-        emergencyContactPhone: found.emergencyContactPhone,
-        emergencyContactRelationship: found.emergencyContactRelationship,
-        userProfileId: found.userProfileId,
-        idCardNumber: found.idCardNumber,
-        idCardIssueDate: found.idCardIssueDate ?? found.id_card_issue_date,
-        idCardIssuePlace: found.idCardIssuePlace ?? found.id_card_issue_place,
-        createdDate: found.createdDate,
-        lastModifiedDate: found.lastModifiedDate,
-      };
-      setProfile(mapped);
-    } else {
-      setProfile({
-        id: user.id ?? 0,
-        email: user.email,
-        fullName: user.name ?? user.email,
-        phoneNumber: (user as any).phoneNumber,
-        avatarUrl: user.avatarUrl,
-      });
-    }
-  }, [isAuthenticated, isLoading, router, user, usersData, usersLoading]);
+    const loadProfile = async () => {
+      try {
+        setLoading(true);
+        const token = localStorage.getItem("auth_access_token");
+        if (!token) {
+          console.error("[Profile] No auth token found");
+          return;
+        }
+
+        // Fetch only current user's profile using self=1
+        const res = await fetch("/api/system/users?self=1", {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          credentials: "include",
+        });
+
+        if (!res.ok) {
+          const errorText = await res.text().catch(() => "");
+          console.error("[Profile] Failed to load profile:", res.status, errorText);
+          setFlash({ type: "error", text: "Không thể tải thông tin hồ sơ. Vui lòng thử lại." });
+          return;
+        }
+
+        const data = await res.json().catch(() => null);
+        const items: any[] = Array.isArray(data?.items) ? data.items : Array.isArray(data?.data?.items) ? data.data.items : Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
+        const found = items.find((u) => (u.email || "").toLowerCase() === user.email!.toLowerCase());
+        
+        if (found) {
+          const mapped: UserProfile = {
+            id: found.id,
+            email: found.email,
+            fullName: found.fullName ?? found.full_name ?? user.name ?? user.email,
+            phoneNumber: found.phoneNumber ?? found.phone_number,
+            status: found.status,
+            firstName: found.firstName ?? found.first_name,
+            lastName: found.lastName ?? found.last_name,
+            dateOfBirth: found.dateOfBirth ?? found.date_of_birth,
+            gender: found.gender,
+            address: found.address,
+            city: found.city,
+            state: found.state,
+            postalCode: found.postalCode ?? found.postal_code,
+            country: found.country,
+            avatarUrl: found.avatarUrl ?? found.avatar_url ?? user.avatarUrl,
+            bio: found.bio,
+            preferredLanguage: found.preferredLanguage ?? found.preferred_language,
+            timezone: found.timezone,
+            emergencyContactName: found.emergencyContactName,
+            emergencyContactPhone: found.emergencyContactPhone,
+            emergencyContactRelationship: found.emergencyContactRelationship,
+            userProfileId: found.userProfileId,
+            idCardNumber: found.idCardNumber,
+            idCardIssueDate: found.idCardIssueDate ?? found.id_card_issue_date,
+            idCardIssuePlace: found.idCardIssuePlace ?? found.id_card_issue_place,
+            createdDate: found.createdDate,
+            lastModifiedDate: found.lastModifiedDate,
+          };
+          setProfile(mapped);
+        } else {
+          // Fallback to basic user info
+          setProfile({
+            id: user.id ?? 0,
+            email: user.email,
+            fullName: user.name ?? user.email,
+            phoneNumber: (user as any).phoneNumber,
+            avatarUrl: user.avatarUrl,
+            status: "ACTIVE",
+          });
+        }
+      } catch (error) {
+        console.error("[Profile] Error loading profile:", error);
+        setFlash({ type: "error", text: "Có lỗi xảy ra khi tải thông tin hồ sơ." });
+        // Fallback to basic user info
+        setProfile({
+          id: user.id ?? 0,
+          email: user.email,
+          fullName: user.name ?? user.email,
+          phoneNumber: (user as any).phoneNumber,
+          avatarUrl: user.avatarUrl,
+          status: "ACTIVE",
+        });
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadProfile();
+  }, [isAuthenticated, isLoading, router, user]);
 
   // Flash autohide
   useEffect(() => {
@@ -581,38 +625,41 @@ export default function ProfilePage() {
         return;
       }
 
-      // Reflect to local state
+      // Parse response to get updated data
+      const responseData = await res.json().catch(() => null);
+      
+      // Reflect to local state with composed address
       setProfile((prev) =>
         prev
           ? {
-      ...prev,
-      email: editForm.email,
-              fullName: editForm.fullName,
-      phoneNumber: editForm.phoneNumber,
-              firstName: editForm.firstName,
-              lastName: editForm.lastName,
-              dateOfBirth: editForm.dateOfBirth,
-              gender: editForm.gender,
-              address: editForm.address,
-              city: editForm.city,
-              state: editForm.state,
-              postalCode: editForm.postalCode,
-              country: editForm.country,
-              avatarUrl: editForm.avatarUrl,
-              bio: editForm.bio,
-              preferredLanguage: editForm.preferredLanguage,
-              timezone: editForm.timezone,
-              emergencyContactName: editForm.emergencyContactName,
-              emergencyContactPhone: editForm.emergencyContactPhone,
-              emergencyContactRelationship: editForm.emergencyContactRelationship,
-              idCardNumber: editForm.idCardNumber,
-              idCardIssueDate: editForm.idCardIssueDate,
-              idCardIssuePlace: editForm.idCardIssuePlace,
+              ...prev,
+              email: responseData?.email ?? editForm.email,
+              fullName: responseData?.fullName ?? editForm.fullName,
+              phoneNumber: responseData?.phoneNumber ?? editForm.phoneNumber,
+              firstName: responseData?.firstName ?? editForm.firstName,
+              lastName: responseData?.lastName ?? editForm.lastName,
+              dateOfBirth: responseData?.dateOfBirth ?? editForm.dateOfBirth,
+              gender: responseData?.gender ?? editForm.gender,
+              address: responseData?.address ?? composedAddress,
+              city: responseData?.city ?? wardName ?? editForm.city,
+              state: responseData?.state ?? provinceName ?? editForm.state,
+              postalCode: responseData?.postalCode ?? editForm.postalCode,
+              country: responseData?.country ?? "Việt Nam",
+              avatarUrl: responseData?.avatarUrl ?? editForm.avatarUrl,
+              bio: responseData?.bio ?? editForm.bio,
+              preferredLanguage: responseData?.preferredLanguage ?? editForm.preferredLanguage,
+              timezone: responseData?.timezone ?? editForm.timezone,
+              emergencyContactName: responseData?.emergencyContactName ?? editForm.emergencyContactName,
+              emergencyContactPhone: responseData?.emergencyContactPhone ?? editForm.emergencyContactPhone,
+              emergencyContactRelationship: responseData?.emergencyContactRelationship ?? editForm.emergencyContactRelationship,
+              idCardNumber: responseData?.idCardNumber ?? editForm.idCardNumber,
+              idCardIssueDate: responseData?.idCardIssueDate ?? editForm.idCardIssueDate,
+              idCardIssuePlace: responseData?.idCardIssuePlace ?? editForm.idCardIssuePlace,
             }
           : prev
       );
       
-    setEditModalOpen(false);
+      setEditModalOpen(false);
       setFlash({ type: "success", text: "Cập nhật thông tin cá nhân thành công!" });
     } catch (e) {
       setFlash({ type: "error", text: "Có lỗi xảy ra khi cập nhật hồ sơ" });
@@ -625,128 +672,292 @@ export default function ProfilePage() {
   return (
     <>
       {/* Header */}
-      <div className="bg-white border-b border-gray-200 px-4 py-6">
+      <div className="bg-white border-b border-gray-200 px-4 py-8">
         <div className="max-w-7xl mx-auto">
-          <div className="flex items-center justify-between">
-            <div className="min-w-0 flex-1 pl-1 sm:pl-2">
-              <div className="flex items-center gap-3 mb-2">
-                <button 
-                  onClick={() => router.push(backUrl)} 
-                  className="!bg-white !text-gray-700 hover:!bg-gray-100 border border-gray-300 rounded-md px-4 py-2 text-sm font-medium transition-colors flex items-center gap-2"
-                  style={{ backgroundColor: '#ffffff', color: '#374151' }}
-                >
-                  Quay lại
-                </button>
-              </div>
-              <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">Hồ sơ cá nhân</h1>
-              <p className="text-sm text-gray-600 mt-1">Quản lý thông tin tài khoản và liên hệ của bạn</p>
-            </div>
-          </div>
+          <button 
+            onClick={() => router.push(backUrl)} 
+            className="text-gray-600 hover:text-gray-900 text-sm font-medium transition-colors flex items-center gap-1 mb-6"
+          >
+            ← Quay lại
+          </button>
+          <h1 className="text-3xl lg:text-4xl font-bold text-gray-900 mb-2">Hồ sơ cá nhân</h1>
+          <p className="text-base text-gray-600">Quản lý thông tin tài khoản và liên hệ của bạn</p>
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 py-6">
+      {/* Flash Message */}
+      {flash && !editModalOpen && (
+        <div className="max-w-7xl mx-auto px-4 pt-6">
+          <div
+            className={`rounded-lg border p-4 text-sm shadow-sm ${
+              flash.type === "success"
+                ? "bg-green-50 border-green-200 text-green-800"
+                : "bg-red-50 border-red-200 text-red-800"
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <span>{flash.text}</span>
+              <button
+                onClick={() => setFlash(null)}
+                className="ml-4 text-gray-400 hover:text-gray-600"
+              >
+                ×
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
-        {/* Grid Layout: Sidebar + Main */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Sidebar Summary */}
-          <div className="lg:col-span-1">
-            <Card className="bg-white/90 backdrop-blur-sm border border-gray-200/60 shadow-sm rounded-2xl sticky top-4">
-            <CardBody>
-                <div className="flex flex-col items-center text-center">
-                  <div className="w-28 h-28 bg-gray-200 rounded-full flex items-center justify-center mb-4 overflow-hidden">
-                    {profile?.avatarUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={profile.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
-                    ) : (
-                      <UserIcon className="h-12 w-12 text-gray-400" />
-                    )}
-                  </div>
+      <div className="bg-gray-50 min-h-screen">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          {/* Two Column Layout */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 lg:gap-8">
+            {/* Left Section - Profile Info */}
+            <div className="lg:sticky lg:top-8 lg:self-start">
+              <Card className="bg-white border border-gray-200 shadow-md rounded-xl h-full">
+                <CardBody className="p-6 lg:p-8">
+                  <div className="flex flex-col">
+                    {/* Edit Button - Top Right */}
+                    <div className="flex justify-end mb-4">
+                      <button 
+                        className="bg-[#3498db] hover:bg-[#2980b9] text-white rounded-md px-3 py-1.5 text-xs font-medium transition-all shadow-sm hover:shadow"
+                        onClick={openEdit}
+                        disabled={loading}
+                      >
+                        {loading ? "Đang xử lý..." : "Chỉnh sửa"}
+                      </button>
+                    </div>
 
-                  <div className="text-lg font-semibold text-gray-900">
-                    {loading ? <Skeleton className="h-6 w-40" /> : displayName || "—"}
-                  </div>
-                  <div className="mt-1 text-sm text-gray-600 flex items-center gap-1">
-                    <ShieldCheckIcon className="h-4 w-4" />
-                    <span>{user?.role?.toUpperCase?.() || "USER"}</span>
-                </div>
+                    {/* Avatar and Status - Center */}
+                    <div className="flex flex-col items-center mb-4">
+                      {/* Avatar - 120px */}
+                      <div className="w-[120px] h-[120px] rounded-full overflow-hidden mb-3 border-4 border-gray-100 shadow-sm">
+                        {profile?.avatarUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={profile.avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+                        ) : (
+                          <div className="w-full h-full bg-gray-100 flex items-center justify-center">
+                            <UserIcon className="h-16 w-16 text-gray-400" />
+                          </div>
+                        )}
+                      </div>
+                      {/* Status */}
+                      <span className={`inline-flex items-center px-2.5 py-1 text-xs font-bold rounded-full border-2 ${
+                        (profile?.status || "ACTIVE").toUpperCase() === "ACTIVE"
+                          ? "text-green-600 border-green-600 bg-green-50"
+                          : (profile?.status || "").toUpperCase() === "INACTIVE"
+                          ? "text-red-600 border-red-600 bg-red-50"
+                          : "text-gray-600 border-gray-600 bg-gray-50"
+                      }`}>
+                        {profile?.status || "ACTIVE"}
+                      </span>
+                    </div>
 
-                  <div className="mt-4 w-full grid grid-cols-1 gap-3 text-left">
-                    <div className="flex items-start gap-3">
-                      <EnvelopeIcon className="h-5 w-5 text-gray-500 mt-0.5" />
-                    <div>
-                        <div className="text-xs text-gray-500">Email</div>
-                        <div className="text-sm text-gray-900 break-all">{profile?.email || "—"}</div>
+                    {/* Email and Phone - Below */}
+                    <div className="text-center space-y-2.5">
+                      <div className="text-sm text-gray-900">
+                        <span className="text-gray-500">Email:</span>{" "}
+                        <span className="font-medium break-all break-words">
+                          {loading ? <Skeleton className="h-4 w-full inline-block" /> : (profile?.email || "—")}
+                        </span>
+                      </div>
+                      <div className="text-sm text-gray-900">
+                        <span className="text-gray-500">SĐT:</span>{" "}
+                        <span className="font-medium">
+                          {loading ? <Skeleton className="h-4 w-32 mx-auto inline-block" /> : (profile?.phoneNumber || "—")}
+                        </span>
                       </div>
                     </div>
-                    <div className="flex items-start gap-3">
-                      <PhoneIcon className="h-5 w-5 text-gray-500 mt-0.5" />
-                    <div>
-                        <div className="text-xs text-gray-500">Số điện thoại</div>
-                        <div className="text-sm text-gray-900">{profile?.phoneNumber || "—"}</div>
+                  </div>
+                </CardBody>
+              </Card>
+            </div>
+
+            {/* Right Section - Basic Info & Address */}
+            <div className="space-y-6">
+              {/* Basic Information */}
+              <Card className="bg-white border border-gray-200 shadow-md rounded-xl">
+                <CardHeader className="border-b border-gray-200 py-3 px-6">
+                  <h2 className="text-base font-semibold text-gray-900">Thông tin cơ bản</h2>
+                </CardHeader>
+                <CardBody className="p-6">
+                  <div className="space-y-3">
+                    <div className="flex items-baseline gap-3">
+                      <span className="text-xs text-gray-500 min-w-[80px]">Họ và tên:</span>
+                      <span className="text-sm font-bold text-gray-900 flex-1">
+                        {loading ? <Skeleton className="h-4 w-48" /> : (displayName || profile?.email || "—")}
+                      </span>
                     </div>
-                    </div>
-                    <div className="flex items-start gap-3">
-                      <IdentificationIcon className="h-5 w-5 text-gray-500 mt-0.5" />
-                    <div>
-                        <div className="text-xs text-gray-500">Trạng thái</div>
-                        <div className="text-sm text-gray-900">{profile?.status || "—"}</div>
-                    </div>
+                    <div className="flex items-baseline gap-3">
+                      <span className="text-xs text-gray-500 min-w-[80px]">Ngày sinh:</span>
+                      <span className="text-sm text-gray-900 flex-1">
+                        {loading ? <Skeleton className="h-4 w-32" /> : (profile?.dateOfBirth ? formatDateReadable(profile.dateOfBirth) : "—")}
+                      </span>
                     </div>
                   </div>
+                </CardBody>
+              </Card>
 
-                  <div className="mt-6 w-full">
-                    <button 
-                      className="!bg-white !text-gray-700 hover:!bg-gray-100 border border-gray-300 rounded-md px-4 py-2 text-sm font-medium transition-colors w-full"
-                      style={{ backgroundColor: '#ffffff', color: '#374151' }}
-                      onClick={openEdit}
-                    >
-                      Chỉnh sửa thông tin
-                    </button>
+              {/* Address */}
+              <Card className="bg-white border border-gray-200 shadow-md rounded-xl">
+                <CardHeader className="border-b border-gray-200 py-3 px-6">
+                  <h2 className="text-base font-semibold text-gray-900">Địa chỉ</h2>
+                </CardHeader>
+                <CardBody className="p-6">
+                  <div className="space-y-2.5">
+                    {profile?.address ? (
+                      <div className="text-sm text-gray-900 break-words">
+                        {profile.address}
+                        {profile.city && !profile.address.includes(profile.city) && `, ${profile.city}`}
+                        {profile.state && !profile.address.includes(profile.state) && `, ${profile.state}`}
+                        {profile?.country && !profile.address.includes(profile.country) && `, ${profile.country}`}
+                        {!profile?.country && `, Việt Nam`}
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {profile?.city && (
+                          <div className="flex items-baseline gap-3">
+                            <span className="text-xs text-gray-500 min-w-[100px]">Phường/Xã:</span>
+                            <span className="text-sm text-gray-900 flex-1">{profile.city}</span>
+                          </div>
+                        )}
+                        {profile?.state && (
+                          <div className="flex items-baseline gap-3">
+                            <span className="text-xs text-gray-500 min-w-[100px]">Tỉnh/Thành:</span>
+                            <span className="text-sm text-gray-900 flex-1">{profile.state}</span>
+                          </div>
+                        )}
+                        <div className="flex items-baseline gap-3">
+                          <span className="text-xs text-gray-500 min-w-[100px]">Quốc gia:</span>
+                          <span className="text-sm text-gray-900 flex-1">{profile?.country || "Việt Nam"}</span>
+                        </div>
+                      </div>
+                    )}
                   </div>
+                </CardBody>
+              </Card>
+
+              {/* Tabs */}
+              <div className="bg-white border border-gray-200 shadow-md rounded-xl overflow-hidden">
+                <div className="flex border-b border-gray-200 justify-center gap-2">
+                  <button
+                    onClick={() => setActiveTab(activeTab === "emergency" ? null : "emergency")}
+                    className={`px-4 py-2.5 text-xs font-medium transition-all flex items-center justify-center gap-1.5 ${
+                      activeTab === "emergency"
+                        ? "bg-[#3498db] text-white border-b-2 border-[#3498db]"
+                        : "bg-white text-gray-600 hover:text-gray-900 hover:bg-gray-50"
+                    }`}
+                  >
+                    <PhoneIcon className="h-3.5 w-3.5" />
+                    Liên hệ khẩn cấp
+                  </button>
+                  <button
+                    onClick={() => setActiveTab(activeTab === "identity" ? null : "identity")}
+                    className={`px-4 py-2.5 text-xs font-medium transition-all flex items-center justify-center gap-1.5 ${
+                      activeTab === "identity"
+                        ? "bg-[#3498db] text-white border-b-2 border-[#3498db]"
+                        : "bg-white text-gray-600 hover:text-gray-900 hover:bg-gray-50"
+                    }`}
+                  >
+                    <IdentificationIcon className="h-3.5 w-3.5" />
+                    Giấy tờ tùy thân
+                  </button>
                 </div>
-              </CardBody>
-            </Card>
-          </div>
 
-          {/* Main Content */}
-          <div className="lg:col-span-2 space-y-6">
-            <SectionCard title="Thông tin cá nhân" icon={UserIcon}>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <InfoRow label="Họ và tên" value={displayName} loading={loading} />
-                <InfoRow label="Ngày sinh" value={formatDateReadable(profile?.dateOfBirth)} loading={loading} />
-                <InfoRow label="Giới tính" value={profile?.gender} loading={loading} />
-              </div>
-              <div className="mt-2">
-                <InfoRow label="Giới thiệu" value={profile?.bio} loading={loading} hideIfEmpty={false} />
-              </div>
-            </SectionCard>
+                {/* Tab Content */}
+                {activeTab && (
+                  <div className="p-6 transition-opacity duration-200">
+                    {activeTab === "emergency" && (
+                      <div>
+                        <div className="flex items-center justify-between mb-4">
+                          <h2 className="text-base font-semibold text-gray-900 flex items-center gap-2">
+                            <PhoneIcon className="h-5 w-5 text-[#3498db]" />
+                            Liên hệ khẩn cấp
+                          </h2>
+                          <button
+                            onClick={openEdit}
+                            className="text-xs text-[#3498db] hover:text-[#2980b9] font-medium"
+                          >
+                            Chỉnh sửa
+                          </button>
+                        </div>
+                        {profile?.emergencyContactName || profile?.emergencyContactPhone ? (
+                          <div className="space-y-2.5">
+                            <div className="flex items-baseline gap-3">
+                              <span className="text-xs text-gray-500 min-w-[100px]">Họ tên:</span>
+                              <span className="text-sm text-gray-900 flex-1">
+                                {profile?.emergencyContactName || "—"}
+                              </span>
+                            </div>
+                            <div className="flex items-baseline gap-3">
+                              <span className="text-xs text-gray-500 min-w-[100px]">Số điện thoại:</span>
+                              <span className="text-sm text-gray-900 flex-1">
+                                {profile?.emergencyContactPhone || "—"}
+                              </span>
+                            </div>
+                            {profile?.emergencyContactRelationship && (
+                              <div className="flex items-baseline gap-3">
+                                <span className="text-xs text-gray-500 min-w-[100px]">Mối quan hệ:</span>
+                                <span className="text-sm text-gray-900 flex-1">
+                                  {profile.emergencyContactRelationship}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="text-center py-4 text-sm text-gray-500">
+                            Chưa có thông tin liên hệ khẩn cấp. Nhấn "Chỉnh sửa" để thêm.
+                          </div>
+                        )}
+                      </div>
+                    )}
 
-            <SectionCard title="Địa chỉ" icon={MapPinIcon}>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <InfoRow label="Quốc gia" value={profile?.country} loading={loading} />
-                <InfoRow label="Tỉnh/Thành" value={profile?.state} loading={loading} />
-                <InfoRow label="Thành phố" value={profile?.city} loading={loading} />
-                <div className="sm:col-span-2">
-                  <InfoRow label="Địa chỉ" value={profile?.address} loading={loading} />
-                </div>
+                    {activeTab === "identity" && (
+                      <div>
+                        <div className="flex items-center justify-between mb-4">
+                          <h2 className="text-base font-semibold text-gray-900 flex items-center gap-2">
+                            <IdentificationIcon className="h-5 w-5 text-[#3498db]" />
+                            Giấy tờ tùy thân
+                          </h2>
+                          <button
+                            onClick={openEdit}
+                            className="text-xs text-[#3498db] hover:text-[#2980b9] font-medium"
+                          >
+                            Chỉnh sửa
+                          </button>
+                        </div>
+                        {profile?.idCardNumber || profile?.idCardIssueDate || profile?.idCardIssuePlace ? (
+                          <div className="space-y-2.5">
+                            <div className="flex items-baseline gap-3">
+                              <span className="text-xs text-gray-500 min-w-[100px]">Số CMND/CCCD:</span>
+                              <span className="text-sm text-gray-900 flex-1">
+                                {profile?.idCardNumber || "—"}
+                              </span>
+                            </div>
+                            <div className="flex items-baseline gap-3">
+                              <span className="text-xs text-gray-500 min-w-[100px]">Ngày cấp:</span>
+                              <span className="text-sm text-gray-900 flex-1">
+                                {profile?.idCardIssueDate ? formatDateReadable(profile.idCardIssueDate) : "—"}
+                              </span>
+                            </div>
+                            <div className="flex items-baseline gap-3">
+                              <span className="text-xs text-gray-500 min-w-[100px]">Nơi cấp:</span>
+                              <span className="text-sm text-gray-900 flex-1">
+                                {profile?.idCardIssuePlace || "—"}
+                              </span>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="text-center py-4 text-sm text-gray-500">
+                            Chưa có thông tin giấy tờ tùy thân. Nhấn "Chỉnh sửa" để thêm.
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
-            </SectionCard>
-
-            <SectionCard title="Liên hệ khẩn cấp" icon={PhoneIcon} collapsible defaultOpen={false}>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <InfoRow label="Họ tên" value={profile?.emergencyContactName} loading={loading} />
-                <InfoRow label="Số điện thoại" value={profile?.emergencyContactPhone} loading={loading} />
-              </div>
-            </SectionCard>
-
-            <SectionCard title="Giấy tờ tùy thân" icon={IdentificationIcon} collapsible defaultOpen={false}>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <InfoRow label="Số CMND/CCCD" value={profile?.idCardNumber} loading={loading} />
-                <InfoRow label="Ngày cấp" value={formatDateReadable(profile?.idCardIssueDate)} loading={loading} />
-                <InfoRow label="Nơi cấp" value={profile?.idCardIssuePlace} loading={loading} />
-              </div>
-            </SectionCard>
+            </div>
           </div>
         </div>
       </div>
@@ -760,18 +971,25 @@ export default function ProfilePage() {
         footer={
           <div className="flex justify-end gap-2">
             <button 
-              className="!bg-white !text-gray-700 hover:!bg-gray-100 border border-gray-300 rounded-md px-4 py-2 text-sm font-medium transition-colors"
-              style={{ backgroundColor: '#ffffff', color: '#374151' }}
+              className="bg-white text-gray-700 hover:bg-gray-50 border border-gray-300 rounded-lg px-6 py-2.5 text-sm font-medium transition-all shadow-sm hover:shadow"
               onClick={() => setEditModalOpen(false)}
+              disabled={loading}
             >
               Hủy
             </button>
             <button 
-              className="!bg-white !text-gray-700 hover:!bg-gray-100 border border-gray-300 rounded-md px-4 py-2 text-sm font-medium transition-colors"
-              style={{ backgroundColor: '#ffffff', color: '#374151' }}
+              className="bg-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/90 text-white rounded-lg px-6 py-2.5 text-sm font-semibold transition-all shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
               onClick={handleUpdate}
+              disabled={loading}
             >
-              Cập nhật
+              {loading ? (
+                <>
+                  <span className="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-white"></span>
+                  Đang xử lý...
+                </>
+              ) : (
+                "Cập nhật"
+              )}
             </button>
           </div>
         }
@@ -789,14 +1007,17 @@ export default function ProfilePage() {
             </div>
           )}
           {/* Avatar & Basic */}
-          <div className="bg-gray-50/60 border border-gray-200 rounded-xl p-4 space-y-4">
-            <div className="text-sm font-semibold text-gray-900">Thông tin cơ bản</div>
+          <div className="bg-gradient-to-br from-gray-50 to-white border border-gray-200 rounded-xl p-6 space-y-4 shadow-sm">
+            <div className="text-base font-bold text-gray-900 flex items-center gap-2">
+              <UserIcon className="h-5 w-5 text-[hsl(var(--primary))]" />
+              Thông tin cơ bản
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Field label="Họ và tên" required>
                 <input
                   type="text"
-                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 ${
-                    fieldErrors.fullName ? "border-red-300" : "border-gray-300"
+                  className={`w-full px-3 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] transition-colors ${
+                    fieldErrors.fullName ? "border-red-300 bg-red-50" : "border-gray-300"
                   }`}
                   value={editForm.fullName}
                   onChange={(e) => setEditForm((p) => ({ ...p, fullName: e.target.value }))}
@@ -807,8 +1028,8 @@ export default function ProfilePage() {
                 <input
                   type="tel"
                   maxLength={10}
-                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 ${
-                    fieldErrors.phoneNumber ? "border-red-300" : "border-gray-300"
+                  className={`w-full px-3 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] transition-colors ${
+                    fieldErrors.phoneNumber ? "border-red-300 bg-red-50" : "border-gray-300"
                   }`}
                   value={editForm.phoneNumber}
                   onChange={(e) => setEditForm((p) => ({ ...p, phoneNumber: e.target.value }))}
@@ -842,7 +1063,7 @@ export default function ProfilePage() {
                 <input
                   type="text"
                   placeholder="Hoặc dán URL ảnh"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-gray-400"
+                  className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
                   value={editForm.avatarUrl}
                   onChange={(e) => setEditForm((p) => ({ ...p, avatarUrl: e.target.value }))}
                 />
@@ -850,7 +1071,6 @@ export default function ProfilePage() {
                   <div className="pt-2">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={editForm.avatarUrl} alt="Preview" className="w-12 h-12 rounded-full object-cover border" />
-                    <p className="mt-1 text-xs text-gray-500">Ảnh sẽ được gửi lên backend trong trường avatarUrl (DB lưu trữ, không dùng Cloudinary).</p>
                   </div>
                 )}
               </div>
@@ -858,14 +1078,17 @@ export default function ProfilePage() {
           </div>
 
           {/* Personal */}
-          <div className="bg-gray-50/60 border border-gray-200 rounded-xl p-4 space-y-4">
-            <div className="text-sm font-semibold text-gray-900">Thông tin cá nhân</div>
+          <div className="bg-gradient-to-br from-gray-50 to-white border border-gray-200 rounded-xl p-6 space-y-4 shadow-sm">
+            <div className="text-base font-bold text-gray-900 flex items-center gap-2">
+              <IdentificationIcon className="h-5 w-5 text-[hsl(var(--primary))]" />
+              Thông tin cá nhân
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Field label="Ngày sinh" required>
                 <input
                   type="date"
-                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 ${
-                    fieldErrors.dateOfBirth ? "border-red-300" : "border-gray-300"
+                  className={`w-full px-3 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] transition-colors ${
+                    fieldErrors.dateOfBirth ? "border-red-300 bg-red-50" : "border-gray-300"
                   }`}
                   value={editForm.dateOfBirth}
                   onChange={(e) => setEditForm((p) => ({ ...p, dateOfBirth: e.target.value }))}
@@ -874,8 +1097,8 @@ export default function ProfilePage() {
               </Field>
               <Field label="Giới tính" required>
                 <select
-                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 ${
-                    fieldErrors.gender ? "border-red-300" : "border-gray-300"
+                  className={`w-full px-3 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] transition-colors ${
+                    fieldErrors.gender ? "border-red-300 bg-red-50" : "border-gray-300"
                   }`}
                   value={editForm.gender}
                   onChange={(e) => setEditForm((p) => ({ ...p, gender: e.target.value }))}
@@ -892,7 +1115,7 @@ export default function ProfilePage() {
               <Field label="Giới thiệu">
                 <textarea
                   rows={2}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 resize-y"
+                  className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] transition-colors resize-y"
                   value={editForm.bio}
                   onChange={(e) => setEditForm((p) => ({ ...p, bio: e.target.value }))}
                   placeholder="Mô tả ngắn"
@@ -902,13 +1125,16 @@ export default function ProfilePage() {
           </div>
 
           {/* Address */}
-          <div className="bg-gray-50/60 border border-gray-200 rounded-xl p-4 space-y-4">
-            <div className="text-sm font-semibold text-gray-900">Địa chỉ</div>
+          <div className="bg-gradient-to-br from-gray-50 to-white border border-gray-200 rounded-xl p-6 space-y-4 shadow-sm">
+            <div className="text-base font-bold text-gray-900 flex items-center gap-2">
+              <MapPinIcon className="h-5 w-5 text-[hsl(var(--primary))]" />
+              Địa chỉ
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Field label="Tỉnh/Thành phố" required>
                 <select
-                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 ${
-                    fieldErrors.province ? "border-red-300" : "border-gray-300"
+                  className={`w-full px-3 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] transition-colors ${
+                    fieldErrors.province ? "border-red-300 bg-red-50" : "border-gray-300"
                   }`}
                   value={selectedProvince}
                   onChange={(e) => setSelectedProvince(e.target.value || "")}
@@ -922,8 +1148,8 @@ export default function ProfilePage() {
               </Field>
               <Field label="Phường/Xã" required>
                 <select
-                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 ${
-                    fieldErrors.ward ? "border-red-300" : "border-gray-300"
+                  className={`w-full px-3 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] transition-colors disabled:bg-gray-100 disabled:cursor-not-allowed ${
+                    fieldErrors.ward ? "border-red-300 bg-red-50" : "border-gray-300"
                   }`}
                   value={selectedWard}
                   onChange={(e) => setSelectedWard(e.target.value || "")}
@@ -939,8 +1165,8 @@ export default function ProfilePage() {
               <Field className="sm:col-span-2" label="Địa chỉ chi tiết" required>
                 <textarea
                   rows={2}
-                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 ${
-                    fieldErrors.addressDetail ? "border-red-300" : "border-gray-300"
+                  className={`w-full px-3 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] transition-colors resize-y ${
+                    fieldErrors.addressDetail ? "border-red-300 bg-red-50" : "border-gray-300"
                   }`}
                   value={addressDetail}
                   onChange={(e) => setAddressDetail(e.target.value)}
@@ -952,14 +1178,17 @@ export default function ProfilePage() {
           </div>
 
           {/* Emergency */}
-          <div className="bg-gray-50/60 border border-gray-200 rounded-xl p-4 space-y-4">
-            <div className="text-sm font-semibold text-gray-900">Liên hệ khẩn cấp</div>
+          <div className="bg-gradient-to-br from-gray-50 to-white border border-gray-200 rounded-xl p-6 space-y-4 shadow-sm">
+            <div className="text-base font-bold text-gray-900 flex items-center gap-2">
+              <PhoneIcon className="h-5 w-5 text-[hsl(var(--primary))]" />
+              Liên hệ khẩn cấp
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Field label="Họ tên" required={isEmergencyContactRequired}>
                 <input
                   type="text"
-                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 ${
-                    fieldErrors.emergencyContactName ? "border-red-300" : "border-gray-300"
+                  className={`w-full px-3 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] transition-colors ${
+                    fieldErrors.emergencyContactName ? "border-red-300 bg-red-50" : "border-gray-300"
                   }`}
                   value={editForm.emergencyContactName}
                   onChange={(e) => setEditForm((p) => ({ ...p, emergencyContactName: e.target.value }))}
@@ -970,8 +1199,8 @@ export default function ProfilePage() {
                 <input
                   type="text"
                   maxLength={10}
-                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 ${
-                    fieldErrors.emergencyContactPhone ? "border-red-300" : "border-gray-300"
+                  className={`w-full px-3 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] transition-colors ${
+                    fieldErrors.emergencyContactPhone ? "border-red-300 bg-red-50" : "border-gray-300"
                   }`}
                   value={editForm.emergencyContactPhone}
                   onChange={(e) => setEditForm((p) => ({ ...p, emergencyContactPhone: e.target.value.slice(0, 10) }))}
@@ -982,15 +1211,18 @@ export default function ProfilePage() {
           </div>
 
           {/* Identity */}
-          <div className="bg-gray-50/60 border border-gray-200 rounded-xl p-4 space-y-4">
-            <div className="text-sm font-semibold text-gray-900">Giấy tờ tùy thân</div>
+          <div className="bg-gradient-to-br from-gray-50 to-white border border-gray-200 rounded-xl p-6 space-y-4 shadow-sm">
+            <div className="text-base font-bold text-gray-900 flex items-center gap-2">
+              <IdentificationIcon className="h-5 w-5 text-[hsl(var(--primary))]" />
+              Giấy tờ tùy thân
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <Field label="Số CMND/CCCD" required={isIdCardRequired}>
                 <input
                   type="text"
                   maxLength={12}
-                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 ${
-                    fieldErrors.idCardNumber ? "border-red-300" : "border-gray-300"
+                  className={`w-full px-3 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] transition-colors ${
+                    fieldErrors.idCardNumber ? "border-red-300 bg-red-50" : "border-gray-300"
                   }`}
                   value={editForm.idCardNumber}
                   onChange={(e) => {
@@ -1004,8 +1236,8 @@ export default function ProfilePage() {
               <Field label="Ngày cấp" required={isIdCardRequired}>
                 <input
                   type="date"
-                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 ${
-                    fieldErrors.idCardIssueDate ? "border-red-300" : "border-gray-300"
+                  className={`w-full px-3 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] transition-colors ${
+                    fieldErrors.idCardIssueDate ? "border-red-300 bg-red-50" : "border-gray-300"
                   }`}
                   value={editForm.idCardIssueDate}
                   onChange={(e) => setEditForm((p) => ({ ...p, idCardIssueDate: e.target.value }))}
@@ -1015,8 +1247,8 @@ export default function ProfilePage() {
               <Field label="Nơi cấp" required={isIdCardRequired}>
                 <input
                   type="text"
-                  className={`w-full px-3 py-2 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 ${
-                    fieldErrors.idCardIssuePlace ? "border-red-300" : "border-gray-300"
+                  className={`w-full px-3 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] transition-colors ${
+                    fieldErrors.idCardIssuePlace ? "border-red-300 bg-red-50" : "border-gray-300"
                   }`}
                   value={editForm.idCardIssuePlace}
                   onChange={(e) => setEditForm((p) => ({ ...p, idCardIssuePlace: e.target.value }))}

@@ -26,7 +26,7 @@ function ConditionalLayoutContent({ children }: ConditionalLayoutProps) {
   } | null>(null);
 
   // Check if current path should skip header, footer, and sidebar
-  const skipLayout = pathname?.startsWith('/security/checkin') || pathname?.startsWith('/security/open-door');
+  const skipLayout = pathname?.startsWith('/verification/checkin') || pathname?.startsWith('/verification/open-door');
 
   // Persist sidebar state across page navigation
   useEffect(() => {

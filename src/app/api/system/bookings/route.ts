@@ -1,61 +1,159 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { apiClient } from '@/lib/api-client'
-import { verifyToken, getAuthorizationHeader, decodeJWTPayload, isAdmin } from '@/lib/auth-utils'
+import { apiClient, createApiContext, verifyBookingAccess, handleApiError, successResponse, errorResponse } from '@/lib/api-client'
+import { verifyToken, getAuthorizationHeader, decodeJWTPayload, isAdmin } from '@/lib/auth-service'
 import { API_CONFIG } from '@/lib/config'
 
 // GET - list / detail / filter by user or status
+// Supports both system (admin) and user endpoints
 export async function GET(req: NextRequest) {
   try {
+    // Create API context for authorization
+    const { context, error: authError } = await createApiContext(req)
+    if (authError) return authError
+    if (!context) return errorResponse('Unauthorized', 401)
+
     const { searchParams } = new URL(req.url)
     const id = searchParams.get('id')
+    const bookingId = searchParams.get('bookingId')
     const userId = searchParams.get('userId')
     const status = searchParams.get('status')
+    const action = searchParams.get('action')
 
     const authHeader = getAuthorizationHeader(req)
     const options: RequestInit = authHeader ? { headers: { Authorization: authHeader } } : {}
 
-    if (id) {
-      const bookingId = Number(id)
-      if (!bookingId || Number.isNaN(bookingId)) {
-        return NextResponse.json({ error: 'Invalid booking ID' }, { status: 400 })
+    // QR code generation (user-specific)
+    if (action === 'qr' && (bookingId || id)) {
+      const bid = Number(bookingId || id)
+      if (!bid || Number.isNaN(bid)) {
+        return errorResponse('Invalid bookingId', 400)
       }
-      const response = await apiClient.getBooking(bookingId, options as any)
-      return response.success
-        ? NextResponse.json(response.data)
-        : NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
+
+      // Verify booking access
+      const { booking, error: accessError } = await verifyBookingAccess(bid, context, req)
+      if (accessError) return accessError
+      if (!booking) return errorResponse('Booking not found', 404)
+
+      const payload = {
+        type: 'BOOKING_CHECKIN',
+        bookingId: bid,
+        userId: context.userInfo.id,
+        bookingCode: booking.code,
+        userName: booking.userName,
+        userEmail: booking.userEmail || context.userInfo.email,
+        roomId: booking.roomId,
+        roomCode: booking.roomCode,
+        checkinDate: booking.checkinDate,
+        checkoutDate: booking.checkoutDate,
+        numGuests: booking.numGuests,
+        note: booking.note,
+        bookingCreatedAt: booking.createdAt || booking.created_at || new Date().toISOString(),
+        bookingDate: booking.createdAt || booking.created_at || new Date().toISOString(),
+      }
+
+      const json = JSON.stringify(payload)
+      const base64 = Buffer.from(json, 'utf-8').toString('base64')
+
+      return NextResponse.json({
+        payload,
+        token: base64,
+        qrImageUrl: booking.qrImageUrl || null,
+        bookingData: {
+          userName: booking.userName,
+          userEmail: booking.userEmail,
+          roomName: booking.roomTypeName,
+          roomNumber: booking.roomCode,
+          checkInTime: booking.checkinDate,
+          checkOutTime: booking.checkoutDate,
+        },
+      })
     }
 
+    // Single booking detail
+    if (id || bookingId) {
+      const bid = Number(id || bookingId)
+      if (!bid || Number.isNaN(bid)) {
+        return errorResponse('Invalid booking ID', 400)
+      }
+
+      // Verify booking access
+      const { booking, error: accessError } = await verifyBookingAccess(bid, context, req)
+      if (accessError) return accessError
+      if (!booking) return errorResponse('Booking not found', 404)
+
+      return NextResponse.json(booking)
+    }
+
+    // Get bookings by user
     if (userId) {
       const user = Number(userId)
       if (!user || Number.isNaN(user)) {
-        return NextResponse.json({ error: 'Invalid user ID' }, { status: 400 })
+        return errorResponse('Invalid user ID', 400)
       }
+
+      // User can only access their own bookings
+      if (context.isUser && String(user) !== String(context.userInfo.id)) {
+        return errorResponse('Forbidden', 403)
+      }
+
       const response = await apiClient.getBookingsByUser(user, options as any)
       if (!response.success) {
-        return NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
+        return errorResponse(response.error || 'Request failed', 500)
+      }
+      const raw: any = response.data
+      const items = Array.isArray(raw?.content) ? raw.content : Array.isArray(raw) ? raw : []
+      
+      // Filter by status if provided
+      let filteredItems = items
+      if (status) {
+        filteredItems = items.filter((b: any) => String(b.status) === status)
+      }
+
+      return NextResponse.json({ items: filteredItems, total: filteredItems.length })
+    }
+
+    // Get bookings by status (admin/staff only)
+    if (status) {
+      if (!context.isAdmin && !context.isStaff && !context.isOffice) {
+        return errorResponse('Forbidden', 403)
+      }
+
+      const validStatuses = ['PENDING', 'APPROVED', 'CHECKED_IN', 'CHECKED_OUT', 'CANCELLED', 'REJECTED']
+      if (!validStatuses.includes(status)) {
+        return errorResponse('Invalid booking status', 400)
+      }
+      const response = await apiClient.getBookingsByStatus(status, options as any)
+      if (!response.success) {
+        return errorResponse(response.error || 'Request failed', 500)
       }
       const raw: any = response.data
       const items = Array.isArray(raw?.content) ? raw.content : Array.isArray(raw) ? raw : []
       return NextResponse.json({ items, total: items.length })
     }
 
-    if (status) {
-      const validStatuses = ['PENDING', 'APPROVED', 'CHECKED_IN', 'CHECKED_OUT', 'CANCELLED', 'REJECTED']
-      if (!validStatuses.includes(status)) {
-        return NextResponse.json({ error: 'Invalid booking status' }, { status: 400 })
-      }
-      const response = await apiClient.getBookingsByStatus(status, options as any)
+    // List all bookings (admin/staff only) or user's own bookings
+    if (context.isUser) {
+      // User gets their own bookings
+      const userId = context.userInfo.id
+      const response = await apiClient.getBookingsByUser(userId, options as any)
       if (!response.success) {
-        return NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
+        return errorResponse(response.error || 'Request failed', 500)
       }
-      const raw: any = response.data
-      const items = Array.isArray(raw?.content) ? raw.content : Array.isArray(raw) ? raw : []
-      return NextResponse.json({ items, total: items.length })
+      let data = (response.data || []) as any[]
+      if (status) {
+        data = data.filter((b: any) => String(b.status) === status)
+      }
+      return NextResponse.json(data)
+    }
+
+    // Admin/Staff/Office get all bookings
+    if (!context.isAdmin && !context.isStaff && !context.isOffice) {
+      return errorResponse('Forbidden', 403)
     }
 
     const response = await apiClient.getBookings(options as any)
     if (!response.success) {
-      return NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
+      return errorResponse(response.error || 'Request failed', 500)
     }
     const raw: any = response.data
     const items = Array.isArray(raw?.content) ? raw.content : Array.isArray(raw) ? raw : []
@@ -68,7 +166,7 @@ export async function GET(req: NextRequest) {
       }
     )
   } catch (error: any) {
-    return NextResponse.json({ error: error?.message || 'Internal server error' }, { status: 500 })
+    return handleApiError(error, 'Failed to get bookings')
   }
 }
 
@@ -150,26 +248,228 @@ export async function POST(req: NextRequest) {
       
       if (!backendResponse.ok) {
         const errorData = await backendResponse.json().catch(() => ({ error: 'Request failed' }))
-        return NextResponse.json({ error: errorData.error || errorData.message || errorData.responseCode || 'Request failed' }, { status: backendResponse.status })
+        return errorResponse(
+          errorData.error || errorData.message || errorData.responseCode || 'Request failed',
+          backendResponse.status
+        )
       }
       
       const responseData = await backendResponse.json()
-      return NextResponse.json(responseData)
+      return successResponse(responseData.data || responseData)
+    }
+
+    if (action === 'checkin' && id) {
+      const bookingId = Number(id)
+      if (!bookingId || Number.isNaN(bookingId)) {
+        return errorResponse('Invalid booking ID', 400)
+      }
+
+      // Check-in uses multipart/form-data, not JSON
+      try {
+        // Try to get token, but don't require it (backend allows check-in without auth)
+        let authHeader: string | null = getAuthorizationHeader(req) || null
+        let token: string | null = null
+        let userInfo: any = null
+        
+        // Try multiple sources for token: header first, then cookies (optional)
+        if (!authHeader) {
+          const accessTokenCookie = req.cookies.get('access_token')?.value
+          const authAccessTokenCookie = req.cookies.get('auth_access_token')?.value
+          const userInfoCookie = req.cookies.get('user_info')?.value
+          
+          if (accessTokenCookie) {
+            token = accessTokenCookie
+          } else if (authAccessTokenCookie) {
+            token = authAccessTokenCookie
+          } else if (userInfoCookie) {
+            try {
+              const decoded = decodeURIComponent(userInfoCookie)
+              const parsedUserInfo = JSON.parse(decoded)
+              if (parsedUserInfo && parsedUserInfo.token) {
+                token = parsedUserInfo.token
+              }
+            } catch {
+              // ignore cookie parse error
+            }
+          }
+          
+          if (token) {
+            authHeader = `Bearer ${token}`
+          }
+        } else {
+          // Extract token from Bearer header if present
+          if (authHeader.startsWith('Bearer ')) {
+            token = authHeader.substring(7)
+          } else {
+            token = authHeader
+            authHeader = `Bearer ${token}`
+          }
+        }
+        
+        // Verify token validity - only send Authorization header if token is valid
+        let isValidToken = false
+        if (token) {
+          try {
+            userInfo = await verifyToken(req)
+            if (userInfo?.id) {
+              isValidToken = true
+            } else {
+              authHeader = null
+            }
+          } catch {
+            authHeader = null
+          }
+        }
+
+        // Read multipart form-data from request
+        const incomingForm = await req.formData()
+        const faceImage = incomingForm.get('faceImage') as File | null
+        const incomingBookingId = incomingForm.get('bookingId')?.toString()
+        const userId = incomingForm.get('userId')?.toString()
+        const faceRef = incomingForm.get('faceRef')?.toString()
+
+        // Construct outgoing form-data
+        const outgoing = new FormData()
+        outgoing.append('bookingId', String(incomingBookingId || bookingId))
+
+        const finalUserId = userId || (userInfo?.id) || null
+        if (finalUserId) {
+          outgoing.append('userId', String(finalUserId))
+        }
+        
+        const faceRefValue = (faceRef === 'false' || faceRef === 'False' || faceRef === 'FALSE') ? 'false' : 'true'
+        outgoing.append('faceRef', faceRefValue)
+        
+        // Face image is optional according to backend design
+        if (faceImage && faceImage.size > 0) {
+          const imageBlob = await faceImage.arrayBuffer()
+          const imageFile = new File([imageBlob], faceImage.name || 'face-image.jpg', {
+            type: faceImage.type || 'image/jpeg',
+            lastModified: faceImage.lastModified,
+          })
+          outgoing.append('faceImage', imageFile)
+        }
+        // Backend will handle check-in without face image if not provided
+
+        const headers: HeadersInit = {
+          accept: '*/*',
+        }
+        
+        if (authHeader && isValidToken) {
+          headers['Authorization'] = authHeader
+        }
+
+        const backendUrl = `${API_CONFIG.BASE_URL}/bookings/${bookingId}/checkin`
+        
+        const beRes = await fetch(backendUrl, {
+          method: 'POST',
+          headers,
+          body: outgoing,
+        })
+
+        const contentType = beRes.headers.get('content-type') || ''
+        const status = beRes.status
+
+        if (status === 401) {
+          const responseText = await beRes.text().catch(() => '')
+          try {
+            const errorData = JSON.parse(responseText)
+            return NextResponse.json(
+              { 
+                error: errorData?.message || errorData?.error || 'Unauthorized',
+                responseCode: errorData?.responseCode,
+                details: errorData
+              },
+              { status: 401 }
+            )
+          } catch {
+            return NextResponse.json(
+              { error: responseText || 'Unauthorized' },
+              { status: 401 }
+            )
+          }
+        }
+
+        if (contentType.includes('application/json')) {
+          const data = await beRes.json().catch(() => null)
+          return NextResponse.json(data ?? { success: status >= 200 && status < 300 }, { status })
+        }
+
+        const text = await beRes.text().catch(() => '')
+        return new NextResponse(text, { status })
+      } catch (error: any) {
+        return errorResponse(error?.message || 'Internal server error', 500)
+      }
     }
 
     if (action === 'checkout' && id) {
       const bookingId = Number(id)
       if (!bookingId || Number.isNaN(bookingId)) {
-        return NextResponse.json({ error: 'Invalid booking ID' }, { status: 400 })
+        return errorResponse('Invalid booking ID', 400)
       }
 
+      const { context, error: authError } = await createApiContext(req)
+      if (authError) return authError
+      if (!context) return errorResponse('Unauthorized', 401)
+
       const body = await req.json().catch(() => ({}))
-      const userId: string | undefined = body.userId ? String(body.userId) : undefined
+      const userId: string | undefined = body.userId ? String(body.userId) : context.userInfo.id
+
+      const authHeader = getAuthorizationHeader(req)
+      const options: RequestInit = authHeader ? { headers: { Authorization: authHeader } } : {}
 
       const response = await apiClient.checkoutBooking(bookingId, userId)
       return response.success
-        ? NextResponse.json(response.data)
-        : NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
+        ? successResponse(response.data)
+        : errorResponse(response.error || 'Request failed', 500)
+    }
+
+    // User cancel booking (POST method for consistency)
+    if (action === 'cancel' && id) {
+      const { context, error: authError } = await createApiContext(req)
+      if (authError) return authError
+      if (!context) return errorResponse('Unauthorized', 401)
+
+      const bookingId = Number(id)
+      if (!bookingId || Number.isNaN(bookingId)) {
+        return errorResponse('Invalid booking ID', 400)
+      }
+
+      // Verify booking access
+      const { booking, error: accessError } = await verifyBookingAccess(bookingId, context, req)
+      if (accessError) return accessError
+      if (!booking) return errorResponse('Booking not found', 404)
+
+      // Only allow cancel for PENDING bookings
+      if (booking.status !== 'PENDING') {
+        return errorResponse('Only PENDING bookings can be cancelled', 400)
+      }
+
+      const body = await req.json().catch(() => ({}))
+      const reason = body.reason || 'User cancelled'
+
+      // Update booking status to CANCELLED
+      const authHeader = getAuthorizationHeader(req)
+      const options: RequestInit = authHeader ? { headers: { Authorization: authHeader } } : {}
+      
+      const updateData = {
+        id: bookingId,
+        roomId: booking.roomId,
+        checkinDate: booking.checkinDate,
+        checkoutDate: booking.checkoutDate,
+        numGuests: booking.numGuests || 1,
+        note: reason,
+        status: 'CANCELLED'
+      }
+
+      const response = await apiClient.updateBooking(bookingId, updateData)
+      if (!response.success) {
+        return NextResponse.json(
+          { error: response.error || 'Failed to cancel booking' },
+          { status: 500 }
+        )
+      }
+      return successResponse(response.data)
     }
 
     const contentType = req.headers.get('content-type') || ''
@@ -234,44 +534,167 @@ export async function POST(req: NextRequest) {
 
     const response = await apiClient.createBooking(formattedBody, options)
     return response.success
-      ? NextResponse.json(response.data, { status: 201 })
-      : NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
+      ? successResponse(response.data, 201)
+      : errorResponse(response.error || 'Request failed', 500)
   } catch (error: any) {
-    return NextResponse.json({ error: error?.message || 'Internal server error' }, { status: 500 })
+    return handleApiError(error, 'Failed to create booking')
   }
 }
 
 export async function PUT(req: NextRequest) {
   try {
+    const { searchParams } = new URL(req.url)
+    const action = searchParams.get('action')
+    const id = searchParams.get('id')
+    
+    // User cancel booking
+    if (action === 'cancel' && id) {
+      const { context, error: authError } = await createApiContext(req)
+      if (authError) return authError
+      if (!context) return errorResponse('Unauthorized', 401)
+
+      const bookingId = Number(id)
+      if (!bookingId || Number.isNaN(bookingId)) {
+        return errorResponse('Invalid booking ID', 400)
+      }
+
+      // Verify booking access
+      const { booking, error: accessError } = await verifyBookingAccess(bookingId, context, req)
+      if (accessError) return accessError
+      if (!booking) return errorResponse('Booking not found', 404)
+
+      // Only allow cancel for PENDING bookings
+      if (booking.status !== 'PENDING') {
+        return errorResponse('Only PENDING bookings can be cancelled', 400)
+      }
+
+      const body = await req.json().catch(() => ({}))
+      const reason = body.reason || 'User cancelled'
+
+      // Update booking status to CANCELLED
+      const authHeader = getAuthorizationHeader(req)
+      const options: RequestInit = authHeader ? { headers: { Authorization: authHeader } } : {}
+      
+      const updateData = {
+        id: bookingId,
+        roomId: booking.roomId,
+        checkinDate: booking.checkinDate,
+        checkoutDate: booking.checkoutDate,
+        numGuests: booking.numGuests || 1,
+        note: reason,
+        status: 'CANCELLED'
+      }
+
+      const response = await apiClient.updateBooking(bookingId, updateData)
+      if (!response.success) {
+        return NextResponse.json(
+          { error: response.error || 'Failed to cancel booking' },
+          { status: 500 }
+        )
+      }
+      return successResponse(response.data)
+    }
+
+    // User update booking (only for PENDING bookings)
+    if (action === 'update' && id) {
+      const { context, error: authError } = await createApiContext(req)
+      if (authError) return authError
+      if (!context) return errorResponse('Unauthorized', 401)
+
+      const bookingId = Number(id)
+      if (!bookingId || Number.isNaN(bookingId)) {
+        return errorResponse('Invalid booking ID', 400)
+      }
+
+      // Verify booking access
+      const { booking, error: accessError } = await verifyBookingAccess(bookingId, context, req)
+      if (accessError) return accessError
+      if (!booking) return errorResponse('Booking not found', 404)
+
+      // Only allow update for PENDING bookings
+      if (booking.status !== 'PENDING') {
+        return errorResponse('Only PENDING bookings can be updated', 400)
+      }
+
+      const body = await req.json().catch(() => null)
+      if (!body || typeof body !== 'object') {
+        return errorResponse('Invalid JSON body', 400)
+      }
+
+      const authHeader = getAuthorizationHeader(req)
+      const options: RequestInit = authHeader ? { headers: { Authorization: authHeader } } : {}
+
+      const updateData = {
+        id: bookingId,
+        roomId: body.roomId || booking.roomId,
+        checkinDate: body.checkinDate || booking.checkinDate,
+        checkoutDate: body.checkoutDate || booking.checkoutDate,
+        numGuests: body.numGuests || booking.numGuests || 1,
+        note: body.note || booking.note || ''
+      }
+
+      const response = await apiClient.updateBooking(bookingId, updateData)
+      return response.success
+        ? successResponse(response.data)
+        : errorResponse(response.error || 'Failed to update booking')
+    }
+
+    // Default: Admin/Staff update booking
     const body = await req.json().catch(() => null)
     if (!body || typeof body !== 'object' || !body.id) {
-      return NextResponse.json({ error: 'Invalid JSON body or missing id' }, { status: 400 })
+      return errorResponse('Invalid JSON body or missing id', 400)
     }
+
+    const { context, error: authError } = await createApiContext(req)
+    if (authError) return authError
+    if (!context) return errorResponse('Unauthorized', 401)
+
+    // Only admin/staff/office can update bookings directly
+    if (!context.isAdmin && !context.isStaff && !context.isOffice) {
+      return errorResponse('Forbidden', 403)
+    }
+
+    const authHeader = getAuthorizationHeader(req)
+    const options: RequestInit = authHeader ? { headers: { Authorization: authHeader } } : {}
+
     const response = await apiClient.updateBooking(body.id, body)
     return response.success
-      ? NextResponse.json(response.data)
-      : NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
+      ? successResponse(response.data)
+      : errorResponse(response.error || 'Request failed')
   } catch (error: any) {
-    return NextResponse.json({ error: error?.message || 'Internal server error' }, { status: 500 })
+    return handleApiError(error, 'Failed to update booking')
   }
 }
 
 export async function DELETE(req: NextRequest) {
   try {
+    const { context, error: authError } = await createApiContext(req)
+    if (authError) return authError
+    if (!context) return errorResponse('Unauthorized', 401)
+
+    // Only admin/office can delete bookings
+    if (!context.isAdmin && !context.isOffice) {
+      return errorResponse('Forbidden', 403)
+    }
+
     const { searchParams } = new URL(req.url)
     const id = searchParams.get('id')
     if (!id) {
-      return NextResponse.json({ error: 'Booking ID is required' }, { status: 400 })
+      return errorResponse('Booking ID is required', 400)
     }
     const bookingId = Number(id)
     if (!bookingId || Number.isNaN(bookingId)) {
-      return NextResponse.json({ error: 'Invalid booking ID' }, { status: 400 })
+      return errorResponse('Invalid booking ID', 400)
     }
-    const response = await apiClient.deleteBooking(bookingId)
+
+    const authHeader = getAuthorizationHeader(req)
+    const options: RequestInit = authHeader ? { headers: { Authorization: authHeader } } : {}
+
+    const response = await apiClient.deleteBooking(bookingId, options)
     return response.success
-      ? NextResponse.json({ message: 'Booking deleted successfully' })
-      : NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
+      ? successResponse({ message: 'Booking deleted successfully' })
+      : errorResponse(response.error || 'Request failed')
   } catch (error: any) {
-    return NextResponse.json({ error: error?.message || 'Internal server error' }, { status: 500 })
+    return handleApiError(error, 'Failed to delete booking')
   }
 }

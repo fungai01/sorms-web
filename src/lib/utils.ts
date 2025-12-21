@@ -14,15 +14,76 @@ export const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export const PHONE_REGEX = /^[0-9]{10,11}$/;
 
 export function isValidEmail(email: string): boolean {
+  if (!email.trim()) return true; // Email là optional
   return EMAIL_REGEX.test(email);
 }
 
 export function isValidPhone(phone: string): boolean {
-  return PHONE_REGEX.test(phone);
+  if (!phone.trim()) return true; // Phone là optional
+  const phoneRegex = /^(0|\+84)[1-9][0-9]{8,9}$/;
+  return phoneRegex.test(phone.replace(/\s/g, ''));
 }
 
 export function isValidFullName(name: string): boolean {
-  return name.trim().length >= 3;
+  return name.trim().length >= 2;
+}
+
+export function isValidCCCD(cccd: string): boolean {
+  if (!cccd.trim()) return false;
+  // CCCD/CMND phải là số và có độ dài 9 hoặc 12 chữ số
+  const cleaned = cccd.replace(/\s/g, '');
+  return /^\d{9}$|^\d{12}$/.test(cleaned);
+}
+
+export function isValidDateOfBirth(dob: string): boolean {
+  if (!dob.trim()) return true; // DOB là optional
+  const dobDate = new Date(dob);
+  const today = new Date();
+  const minDate = new Date();
+  minDate.setFullYear(today.getFullYear() - 120); // Không quá 120 tuổi
+  
+  return dobDate <= today && dobDate >= minDate;
+}
+
+export interface PersonalInfoValidation {
+  fullName: string;
+  dateOfBirth: string;
+  cccd: string;
+  phone: string;
+  email: string;
+}
+
+export function validatePersonalInfo(info: PersonalInfoValidation): { isValid: boolean; errors: string[] } {
+  const errors: string[] = [];
+
+  if (!info.fullName.trim()) {
+    errors.push("Vui lòng nhập họ tên");
+  } else if (info.fullName.trim().length < 2) {
+    errors.push("Họ tên phải có ít nhất 2 ký tự");
+  }
+
+  if (!info.cccd.trim()) {
+    errors.push("Vui lòng nhập số CCCD/CMND");
+  } else if (!isValidCCCD(info.cccd)) {
+    errors.push("Số CCCD/CMND không hợp lệ. Vui lòng nhập 9 hoặc 12 chữ số");
+  }
+
+  if (info.email.trim() && !isValidEmail(info.email)) {
+    errors.push("Email không hợp lệ");
+  }
+
+  if (info.phone.trim() && !isValidPhone(info.phone)) {
+    errors.push("Số điện thoại không hợp lệ. Vui lòng nhập số điện thoại Việt Nam (10-11 chữ số)");
+  }
+
+  if (info.dateOfBirth.trim() && !isValidDateOfBirth(info.dateOfBirth)) {
+    errors.push("Ngày sinh không hợp lệ");
+  }
+
+  return {
+    isValid: errors.length === 0,
+    errors
+  };
 }
 
 export function getUserFormErrors(data: {

@@ -182,7 +182,7 @@ export default function OpenDoorPage() {
       formData.append('image', file);
 
       // Call API to open door
-      const response = await fetch(`/api/system/security/open-door`, {
+      const response = await fetch(`/api/system/verification/open-door`, {
         method: 'POST',
         credentials: 'include',
         body: formData,

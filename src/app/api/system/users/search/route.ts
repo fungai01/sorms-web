@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { API_CONFIG } from '@/lib/config'
-import { getAuthorizationHeader } from '@/lib/auth-utils'
+import { getAuthorizationHeader } from '@/lib/auth-service'
 
 const BASE = API_CONFIG.BASE_URL
 

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { apiClient } from '@/lib/api-client'
-import { isAdmin } from '@/lib/auth-utils'
+import { isAdmin } from '@/lib/auth-service'
 
 // GET - list roles or get by id
 export async function GET(req: NextRequest) {

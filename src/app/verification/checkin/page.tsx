@@ -423,29 +423,6 @@ export default function CheckInPage() {
         numGuests = b.numGuests || b.num_guests || b.guests || b.numberOfGuests || undefined;
         bookingUserId = b.userId ? String(b.userId) : (b.user_id ? String(b.user_id) : (b.user?.id ? String(b.user.id) : undefined));
         
-        // if ((!userName || !userEmail || !phoneNumber) && bookingUserId) {
-        //   try {
-        //     const userRes = await fetch(`/api/system/users?id=${bookingUserId}`, { credentials: 'include' });
-        //     if (userRes.ok) {
-        //       const userData = await userRes.json();
-        //       const user = Array.isArray(userData) ? userData.find((u: any) => String(u.id) === String(bookingUserId)) : userData;
-        //       if (user) {
-        //         if (!userName) {
-        //           userName = user.fullName || user.full_name || user.name || user.userName || undefined;
-        //         }
-        //         if (!userEmail) {
-        //           userEmail = user.email || undefined;
-        //         }
-        //         if (!phoneNumber) {
-        //           phoneNumber = user.phoneNumber || user.phone_number || user.phone || undefined;
-        //         }
-        //       }
-        //     }
-        //   } catch (userErr) {
-        //     console.error('Error fetching user info:', userErr);
-        //   }
-        // }
-        
         // Try to get phoneNumber from booking if not found in user
         if (!phoneNumber) {
           phoneNumber = b.phoneNumber || b.phone_number || b.phone || b.user?.phoneNumber || b.user?.phone_number || b.user?.phone || undefined;
@@ -596,7 +573,7 @@ export default function CheckInPage() {
       formData.append('faceRef', 'true');
 
       // Use Next.js API route as proxy
-      const res = await fetch(`https://backend.sorms.online/api/bookings/${result.bookingId}/checkin`, {
+      const res = await fetch(`/api/system/bookings?id=${result.bookingId}&action=checkin`, {
         method: 'POST',
         credentials: 'include',
         body: formData,
@@ -632,8 +609,7 @@ export default function CheckInPage() {
         if (data.responseCode === 'S0004' || data.responseCode === 'INVALID_REQUEST') {
           errorMessage = 'Thời gian check-in không hợp lệ.\n' +
             'Vui lòng kiểm tra:\n' +
-            '• Thời gian hiện tại phải trong khoảng từ ngày check-in đến ngày check-out\n' +
-            '• Booking phải ở trạng thái APPROVED'
+            '• Thời gian hiện tại phải trong khoảng từ ngày check-in đến ngày check-out'
         }
         
         setFlash({ type: 'error', text: errorMessage })

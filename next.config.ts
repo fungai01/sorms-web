@@ -12,6 +12,43 @@ const nextConfig: NextConfig = {
     ignoreDuringBuilds: true,
   },
   
+  // Webpack configuration to handle Node.js modules in browser
+  webpack: (config, { isServer }) => {
+    if (!isServer) {
+      // Ignore Node.js modules that aren't available in the browser
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        fs: false,
+        encoding: false,
+        path: false,
+        crypto: false,
+        stream: false,
+        util: false,
+        buffer: false,
+        url: false,
+        http: false,
+        https: false,
+        zlib: false,
+        querystring: false,
+        os: false,
+        net: false,
+        tls: false,
+        child_process: false,
+      };
+      
+      // Use IgnorePlugin to ignore encoding module when imported by node-fetch
+      const webpack = require("webpack");
+      config.plugins.push(
+        new webpack.IgnorePlugin({
+          resourceRegExp: /^encoding$/,
+          contextRegExp: /node-fetch/,
+        })
+      );
+    }
+    
+    return config;
+  },
+  
   // Security headers
   async headers() {
     return [

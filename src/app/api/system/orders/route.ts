@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { apiClient } from '@/lib/api-client'
+import { getAuthorizationHeader } from '@/lib/auth-service'
 import { API_CONFIG } from '@/lib/config'
-import { getAuthorizationHeader } from '@/lib/auth-utils'
-
-const BASE = API_CONFIG.BASE_URL
 
 export async function GET(req: NextRequest) {
   try {
@@ -20,12 +19,12 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: 'Invalid staffId or orderId' }, { status: 400 })
       }
       const auth = getAuthorizationHeader(req)
-      const res = await fetch(`${BASE}/orders/staff/${staffIdNum}/tasks/${orderIdNum}`, {
-        headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) },
-      })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
-      return NextResponse.json(data.data ?? data)
+      const options: RequestInit = auth ? { headers: { Authorization: auth } } : {}
+      const response = await apiClient.get(`/orders/staff/${staffIdNum}/tasks/${orderIdNum}`, options)
+      if (!response.success) {
+        return NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
+      }
+      return NextResponse.json(response.data)
     }
 
     // Staff workflow: Get staff tasks
@@ -36,18 +35,18 @@ export async function GET(req: NextRequest) {
       }
       const status = searchParams.get('status') || undefined
       const auth = getAuthorizationHeader(req)
+      const options: RequestInit = auth ? { headers: { Authorization: auth } } : {}
       
-      let url = `${BASE}/orders/staff/${staffIdNum}/tasks`
+      let endpoint = `/orders/staff/${staffIdNum}/tasks`
       if (status) {
-        url += `?status=${encodeURIComponent(status)}`
+        endpoint += `?status=${encodeURIComponent(status)}`
       }
       
-      const res = await fetch(url, {
-        headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) },
-      })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
-      const responseData = data.data ?? data
+      const response = await apiClient.get(endpoint, options)
+      if (!response.success) {
+        return NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
+      }
+      const responseData = response.data
       const items = Array.isArray(responseData) ? responseData : []
       return NextResponse.json({ items, total: items.length })
     }
@@ -56,26 +55,31 @@ export async function GET(req: NextRequest) {
       const idNum = Number(orderId)
       if (Number.isNaN(idNum)) return NextResponse.json({ error: 'Invalid orderId' }, { status: 400 })
       const auth = getAuthorizationHeader(req)
-      const res = await fetch(`${BASE}/orders/${idNum}`, { headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) } })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
-      return NextResponse.json(data.data ?? data)
+      const options: RequestInit = auth ? { headers: { Authorization: auth } } : {}
+      const response = await apiClient.getServiceOrder(idNum)
+      if (!response.success) {
+        return NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
+      }
+      return NextResponse.json(response.data)
     }
 
     if (myOrders) {
       const bookingId = searchParams.get('bookingId')
       const auth = getAuthorizationHeader(req)
+      const options: RequestInit = auth ? { headers: { Authorization: auth } } : {}
       
-      // Build URL with bookingId query param if provided
-      let url = `${BASE}/orders/my-orders`
-      if (bookingId) {
-        url += `?bookingId=${bookingId}`
+      const bookingIdNum = bookingId ? Number(bookingId) : undefined
+      // Verify authentication before making request
+      if (!auth) {
+        return NextResponse.json({ error: 'Unauthenticated', items: [] }, { status: 401 })
       }
-      
-      const res = await fetch(url, { headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) } })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
-      return NextResponse.json(data.data ?? data)
+
+      // `getMyServiceOrders` currently only accepts an optional bookingId parameter
+      const response = await apiClient.getMyServiceOrders(bookingIdNum)
+      if (!response.success) {
+        return NextResponse.json({ error: response.error || 'Request failed', items: [] }, { status: 500 })
+      }
+      return NextResponse.json(response.data)
     }
 
     // Default: list orders - Backend doesn't have GET /orders endpoint
@@ -99,46 +103,53 @@ export async function POST(req: NextRequest) {
       const idNum = Number(orderId)
       if (Number.isNaN(idNum)) return NextResponse.json({ error: 'Invalid orderId' }, { status: 400 })
       const auth = getAuthorizationHeader(req)
-      const res = await fetch(`${BASE}/orders/${idNum}/items`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) },
-        body: JSON.stringify(body),
-      })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
-      return NextResponse.json(data.data ?? data, { status: 201 })
+      const options: RequestInit = auth ? { headers: { Authorization: auth } } : {}
+      const response = await apiClient.addOrderItem(
+        idNum,
+        body.serviceId,
+        body.quantity,
+        body.serviceDate,
+        body.serviceTime,
+        body.assignedStaffId
+      )
+      if (!response.success) {
+        return NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
+      }
+      return NextResponse.json(response.data, { status: 201 })
     }
 
     if (action === 'confirm') {
       if (!orderId) return NextResponse.json({ error: 'orderId is required' }, { status: 400 })
       const idNum = Number(orderId)
       if (Number.isNaN(idNum)) return NextResponse.json({ error: 'Invalid orderId' }, { status: 400 })
-      const res = await fetch(`${BASE}/orders/${idNum}/confirm`, { method: 'POST', headers: { 'Content-Type': 'application/json', accept: '*/*' } })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
-      return NextResponse.json(data.data ?? data)
+      const response = await apiClient.confirmOrder(idNum)
+      if (!response.success) {
+        return NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
+      }
+      return NextResponse.json(response.data)
     }
 
     if (action === 'cancel') {
       if (!orderId) return NextResponse.json({ error: 'orderId is required' }, { status: 400 })
       const idNum = Number(orderId)
       if (Number.isNaN(idNum)) return NextResponse.json({ error: 'Invalid orderId' }, { status: 400 })
-      const res = await fetch(`${BASE}/orders/${idNum}/cancel`, { method: 'POST', headers: { 'Content-Type': 'application/json', accept: '*/*' } })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
-      return NextResponse.json(data.data ?? data)
+      const auth = getAuthorizationHeader(req)
+      const options: RequestInit = auth ? { headers: { Authorization: auth } } : {}
+      const response = await apiClient.post(`/orders/${idNum}/cancel`, undefined, options)
+      if (!response.success) {
+        return NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
+      }
+      return NextResponse.json(response.data)
     }
 
     if (action === 'cart') {
       const auth = getAuthorizationHeader(req)
-      const res = await fetch(`${BASE}/orders/cart`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) },
-        body: JSON.stringify(body),
-      })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
-      return NextResponse.json(data.data ?? data, { status: 201 })
+      const options: RequestInit = auth ? { headers: { Authorization: auth } } : {}
+      const response = await apiClient.createOrderCart(body.bookingId)
+      if (!response.success) {
+        return NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
+      }
+      return NextResponse.json(response.data, { status: 201 })
     }
 
     // Staff workflow: Create service order
@@ -182,23 +193,32 @@ export async function POST(req: NextRequest) {
         note: body.note || null,
       }
       
+      // Call backend POST /orders/service endpoint directly
       const auth = getAuthorizationHeader(req)
-      const res = await fetch(`${BASE}/orders/${payload.orderId}/items`, {
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json',
+      }
+      if (auth) {
+        headers['Authorization'] = auth
+      }
+      
+      const backendUrl = `${API_CONFIG.BASE_URL}/orders/service`
+      const backendRes = await fetch(backendUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) },
+        headers,
         body: JSON.stringify(payload),
       })
       
-      const data = await res.json().catch(() => ({}))
-      
-      if (!res.ok) {
+      if (!backendRes.ok) {
+        const errorData = await backendRes.json().catch(() => ({ error: `Backend error: ${backendRes.status}` }))
         return NextResponse.json(
-          { error: data?.message || data?.error || `Backend error: ${res.status}` },
-          { status: res.status >= 400 && res.status < 500 ? res.status : 500 }
+          { error: errorData.error || errorData.message || 'Request failed' },
+          { status: backendRes.status || 500 }
         )
       }
       
-      return NextResponse.json(data.data ?? data, { status: 201 })
+      const data = await backendRes.json()
+      return NextResponse.json(data.data || data, { status: 201 })
     }
 
     // Staff workflow: Staff confirm order
@@ -207,14 +227,12 @@ export async function POST(req: NextRequest) {
       const idNum = Number(orderId)
       if (Number.isNaN(idNum)) return NextResponse.json({ error: 'Invalid orderId' }, { status: 400 })
       const auth = getAuthorizationHeader(req)
-      const res = await fetch(`${BASE}/orders/${idNum}/staff/confirm`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) },
-        body: JSON.stringify(body),
-      })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
-      return NextResponse.json(data.data ?? data)
+      const options: RequestInit = auth ? { headers: { Authorization: auth } } : {}
+      const response = await apiClient.staffConfirmOrder(idNum, body.staffId, body.note)
+      if (!response.success) {
+        return NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
+      }
+      return NextResponse.json(response.data)
     }
 
     // Staff workflow: Staff reject order
@@ -223,14 +241,12 @@ export async function POST(req: NextRequest) {
       const idNum = Number(orderId)
       if (Number.isNaN(idNum)) return NextResponse.json({ error: 'Invalid orderId' }, { status: 400 })
       const auth = getAuthorizationHeader(req)
-      const res = await fetch(`${BASE}/orders/${idNum}/staff/reject`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) },
-        body: JSON.stringify(body),
-      })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
-      return NextResponse.json(data.data ?? data)
+      const options: RequestInit = auth ? { headers: { Authorization: auth } } : {}
+      const response = await apiClient.staffRejectOrder(idNum, body.staffId, body.reason)
+      if (!response.success) {
+        return NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
+      }
+      return NextResponse.json(response.data)
     }
 
     // Complete service
@@ -239,25 +255,20 @@ export async function POST(req: NextRequest) {
       const idNum = Number(orderId)
       if (Number.isNaN(idNum)) return NextResponse.json({ error: 'Invalid orderId' }, { status: 400 })
       const auth = getAuthorizationHeader(req)
-      const res = await fetch(`${BASE}/orders/${idNum}/complete`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) },
-        body: JSON.stringify(body),
-      })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
-      return NextResponse.json(data.data ?? data)
+      const options: RequestInit = auth ? { headers: { Authorization: auth } } : {}
+      const response = await apiClient.post(`/orders/${idNum}/complete`, body, options)
+      if (!response.success) {
+        return NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
+      }
+      return NextResponse.json(response.data)
     }
 
     // Default create order
-    const res = await fetch(`${BASE}/orders`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', accept: '*/*' },
-      body: JSON.stringify(body),
-    })
-    const data = await res.json().catch(() => ({}))
-    if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
-    return NextResponse.json(data.data ?? data, { status: 201 })
+    const response = await apiClient.post('/orders', body)
+    if (!response.success) {
+      return NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
+    }
+    return NextResponse.json(response.data, { status: 201 })
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || 'Internal server error' }, { status: 500 })
   }
@@ -275,14 +286,12 @@ export async function PUT(req: NextRequest) {
       const idNum = Number(orderId)
       if (Number.isNaN(idNum)) return NextResponse.json({ error: 'Invalid orderId' }, { status: 400 })
       const auth = getAuthorizationHeader(req)
-      const res = await fetch(`${BASE}/orders/${idNum}/schedule`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', accept: '*/*', ...(auth ? { Authorization: auth } : {}) },
-        body: JSON.stringify(body),
-      })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
-      return NextResponse.json(data.data ?? data)
+      const options: RequestInit = auth ? { headers: { Authorization: auth } } : {}
+      const response = await apiClient.put(`/orders/${idNum}/schedule`, body, options)
+      if (!response.success) {
+        return NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
+      }
+      return NextResponse.json(response.data)
     }
 
     // Update order item (existing)
@@ -291,14 +300,13 @@ export async function PUT(req: NextRequest) {
       const o = Number(orderId)
       const i = Number(itemId)
       if (Number.isNaN(o) || Number.isNaN(i)) return NextResponse.json({ error: 'Invalid ids' }, { status: 400 })
-      const res = await fetch(`${BASE}/orders/${o}/items/${i}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', accept: '*/*' },
-        body: JSON.stringify(body),
-      })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
-      return NextResponse.json(data.data ?? data)
+      const auth = getAuthorizationHeader(req)
+      const options: RequestInit = auth ? { headers: { Authorization: auth } } : {}
+      const response = await apiClient.updateOrderItem(o, i, body.quantity)
+      if (!response.success) {
+        return NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
+      }
+      return NextResponse.json(response.data)
     }
 
     return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
@@ -317,10 +325,11 @@ export async function DELETE(req: NextRequest) {
     const o = Number(orderId)
     const i = Number(itemId)
     if (Number.isNaN(o) || Number.isNaN(i)) return NextResponse.json({ error: 'Invalid ids' }, { status: 400 })
-    const res = await fetch(`${BASE}/orders/${o}/items/${i}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json', accept: '*/*' } })
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}))
-      return NextResponse.json({ error: data?.message || `Backend error: ${res.status}` }, { status: 500 })
+    const auth = getAuthorizationHeader(req)
+    const options: RequestInit = auth ? { headers: { Authorization: auth } } : {}
+    const response = await apiClient.removeOrderItem(o, i)
+    if (!response.success) {
+      return NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
     }
     return NextResponse.json({ message: 'Order item deleted successfully' })
   } catch (error: any) {

@@ -1,6 +1,6 @@
 // API Client for connecting to backend
 import { API_CONFIG } from './config'
-import { authService } from './auth-service'
+import { authService, decodeJWTPayload } from './auth-service'
 import { authFetch } from './http'
 import { generateBookingCode } from './utils'
 import type { StaffProfile } from './types'
@@ -452,6 +452,93 @@ class ApiClient {
     return this.post(`/bookings/${id}/checkout`, payload)
   }
 
+  // User cancel booking - update status to CANCELLED
+  async cancelBooking(id: number, reason?: string) {
+    // Use Next.js API route as proxy to handle user cancellation
+    try {
+      const token = authService.getAccessToken();
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const response = await fetch(`/api/system/bookings?id=${id}&action=cancel`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ reason }),
+        credentials: 'include',
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+        return {
+          success: false,
+          error: errorData.error || errorData.message || `Failed to cancel booking: ${response.status}`,
+        };
+      }
+
+      const data = await response.json();
+      return {
+        success: true,
+        data: data.data ?? data,
+      };
+    } catch (error) {
+      console.error('cancelBooking error:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to cancel booking',
+      };
+    }
+  }
+
+  // User update booking - only for PENDING bookings
+  async updateMyBooking(id: number, bookingData: { roomId?: number; checkinDate?: string; checkoutDate?: string; numGuests?: number; note?: string }) {
+    // Use Next.js API route as proxy
+    try {
+      const token = authService.getAccessToken();
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const formattedData: any = {
+        id,
+        ...bookingData,
+      };
+
+      const response = await fetch(`/api/system/bookings?id=${id}&action=update`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify(formattedData),
+        credentials: 'include',
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+        return {
+          success: false,
+          error: errorData.error || errorData.message || `Failed to update booking: ${response.status}`,
+        };
+      }
+
+      const data = await response.json();
+      return {
+        success: true,
+        data: data.data ?? data,
+      };
+    } catch (error) {
+      console.error('updateMyBooking error:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to update booking',
+      };
+    }
+  }
+
   async approveBooking(id: number, approverId?: string, reason?: string, options?: RequestInit) {
     // Gọi trực tiếp backend endpoint: /bookings/{id}/approve (không qua Next.js route)
     // Body: { bookingId, approverId, decision, reason }
@@ -466,7 +553,6 @@ class ApiClient {
           // Thử lấy từ token trực tiếp
           const token = authService.getAccessToken()
           if (token) {
-            const { decodeJWTPayload } = await import('./auth-utils')
             const payload = decodeJWTPayload(token)
             if (payload?.userId) {
               finalApproverId = String(payload.userId)
@@ -514,7 +600,6 @@ class ApiClient {
           // Thử lấy từ token trực tiếp
           const token = authService.getAccessToken()
           if (token) {
-            const { decodeJWTPayload } = await import('./auth-utils')
             const payload = decodeJWTPayload(token)
             if (payload?.userId) {
               finalApproverId = String(payload.userId)
@@ -612,34 +697,6 @@ class ApiClient {
     return this.get(`/orders/${id}`)
   }
 
-  // Order Cart Workflow - Create cart
-  async createOrderCart(data: { bookingId: number; requestedBy: string; note?: string }) {
-    return this.post('/orders/cart', {
-      bookingId: data.bookingId,
-      requestedBy: data.requestedBy,
-      note: data.note || null
-    })
-  }
-
-  // Order Cart Workflow - Add item to order (replaces old addOrderItem)
-  async addOrderItemToCart(orderId: number, itemData: { serviceId: number; quantity: number }) {
-    return this.post(`/orders/${orderId}/items`, {
-      serviceId: itemData.serviceId,
-      quantity: itemData.quantity
-    })
-  }
-
-  // Order Cart Workflow - Update item quantity
-  async updateOrderItem(orderId: number, itemId: number, quantity: number) {
-    return this.put(`/orders/${orderId}/items/${itemId}`, {
-      quantity: quantity
-    })
-  }
-
-  // Order Cart Workflow - Remove item
-  async removeOrderItem(orderId: number, itemId: number) {
-    return this.delete(`/orders/${orderId}/items/${itemId}`)
-  }
 
   async createServiceOrder(orderData: any) {
     // Normalize serviceTime to LocalDateTime format without timezone for Spring (yyyy-MM-dd'T'HH:mm:ss)
@@ -739,6 +796,44 @@ class ApiClient {
 
   async confirmOrder(orderId: number) {
     return this.post(`/orders/${orderId}/confirm`)
+  }
+
+  // Create service order with staff confirmation workflow
+  // Backend endpoint: POST /orders/service
+  async createServiceOrderWithStaff(payload: {
+    bookingId: number;
+    orderId: number;
+    serviceId: number;
+    quantity: number;
+    assignedStaffId: number;
+    requestedBy: string;
+    serviceTime: string; // LocalDateTime format: yyyy-MM-dd'T'HH:mm:ss
+    note?: string;
+  }) {
+    return this.post('/orders/service', payload)
+  }
+
+  // Cart-based order workflow
+  async createOrderCart(bookingId: number) {
+    return this.post('/orders/cart', { bookingId })
+  }
+
+  async addOrderItem(orderId: number, serviceId: number, quantity: number, serviceDate?: string, serviceTime?: string, assignedStaffId?: number) {
+    return this.post(`/orders/${orderId}/items`, {
+      serviceId,
+      quantity,
+      serviceDate,
+      serviceTime,
+      assignedStaffId
+    })
+  }
+
+  async updateOrderItem(orderId: number, itemId: number, quantity: number) {
+    return this.put(`/orders/${orderId}/items/${itemId}`, { quantity })
+  }
+
+  async removeOrderItem(orderId: number, itemId: number) {
+    return this.delete(`/orders/${orderId}/items/${itemId}`)
   }
 
   // Payments
@@ -850,30 +945,36 @@ class ApiClient {
   }
 
   // Users API
-  async getUsers(params?: { role?: string; page?: number; size?: number; keyword?: string }) {
+  async getUsers(params?: { role?: string; page?: number; size?: number; keyword?: string; email?: string; fullName?: string; phoneNumber?: string; idCardNumber?: string; status?: string }, options?: RequestInit) {
     const queryParams = new URLSearchParams();
     if (params?.page !== undefined) queryParams.set('page', params.page.toString());
     if (params?.size !== undefined) queryParams.set('size', params.size.toString());
-    if (params?.keyword) queryParams.set('q', params.keyword);
-
-    // Map FE role -> BE role code for search filters
-    const mapAppRoleToBackend = (r?: string): string | undefined => {
-      if (!r) return undefined
-      const v = String(r).trim().toUpperCase()
-      // Primary roles used by BE security annotations
-      if (v === 'ADMIN_SYTEM') return 'ADMIN_SYTEM'
-      if (v === 'STAFF') return 'STAFF'
-      if (v === 'ADMINISTRATIVE') return 'ADMINISTRATIVE'
-      if (v === 'SERCURITY') return 'SECURITY'
-      if (v === 'USER') return 'USER'
-      return undefined
+    
+    // Backend accepts: email, fullName, phoneNumber, idCardNumber, status
+    // Map keyword to email if it looks like an email, otherwise to fullName
+    if (params?.keyword) {
+      const keyword = params.keyword.trim();
+      // Check if keyword looks like an email
+      if (keyword.includes('@')) {
+        queryParams.set('email', keyword);
+      } else {
+        // Try as fullName first, backend will search in multiple fields
+        queryParams.set('fullName', keyword);
+      }
     }
+    
+    // Direct parameter mapping
+    if (params?.email) queryParams.set('email', params.email);
+    if (params?.fullName) queryParams.set('fullName', params.fullName);
+    if (params?.phoneNumber) queryParams.set('phoneNumber', params.phoneNumber);
+    if (params?.idCardNumber) queryParams.set('idCardNumber', params.idCardNumber);
+    if (params?.status) queryParams.set('status', params.status);
 
-    const mappedRole = mapAppRoleToBackend(params?.role)
-    if (mappedRole) queryParams.set('role', mappedRole)
+    // Note: Backend doesn't support 'role' parameter in /users/search endpoint
+    // Role filtering should be handled at service level if needed
 
     const endpoint = `/users/search${queryParams.toString() ? '?' + queryParams.toString() : ''}`;
-    return this.get(endpoint);
+    return this.get(endpoint, options);
   }
 
   async getStaffUsers() {
@@ -1017,14 +1118,40 @@ class ApiClient {
   }
 
   async getPaymentStats() {
-    // Payment API not implemented yet - return empty data
-    return { 
-      success: true, 
-      data: { 
-        count: 0, 
-        sum: 0, 
-        series: [] 
-      } 
+    try {
+      const token = authService.getAccessToken()
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json',
+      }
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`
+      }
+
+      const response = await fetch('/api/system/payments?action=stats', {
+        method: 'GET',
+        headers,
+        credentials: 'include',
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: `HTTP ${response.status}` }))
+        return {
+          success: false,
+          error: errorData.error || errorData.message || `Failed to get payment stats: ${response.status}`,
+        }
+      }
+
+      const data = await response.json()
+      return {
+        success: true,
+        data: data.data ?? data,
+      }
+    } catch (error) {
+      console.error('getPaymentStats error:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to get payment stats',
+      }
     }
   }
 
@@ -1073,3 +1200,138 @@ export const apiClient = new ApiClient()
 
 // Export types
 export type { ApiResponse }
+
+// ========== API Router Utils (merged from api-router-utils.ts) ==========
+import { NextRequest, NextResponse } from 'next/server'
+import { verifyToken, getAuthorizationHeader } from './auth-service'
+import type { UserInfo } from './auth-service'
+
+export interface ApiRouteContext {
+  userInfo: any
+  isAuthenticated: boolean
+  isAdmin: boolean
+  isUser: boolean
+  isStaff: boolean
+  isOffice: boolean
+}
+
+/**
+ * Common middleware for API routes
+ * Verifies authentication and extracts user context
+ */
+export async function createApiContext(req: NextRequest): Promise<{
+  context: ApiRouteContext | null
+  error: NextResponse | null
+}> {
+  try {
+    const userInfo = await verifyToken(req)
+
+    if (!userInfo?.id) {
+      return {
+        context: null,
+        error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      }
+    }
+
+    const role = (userInfo.role || '').toUpperCase()
+    const isAdmin = role === 'ADMIN_SYSTEM' || role === 'ADMIN'
+    const isUser = role === 'USER'
+    const isStaff = role === 'STAFF'
+    const isOffice = role === 'ADMINISTRATIVE' || role === 'OFFICE'
+
+    return {
+      context: {
+        userInfo,
+        isAuthenticated: true,
+        isAdmin,
+        isUser,
+        isStaff,
+        isOffice
+      },
+      error: null
+    }
+  } catch (error: any) {
+    return {
+      context: null,
+      error: NextResponse.json(
+        { error: error.message || 'Authentication failed' },
+        { status: 401 }
+      )
+    }
+  }
+}
+
+/**
+ * Verify that booking belongs to user or user has admin access
+ */
+export async function verifyBookingAccess(
+  bookingId: number,
+  context: ApiRouteContext,
+  req?: NextRequest
+): Promise<{
+  booking: any | null
+  error: NextResponse | null
+}> {
+  try {
+    const authHeader = req ? getAuthorizationHeader(req) : `Bearer ${context.userInfo.token || ''}`
+    const options: RequestInit = authHeader ? { headers: { Authorization: authHeader } } : {}
+
+    const bookingRes = await apiClient.getBooking(bookingId, options as any)
+    if (!bookingRes.success || !bookingRes.data) {
+      return {
+        booking: null,
+        error: NextResponse.json({ error: 'Booking not found' }, { status: 404 })
+      }
+    }
+
+    const booking: any = bookingRes.data
+
+    // Admin/Staff/Office can access any booking
+    if (context.isAdmin || context.isStaff || context.isOffice) {
+      return { booking, error: null }
+    }
+
+    // User can only access their own bookings
+    if (context.isUser && String(booking.userId) !== String(context.userInfo.id)) {
+      return {
+        booking: null,
+        error: NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+      }
+    }
+
+    return { booking, error: null }
+  } catch (error: any) {
+    return {
+      booking: null,
+      error: NextResponse.json(
+        { error: error.message || 'Failed to verify booking access' },
+        { status: 500 }
+      )
+    }
+  }
+}
+
+/**
+ * Common error handler
+ */
+export function handleApiError(error: any, defaultMessage = 'Internal server error'): NextResponse {
+  console.error('API Error:', error)
+  return NextResponse.json(
+    { error: error.message || defaultMessage },
+    { status: error.status || 500 }
+  )
+}
+
+/**
+ * Common success response
+ */
+export function successResponse(data: any, status = 200): NextResponse {
+  return NextResponse.json({ success: true, data }, { status })
+}
+
+/**
+ * Common error response
+ */
+export function errorResponse(message: string, status = 400): NextResponse {
+  return NextResponse.json({ success: false, error: message }, { status })
+}
