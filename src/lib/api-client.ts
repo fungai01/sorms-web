@@ -144,9 +144,11 @@ class ApiClient {
             data: data.data,
           }
         } else {
+          // Vẫn trả về data ngay cả khi có lỗi, vì backend có thể đã tạo resource thành công
           return {
             success: false,
             error: String(data.message || data.error || data.responseCode),
+            data: data.data, // Trả về data để có thể sử dụng nếu cần
           }
         }
       }
@@ -342,13 +344,19 @@ class ApiClient {
 
   async createBooking(bookingData: any, options?: RequestInit) {
     // Backend format: CreateBookingRequest { code: String, userId: String, roomId: Long, checkinDate: LocalDateTime, checkoutDate: LocalDateTime, numGuests: Integer, note: String }
-    const rawUserId = bookingData.userId || bookingData.user_id || null
+    const userInfo = authService.getUserInfo()
+    const rawUserId = bookingData.userId || bookingData.user_id || userInfo?.id || null
     const rawRoomId = bookingData.roomId || bookingData.room_id
     const rawNumGuests = bookingData.numGuests || bookingData.num_guests || bookingData.guests || 1
     
     // Format datetime strings to ensure they're in the correct format (YYYY-MM-DDTHH:mm:ss)
     const formatDateTime = (dateTimeStr: string | undefined): string | undefined => {
       if (!dateTimeStr) return dateTimeStr
+      
+      // Nếu chỉ có ngày (YYYY-MM-DD), thêm thời gian mặc định 00:00:00
+      if (/^\d{4}-\d{2}-\d{2}$/.test(dateTimeStr)) {
+        return `${dateTimeStr}T00:00:00`
+      }
       
       // Nếu đã là format đúng (YYYY-MM-DDTHH:mm:ss), giữ nguyên
       if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(dateTimeStr)) {
@@ -843,6 +851,16 @@ class ApiClient {
     return this.delete(`/orders/${orderId}/items/${itemId}`)
   }
 
+  // Get orders for a specific booking (user's orders)
+  async getMyOrders(bookingId: number) {
+    return this.get(`/orders/my-orders?bookingId=${bookingId}`)
+  }
+
+  // Cancel an order
+  async cancelOrder(orderId: number) {
+    return this.post(`/orders/${orderId}/cancel`)
+  }
+
   // Payments
   async createPayment(payload: { serviceOrderId: number; method: 'CASH' | 'CARD' | 'BANK_TRANSFER' | 'WALLET'; returnUrl?: string; cancelUrl?: string }) {
     return this.post('/payments/create', payload)
@@ -850,6 +868,11 @@ class ApiClient {
 
   async getPayment(transactionId: number | string) {
     return this.get(`/payments/${transactionId}`)
+  }
+
+  // AI Face Recognition
+  async getUserFaceInfo(userId: string) {
+    return this.get(`/ai/recognition/faces/${userId}`)
   }
 
   async getPaymentTransactions() {

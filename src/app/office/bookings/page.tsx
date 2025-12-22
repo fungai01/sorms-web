@@ -12,6 +12,7 @@ import { useBookings, useRooms, useUsers } from "@/hooks/useApi";
 import { apiClient } from "@/lib/api-client";
 import { authService } from "@/lib/auth-service";
 import { useRouter } from "next/navigation";
+import { formatDateTime } from "@/lib/utils";
 
 type BookingRequest = {
   id: number;
@@ -26,8 +27,8 @@ type BookingRequest = {
   numGuests: number;
   note?: string;
   status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED' | 'CHECKED_IN' | 'CHECKED_OUT';
-  created_at: string;
-  updated_at: string;
+  created_at: string | null;
+  updated_at: string | null;
 };
 
 export default function OfficeBookingsPage() {
@@ -125,8 +126,8 @@ export default function OfficeBookingsPage() {
       numGuests: item.numGuests || item.num_guests || 1,
       note: item.note || '',
       status: item.status || 'PENDING',
-      created_at: item.created_at || item.createdAt || '',
-      updated_at: item.updated_at || item.updatedAt || ''
+      created_at: item.created_at || item.createdAt || item.createdDate || item.created || item.dateCreated || item.bookingCreatedAt || null,
+      updated_at: item.updated_at || item.updatedAt || item.updatedDate || item.updated || item.dateUpdated || null
     };
   }), [rawBookings, rooms, users]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -453,7 +454,7 @@ export default function OfficeBookingsPage() {
     const newPendingBookings = bookings.filter(b => 
       b.status === 'PENDING' && 
       !seenBookingIds.current.has(b.id) &&
-      new Date(b.created_at).getTime() > lastBookingCheck.current
+      b.created_at && new Date(b.created_at).getTime() > lastBookingCheck.current
     );
 
     if (newPendingBookings.length > 0) {
@@ -1009,10 +1010,11 @@ export default function OfficeBookingsPage() {
                                   <div className="text-gray-500 text-xs mt-1">
                                     Đặt lúc: {booking.created_at 
                                       ? (() => {
-                                          const date = new Date(booking.created_at);
-                                          return isNaN(date.getTime()) 
-                                            ? booking.created_at 
-                                            : date.toLocaleString('vi-VN');
+                                          try {
+                                            return formatDateTime(booking.created_at);
+                                          } catch {
+                                            return booking.created_at;
+                                          }
                                         })()
                                       : 'N/A'}
                                   </div>
@@ -1291,13 +1293,7 @@ export default function OfficeBookingsPage() {
                           <span className="text-xs sm:text-sm font-semibold text-gray-600">Ngày tạo</span>
                         </div>
                         <p className="text-xs sm:text-sm text-gray-700 break-words">
-                          {new Date(selectedBooking.created_at).toLocaleString('vi-VN', { 
-                            hour: '2-digit', 
-                            minute: '2-digit', 
-                            day: 'numeric',
-                            month: 'numeric',
-                            year: 'numeric'
-                          })}
+                          {formatDateTime(selectedBooking.created_at)}
                         </p>
                       </div>
                     )}
@@ -1310,13 +1306,7 @@ export default function OfficeBookingsPage() {
                           <span className="text-xs sm:text-sm font-semibold text-gray-600">Cập nhật lần cuối</span>
                         </div>
                         <p className="text-xs sm:text-sm text-gray-700 break-words">
-                          {new Date(selectedBooking.updated_at).toLocaleString('vi-VN', {
-                            hour: '2-digit', 
-                            minute: '2-digit', 
-                            day: 'numeric',
-                            month: 'numeric',
-                            year: 'numeric'
-                          })}
+                          {formatDateTime(selectedBooking.updated_at)}
                         </p>
                       </div>
                     )}

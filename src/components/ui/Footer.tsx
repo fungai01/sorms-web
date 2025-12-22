@@ -5,7 +5,7 @@ export default function Footer() {
   const currentYear = new Date().getFullYear();
 
   return (
-    <footer className="bg-card border-t border-border" suppressHydrationWarning>
+    <footer className="bg-card" suppressHydrationWarning>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 sm:py-3" suppressHydrationWarning>
         <div className="flex flex-col sm:flex-row items-center justify-between gap-2 sm:gap-0" suppressHydrationWarning>
           {/* Logo */}

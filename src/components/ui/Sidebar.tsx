@@ -249,7 +249,6 @@ export default function Sidebar({ user, isVisible = false, collapsed = true, onT
         { name: 'Dịch vụ', href: '/user/services', icon: <Icons.Services />, current: pathname.startsWith('/user/services') },
         { name: 'Đơn hàng & Thanh toán', href: '/user/orders', icon: <Icons.ServiceOrders />, current: pathname.startsWith('/user/orders') || pathname.startsWith('/user/payment') },
         { name: 'Lịch sử', href: '/user/history', icon: <Icons.Invoice />, current: pathname.startsWith('/user/history') },
-        { name: 'Đăng ký khuôn mặt', href: '/user/face-register', icon: <Icons.Checkin />, current: pathname.startsWith('/user/face-register') },
       ];
     } else if (isProfile) {
       return [

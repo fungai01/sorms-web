@@ -173,12 +173,14 @@ export function useUserBookings() {
   return useApi(() => fetchFromProxy('/api/system/bookings'))
 }
 
-export function useServices(params?: { q?: string; sortBy?: string; sortOrder?: string; isActive?: boolean }) {
+export function useServices(params?: { q?: string; sortBy?: string; sortOrder?: string; isActive?: boolean; page?: number; size?: number }) {
   const queryParams = new URLSearchParams()
   if (params?.q) queryParams.set('q', params.q)
   if (params?.sortBy) queryParams.set('sortBy', params.sortBy)
   if (params?.sortOrder) queryParams.set('sortOrder', params.sortOrder)
   if (params?.isActive !== undefined) queryParams.set('isActive', params.isActive.toString())
+  if (params?.page !== undefined) queryParams.set('page', String(params.page))
+  if (params?.size !== undefined) queryParams.set('size', String(params.size))
   const endpoint = `/api/system/services${queryParams.toString() ? `?${queryParams.toString()}` : ''}`
   return useApi(() => fetchList(endpoint), [endpoint])
 }

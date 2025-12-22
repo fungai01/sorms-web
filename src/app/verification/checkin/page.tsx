@@ -3,553 +3,302 @@
 import { useState, useEffect, useRef } from "react";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
-import Modal from "@/components/ui/Modal";
+import Badge from "@/components/ui/Badge";
 import dynamic from "next/dynamic";
 import { Html5Qrcode } from "html5-qrcode";
 
-// Dynamic import Webcam để tránh SSR issues
-const WebcamComponent = dynamic(
-  // @ts-ignore - react-webcam type incompatibility with Next.js dynamic import
-  () => import("react-webcam"),
-  { 
-    ssr: false,
-    loading: () => <div className="w-full h-full bg-gray-900 flex items-center justify-center text-white">Đang tải camera...</div>
-  }
-) as any;
+const WebcamComponent = dynamic(() => import("react-webcam") as any, { 
+  ssr: false,
+  loading: () => (
+    <div className="w-full h-full bg-gray-100 flex items-center justify-center">
+      <p className="text-sm text-gray-500">Đang khởi động camera...</p>
+    </div>
+  )
+}) as any;
 
-type QRVerificationResult = {
-  valid: boolean;
+type BookingInfo = {
   bookingId?: number;
   userId?: string;
   userName?: string;
   userEmail?: string;
   phoneNumber?: string;
-  roomId?: number;
   roomCode?: string;
   checkinDate?: string;
   checkoutDate?: string;
   numGuests?: number;
   bookingCode?: string;
-  error?: string;
 };
 
-type FaceVerificationResult = {
-  success: boolean;
-  match: boolean;
-  confidence?: number;
-  message?: string;
-  error?: string;
-};
+type Step = 'scan' | 'info' | 'face' | 'success';
 
 export default function CheckInPage() {
+  const [step, setStep] = useState<Step>('scan');
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<QRVerificationResult | null>(null);
-  const [modalOpen, setModalOpen] = useState(false);
+  const [bookingInfo, setBookingInfo] = useState<BookingInfo | null>(null);
   const [flash, setFlash] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [roomKey, setRoomKey] = useState<string | null>(null);
   
-  // QR Scanner state
   const [scanning, setScanning] = useState(false);
   const [qrScanner, setQrScanner] = useState<Html5Qrcode | null>(null);
   const scannerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [uploadingFile, setUploadingFile] = useState(false);
-  const isProcessingRef = useRef(false); // Flag để ngăn scanner quét lại khi đang xử lý
-  
-  // Face verification state
-  const [faceVerifying, setFaceVerifying] = useState(false);
-  const [faceResult, setFaceResult] = useState<FaceVerificationResult | null>(null);
-  const [cameraError, setCameraError] = useState<string | null>(null);
-  const [keyIssued, setKeyIssued] = useState(false);
-  const [roomKey, setRoomKey] = useState<string | null>(null);
-  const [showCamera, setShowCamera] = useState(false); // State để điều khiển hiển thị camera
+  const isProcessingRef = useRef(false);
   
   const webcamRef = useRef<any>(null);
+  const [cameraError, setCameraError] = useState<string | null>(null);
 
-  // Auto-hide flash messages
   useEffect(() => {
     if (flash) {
-      const timer = setTimeout(() => setFlash(null), 3000);
+      const timer = setTimeout(() => setFlash(null), 4000);
       return () => clearTimeout(timer);
     }
   }, [flash]);
 
-  // QR Scanner setup and cleanup
   useEffect(() => {
+    if (step !== 'scan') return;
+    
     let isMounted = true;
     let scannerInstance: Html5Qrcode | null = null;
 
     const startScanning = async () => {
       if (!isMounted) return;
-
       const element = document.getElementById("qr-reader");
-      if (!element) return;
-
-      if (element.children.length > 0 || qrScanner) return;
+      if (!element || element.children.length > 0 || qrScanner) return;
 
       try {
         scannerInstance = new Html5Qrcode("qr-reader");
-        if (!isMounted) {
-          try {
-            await scannerInstance.clear();
-          } catch (e) {}
-          return;
-        }
+        if (!isMounted) { try { await scannerInstance.clear(); } catch {} return; }
 
         setQrScanner(scannerInstance);
         setScanning(true);
         
-        // Tính toán kích thước qrbox dựa trên kích thước màn hình - đảm bảo hình vuông
-        const getQrBoxSize = () => {
-          if (typeof window === 'undefined') return { width: 600, height: 600 };
-          const width = window.innerWidth;
-          const height = window.innerHeight;
-          // Lấy giá trị nhỏ hơn giữa 90% width và 80% height để đảm bảo hình vuông vừa màn hình
-          const size = Math.min(width * 0.9, height * 0.8);
-          // Đảm bảo tối thiểu 400px
-          const finalSize = Math.max(400, size);
-          return { width: finalSize, height: finalSize };
-        };
-        
-        const qrBoxSize = getQrBoxSize();
+        const size = Math.min(window.innerWidth * 0.85, window.innerHeight * 0.5, 350);
         
         await scannerInstance.start(
-          { 
-            facingMode: "environment"
-          },
-          {
-            fps: 10, // Tăng FPS lên để video mượt hơn
-            qrbox: qrBoxSize,
-            aspectRatio: 1.0,
-            disableFlip: false
-          },
+          { facingMode: "environment" },
+          { fps: 10, qrbox: { width: size, height: size }, aspectRatio: 1.0 },
           async (decodedText) => {
             if (!isMounted || isProcessingRef.current) return;
-            
-            // Đánh dấu đang xử lý để ngăn quét lại
             isProcessingRef.current = true;
-            
             try {
-              if (scannerInstance) {
-                await scannerInstance.stop();
-                await scannerInstance.clear();
-              }
+              if (scannerInstance) { await scannerInstance.stop(); await scannerInstance.clear(); }
               setScanning(false);
               setQrScanner(null);
-              scannerInstance = null;
-              await handleProcessQRToken(decodedText);
-            } catch (err) {
-              console.error('Error stopping scanner:', err);
-              setScanning(false);
-              setQrScanner(null);
-              scannerInstance = null;
-              isProcessingRef.current = false; // Reset flag nếu có lỗi
-            }
+              await processQRCode(decodedText);
+            } catch { isProcessingRef.current = false; }
           },
-          (errorMessage) => {
-            // Ignore errors (just keep scanning)
-          }
+          () => {}
         );
-      } catch (error: any) {
-        console.error('Error starting QR scanner:', error);
-        if (isMounted) {
-          setFlash({ type: 'error', text: 'Không thể khởi động camera. Vui lòng kiểm tra quyền truy cập camera.' });
-          setScanning(false);
-          setQrScanner(null);
-        }
-        scannerInstance = null;
+      } catch {
+        setFlash({ type: 'error', text: 'Không thể khởi động camera' });
+        setScanning(false);
       }
     };
 
-    const timer = setTimeout(() => {
-      if (isMounted && scannerRef.current) {
-        startScanning();
-      }
-    }, 300);
+    const timer = setTimeout(() => { if (isMounted && scannerRef.current) startScanning(); }, 300);
 
     return () => {
       isMounted = false;
       clearTimeout(timer);
-      if (scannerInstance) {
-        (async () => {
-          try {
-            await scannerInstance.stop();
-            await scannerInstance.clear();
-          } catch (e) {}
-        })();
-      }
-      if (qrScanner) {
-        (async () => {
-          try {
-            await qrScanner.stop();
-            await qrScanner.clear();
-          } catch (e) {}
-        })();
-      }
+      if (scannerInstance) { try { scannerInstance.stop(); } catch {} try { scannerInstance.clear(); } catch {} }
     };
-  }, []);
+  }, [step]);
 
-  const handleRestartScan = async () => {
-    // Reset processing flag
-    isProcessingRef.current = false;
-    
-    if (qrScanner) {
-      try {
-        if (scanning) {
-          await qrScanner.stop();
-        }
-        await qrScanner.clear();
-      } catch (e) {
-        console.error('Error stopping scanner:', e);
-      }
-      setQrScanner(null);
-    }
-    setScanning(false);
-    
-    const element = document.getElementById("qr-reader");
-    if (element) {
-      element.innerHTML = '';
-    }
-    
-    setTimeout(async () => {
-      try {
-        const scanner = new Html5Qrcode("qr-reader");
-        setQrScanner(scanner);
-        setScanning(true);
-        
-        // Tính toán kích thước qrbox - đảm bảo hình vuông
-        const getQrBoxSize = () => {
-          if (typeof window === 'undefined') return { width: 600, height: 600 };
-          const width = window.innerWidth;
-          const height = window.innerHeight;
-          // Lấy giá trị nhỏ hơn giữa 90% width và 80% height để đảm bảo hình vuông
-          const size = Math.min(width * 0.9, height * 0.8);
-          // Đảm bảo tối thiểu 400px
-          const finalSize = Math.max(400, size);
-          return { width: finalSize, height: finalSize };
-        };
-        
-        const qrBoxSize = getQrBoxSize();
-        
-        await scanner.start(
-          { 
-            facingMode: "environment"
-          },
-          {
-            fps: 10, // Tăng FPS lên để video mượt hơn
-            qrbox: qrBoxSize,
-            aspectRatio: 1.0,
-            disableFlip: false
-          },
-          async (decodedText) => {
-            if (isProcessingRef.current) return;
-            
-            // Đánh dấu đang xử lý để ngăn quét lại
-            isProcessingRef.current = true;
-            
-            try {
-              await scanner.stop();
-              await scanner.clear();
-              setScanning(false);
-              setQrScanner(null);
-              await handleProcessQRToken(decodedText);
-            } catch (err) {
-              console.error('Error stopping scanner:', err);
-              setScanning(false);
-              setQrScanner(null);
-              isProcessingRef.current = false; // Reset flag nếu có lỗi
-            }
-          },
-          (errorMessage) => {
-            // Ignore errors
-          }
-        );
-      } catch (error: any) {
-        console.error('Error restarting QR scanner:', error);
-        setFlash({ type: 'error', text: 'Không thể khởi động lại camera.' });
-        setScanning(false);
-        setQrScanner(null);
-      }
-    }, 300);
-  };
-
-  const handleScanFile = async (file: File) => {
-    if (!file) return;
-
-    setUploadingFile(true);
-    setFlash(null);
-
-    try {
-      const tempElementId = 'temp-qr-scanner-' + Date.now();
-      const tempDiv = document.createElement('div');
-      tempDiv.id = tempElementId;
-      tempDiv.style.display = 'none';
-      document.body.appendChild(tempDiv);
-
-      try {
-        const html5QrCode = new Html5Qrcode(tempElementId);
-        const decodedText = await html5QrCode.scanFile(file, true);
-        
-        if (decodedText) {
-          await handleProcessQRToken(decodedText);
-        } else {
-          setFlash({ type: 'error', text: 'Không tìm thấy mã QR trong ảnh. Vui lòng thử lại với ảnh khác.' });
-        }
-      } finally {
-        try {
-          const tempEl = document.getElementById(tempElementId);
-          if (tempEl) {
-            document.body.removeChild(tempEl);
-          }
-        } catch (e) {}
-      }
-    } catch (error: any) {
-      console.error('Error scanning file:', error);
-      const errorMessage = error.message || '';
-      if (errorMessage.includes('No QR code found') || errorMessage.includes('not found') || errorMessage.includes('QR code parse error')) {
-        setFlash({ type: 'error', text: 'Không tìm thấy mã QR trong ảnh. Vui lòng kiểm tra lại ảnh.' });
-      } else {
-        setFlash({ type: 'error', text: 'Lỗi khi đọc mã QR từ file. Vui lòng thử lại với ảnh khác.' });
-      }
-    } finally {
-      setUploadingFile(false);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
-    }
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (!file.type.startsWith('image/')) {
-        setFlash({ type: 'error', text: 'Vui lòng chọn file ảnh (JPG, PNG, etc.)' });
-        return;
-      }
-      handleScanFile(file);
-    }
-  };
-
-  const handleProcessQRToken = async (token: string) => {
+  const processQRCode = async (token: string) => {
     const tokenToProcess = (token || '').trim();
     if (!tokenToProcess) {
       setFlash({ type: 'error', text: 'Mã QR không hợp lệ' });
+      isProcessingRef.current = false;
       return;
     }
 
     setLoading(true);
-    setFlash(null);
+
+    let bookingId: number | null = null;
+    let userId: string | null = null;
 
     const tryDecode = (t: string): any | null => {
-      try {
-        let b64 = t.replace(/-/g, '+').replace(/_/g, '/');
-        while (b64.length % 4 !== 0) b64 += '=';
-        const json = atob(b64);
-        const parsed = JSON.parse(json);
-        if (parsed && typeof parsed === 'object') {
-          return parsed;
-        }
-      } catch {}
-      
-      try {
-        const json = atob(t);
-        const parsed = JSON.parse(json);
-        if (parsed && typeof parsed === 'object') {
-          return parsed;
-        }
-      } catch {}
-      
-      try {
-        const parsed = JSON.parse(t);
-        if (parsed && typeof parsed === 'object') {
-          return parsed;
-        }
-      } catch {}
-      
+      try { let b64 = t.replace(/-/g, '+').replace(/_/g, '/'); while (b64.length % 4 !== 0) b64 += '='; return JSON.parse(atob(b64)); } catch {}
+      try { return JSON.parse(atob(t)); } catch {}
+      try { return JSON.parse(t); } catch {}
       return null;
     };
 
     const payload = tryDecode(tokenToProcess);
 
-    let bookingId: number | null = null;
-    let userId: string | null = null;
-
     if (tokenToProcess.includes('|')) {
       const parts = tokenToProcess.split('|');
-      if (parts.length >= 2) {
-        const idPart = parts[0].trim();
-        const userPart = parts[1].trim();
-        if (/^\d+$/.test(idPart)) {
-          bookingId = Number(idPart);
-          userId = userPart || null;
-        }
+      if (parts.length >= 2 && /^\d+$/.test(parts[0].trim())) {
+        bookingId = Number(parts[0].trim());
+        userId = parts[1].trim() || null;
       }
     } else if (payload && typeof payload === 'object') {
       bookingId = Number(payload.bookingId || payload.id || payload.booking_id);
-      userId = payload.userId ? String(payload.userId) : (payload.user_id ? String(payload.user_id) : null);
+      userId = payload.userId ? String(payload.userId) : null;
     } else if (/^\d+$/.test(tokenToProcess)) {
       bookingId = Number(tokenToProcess);
     }
 
     if (!bookingId || Number.isNaN(bookingId)) {
       setLoading(false);
-      setFlash({ type: 'error', text: 'Không thể đọc được bookingId từ mã QR. Vui lòng kiểm tra lại mã QR.' });
-      setResult({ valid: false, error: 'QR token không hợp lệ hoặc không chứa bookingId' });
-      setModalOpen(true);
+      setFlash({ type: 'error', text: 'Không thể đọc thông tin từ mã QR' });
+      isProcessingRef.current = false;
       return;
     }
-
-    // Fetch booking info
-    let bookingCode: string | undefined;
-    let userName: string | undefined;
-    let userEmail: string | undefined;
-    let phoneNumber: string | undefined;
-    let roomCode: string | undefined;
-    let checkinDate: string | undefined;
-    let checkoutDate: string | undefined;
-    let numGuests: number | undefined;
-    let bookingUserId: string | undefined;
 
     try {
-      const infoRes = await fetch(`/api/system/bookings?id=${bookingId}`, { credentials: 'include' });
-      if (infoRes.ok) {
-        const b = await infoRes.json();
-        
-        bookingCode = b.code || b.bookingCode || b.booking_code || undefined;
-        userName = b.userName || b.userName || b.user?.fullName || b.user?.full_name || b.user?.name || b.fullName || b.full_name || b.name || undefined;
-        userEmail = b.userEmail || b.user_email || b.user?.email || b.email || undefined;
-        roomCode = b.roomCode || b.room_code || b.room?.code || b.roomCode || undefined;
-        checkinDate = b.checkinDate || b.checkin_date || b.checkIn || b.check_in || undefined;
-        checkoutDate = b.checkoutDate || b.checkout_date || b.checkOut || b.check_out || undefined;
-        numGuests = b.numGuests || b.num_guests || b.guests || b.numberOfGuests || undefined;
-        bookingUserId = b.userId ? String(b.userId) : (b.user_id ? String(b.user_id) : (b.user?.id ? String(b.user.id) : undefined));
-        
-        // Try to get phoneNumber from booking if not found in user
-        if (!phoneNumber) {
-          phoneNumber = b.phoneNumber || b.phone_number || b.phone || b.user?.phoneNumber || b.user?.phone_number || b.user?.phone || undefined;
-        }
-        
-        if (!roomCode && b.roomId) {
-          try {
-            const roomRes = await fetch(`/api/system/rooms?id=${b.roomId}`, { credentials: 'include' });
-            if (roomRes.ok) {
-              const roomData = await roomRes.json();
-              const room = Array.isArray(roomData) ? roomData.find((r: any) => String(r.id) === String(b.roomId)) : roomData;
-              if (room) {
-                roomCode = room.code || room.roomCode || room.room_code || undefined;
-              }
-            }
-          } catch (roomErr) {
-            console.error('Error fetching room info:', roomErr);
-          }
-        }
-      } else {
-        const errorData = await infoRes.json().catch(() => ({}));
-        console.error('Booking API error:', errorData);
+      const res = await fetch(`/api/system/bookings?id=${bookingId}`, { credentials: 'include' });
+      if (!res.ok) {
         setLoading(false);
-        setFlash({ type: 'error', text: 'Không tìm thấy thông tin đặt phòng. Vui lòng kiểm tra lại mã QR.' });
-        setResult({ valid: false, error: 'Không tìm thấy booking với ID: ' + bookingId });
-        setModalOpen(true);
+        setFlash({ type: 'error', text: 'Không tìm thấy thông tin đặt phòng' });
+        isProcessingRef.current = false;
         return;
       }
-    } catch (e) {
-      console.error('Error fetching booking info:', e);
-      setLoading(false);
-      setFlash({ type: 'error', text: 'Lỗi khi tải thông tin đặt phòng. Vui lòng thử lại.' });
-      setResult({ valid: false, error: 'Lỗi kết nối đến server' });
-      setModalOpen(true);
-      return;
-    }
 
-    const finalUserId = userId || bookingUserId;
+      const b = await res.json();
+      const finalUserId = userId || b.userId || b.user_id || b.accountId || b.account_id;
 
-    if (!finalUserId) {
-      setLoading(false);
-      setFlash({ type: 'error', text: 'Không tìm thấy thông tin user. Vui lòng kiểm tra lại mã QR.' });
-      setResult({ valid: false, error: 'Thiếu thông tin userId' });
-      setModalOpen(true);
-      return;
-    }
-
-    // Dừng QR scanner khi đã quét thành công
-    if (qrScanner && scanning) {
-      try {
-        await qrScanner.stop();
-        await qrScanner.clear();
-      } catch (e) {
-        console.error('Error stopping scanner after success:', e);
+      if (!finalUserId) {
+        setLoading(false);
+        setFlash({ type: 'error', text: 'Thiếu thông tin người dùng' });
+        isProcessingRef.current = false;
+        return;
       }
-      setScanning(false);
-      setQrScanner(null);
+
+      // Helper để lấy userName từ nhiều nguồn
+      const getUserName = () => {
+        return b.userName || 
+               b.user_name || 
+               b.accountName || 
+               b.account_name ||
+               b.fullName ||
+               b.full_name ||
+               b.user?.name ||
+               b.user?.fullName ||
+               b.user?.full_name ||
+               b.account?.name ||
+               b.account?.fullName ||
+               b.account?.full_name ||
+               b.userInfo?.name ||
+               b.accountInfo?.name ||
+               (finalUserId ? `User #${finalUserId}` : 'N/A');
+      };
+
+      // Helper để lấy userEmail từ nhiều nguồn
+      const getUserEmail = () => {
+        return b.userEmail || 
+               b.user_email || 
+               b.accountEmail || 
+               b.account_email ||
+               b.user?.email ||
+               b.account?.email ||
+               b.userInfo?.email ||
+               b.accountInfo?.email ||
+               'N/A';
+      };
+
+      // Helper để lấy phoneNumber từ nhiều nguồn
+      const getPhoneNumber = () => {
+        return b.phoneNumber || 
+               b.phone_number || 
+               b.phone ||
+               b.user?.phone ||
+               b.user?.phoneNumber ||
+               b.user?.phone_number ||
+               b.account?.phone ||
+               b.account?.phoneNumber ||
+               b.account?.phone_number ||
+               b.userInfo?.phone ||
+               b.accountInfo?.phone ||
+               'N/A';
+      };
+
+      // Helper để lấy roomCode từ nhiều nguồn
+      const getRoomCode = () => {
+        const roomId = b.roomId || b.room_id;
+        return b.roomCode || 
+               b.room_code || 
+               b.room?.code ||
+               b.room?.roomCode ||
+               b.room?.room_code ||
+               b.roomName ||
+               b.room_name ||
+               (roomId ? `Room #${roomId}` : 'N/A');
+      };
+
+      setBookingInfo({
+        bookingId,
+        userId: finalUserId,
+        bookingCode: b.code || b.bookingCode || `BK-${bookingId}`,
+        userName: getUserName(),
+        userEmail: getUserEmail(),
+        phoneNumber: getPhoneNumber(),
+        roomCode: getRoomCode(),
+        checkinDate: b.checkinDate || b.checkin_date || b.checkInDate,
+        checkoutDate: b.checkoutDate || b.checkout_date || b.checkOutDate,
+        numGuests: b.numGuests || b.num_guests || b.guests || 1,
+      });
+      
+      setStep('info');
+      setFlash({ type: 'success', text: 'Đã quét mã QR thành công!' });
+    } catch {
+      setFlash({ type: 'error', text: 'Lỗi kết nối đến server' });
+    } finally {
+      setLoading(false);
+      isProcessingRef.current = false;
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !file.type.startsWith('image/')) {
+      setFlash({ type: 'error', text: 'Vui lòng chọn file ảnh' });
+      return;
     }
 
-    setResult({
-      valid: true,
-      bookingId,
-      userId: finalUserId,
-      bookingCode,
-      userName,
-      userEmail,
-      phoneNumber,
-      roomCode,
-      checkinDate,
-      checkoutDate,
-      numGuests,
-    } as any);
-    setLoading(false);
-    setFlash({ type: 'success', text: 'Đã đọc mã QR thành công. Vui lòng kiểm tra thông tin và tiến hành check-in.' });
-    setShowCamera(false); // Reset camera state
-    setModalOpen(true);
-    
-    // Reset processing flag sau khi hiển thị modal
-    setTimeout(() => {
-      isProcessingRef.current = false;
-    }, 1000);
+    setLoading(true);
+    try {
+      const tempId = 'temp-qr-' + Date.now();
+      const tempDiv = document.createElement('div');
+      tempDiv.id = tempId;
+      tempDiv.style.display = 'none';
+      document.body.appendChild(tempDiv);
+
+      const scanner = new Html5Qrcode(tempId);
+      const result = await scanner.scanFile(file, true);
+      document.body.removeChild(tempDiv);
+      
+      if (result) await processQRCode(result);
+      else setFlash({ type: 'error', text: 'Không tìm thấy mã QR trong ảnh' });
+    } catch {
+      setFlash({ type: 'error', text: 'Không thể đọc mã QR từ ảnh' });
+    } finally {
+      setLoading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
   };
 
   const handleCheckIn = async () => {
-    if (!result?.bookingId || !result?.userId || !webcamRef.current) return;
+    if (!bookingInfo?.bookingId || !bookingInfo?.userId || !webcamRef.current) return;
 
-    try {
-      setLoading(true);
-      setFlash(null);
-
-      if (result.checkinDate && result.checkoutDate) {
-        const now = new Date();
-        const checkinDate = new Date(result.checkinDate);
-        const checkoutDate = new Date(result.checkoutDate);
-        
-        if (now < checkinDate) {
-          setFlash({ 
-            type: 'error', 
-            text: `Thời gian check-in chưa đến. Ngày check-in bắt đầu từ: ${checkinDate.toLocaleString('vi-VN')}` 
-          });
-          setLoading(false);
-          return;
-        }
-        
-        if (now > checkoutDate) {
-          setFlash({ 
-            type: 'error', 
-            text: `Thời gian check-in đã quá hạn. Ngày check-out là: ${checkoutDate.toLocaleString('vi-VN')}` 
-          });
-          setLoading(false);
-          return;
-        }
+    if (bookingInfo.checkinDate && bookingInfo.checkoutDate) {
+      const now = new Date();
+      const checkin = new Date(bookingInfo.checkinDate);
+      const checkout = new Date(bookingInfo.checkoutDate);
+      
+      if (now < checkin) {
+        setFlash({ type: 'error', text: `Chưa đến thời gian check-in` });
+        return;
       }
+      if (now > checkout) {
+        setFlash({ type: 'error', text: `Đã quá thời gian check-in` });
+        return;
+      }
+    }
 
-      // Lấy kích thước container camera để chụp đúng kích thước
-      const cameraContainer = document.querySelector('.webcam-container');
-      const containerWidth = cameraContainer?.clientWidth || 640;
-      const containerHeight = cameraContainer?.clientHeight || 480;
-      
-      // Chụp ảnh với kích thước khớp với container
-      const screenshot = webcamRef.current.getScreenshot({
-        width: containerWidth,
-        height: containerHeight,
-        screenshotQuality: 0.9,
-        screenshotFormat: 'image/jpeg'
-      });
-      
+    setLoading(true);
+    try {
+      const screenshot = webcamRef.current.getScreenshot({ width: 640, height: 480, screenshotQuality: 0.9 });
       if (!screenshot) {
         setFlash({ type: 'error', text: 'Không thể chụp ảnh từ camera' });
         setLoading(false);
@@ -558,73 +307,48 @@ export default function CheckInPage() {
 
       const imgRes = await fetch(screenshot);
       const blob = await imgRes.blob();
-      const file = new File([blob], `checkin-face-${Date.now()}.jpg`, { type: blob.type || 'image/jpeg' });
-
-      if (!result.bookingId || !result.userId) {
-        setFlash({ type: 'error', text: 'Thiếu thông tin booking hoặc user. Vui lòng quét lại mã QR.' });
-        setLoading(false);
-        return;
-      }
+      const file = new File([blob], `checkin-${Date.now()}.jpg`, { type: 'image/jpeg' });
 
       const formData = new FormData();
-      formData.append('bookingId', String(result.bookingId));
-      formData.append('userId', String(result.userId));
+      formData.append('bookingId', String(bookingInfo.bookingId));
+      formData.append('userId', String(bookingInfo.userId));
       formData.append('faceImage', file);
       formData.append('faceRef', 'true');
 
-      // Use Next.js API route as proxy
-      const res = await fetch(`/api/system/bookings?id=${result.bookingId}&action=checkin`, {
+      const res = await fetch(`/api/system/bookings?id=${bookingInfo.bookingId}&action=checkin`, {
         method: 'POST',
         credentials: 'include',
         body: formData,
       });
 
-      let data: any = {}
-      try {
-        const text = await res.text()
-        if (text) {
-          data = JSON.parse(text)
-        }
-      } catch (parseError) {
-        console.error('[Check-in] Failed to parse response:', parseError)
-        if (!res.ok) {
-          setFlash({ type: 'error', text: `Lỗi từ server: ${res.status} ${res.statusText}` })
-          setLoading(false)
-          return
-        }
-      }
-      
-      if (!res.ok) {
-        const responseCode = data?.responseCode || data?.error
-        let errorMessage = data?.message || data?.error || `Lỗi ${res.status}: Không thể thực hiện check-in`
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok || (data.responseCode && data.responseCode !== 'S0000')) {
+        // Kiểm tra nếu là lỗi face recognition không khớp
+        const isFaceRecognitionError = 
+          (data.responseCode === 'AU0001' || res.status === 401) && 
+          step === 'face' && 
+          file && file.size > 0;
         
-        setFlash({ type: 'error', text: errorMessage })
-        setLoading(false)
-        return
+        let errorMessage = data?.message || 'Không thể thực hiện check-in';
+        
+        if (isFaceRecognitionError) {
+          // Hiển thị message cụ thể về lỗi face recognition
+          if (data?.message && data.message.toLowerCase().includes('unauthenticated')) {
+            errorMessage = 'Khuôn mặt không khớp với thông tin đăng ký. Vui lòng đảm bảo khuôn mặt rõ ràng và đúng người, sau đó thử lại.';
+          } else {
+            errorMessage = 'Khuôn mặt không khớp với thông tin đăng ký. Vui lòng thử lại hoặc đảm bảo khuôn mặt rõ ràng và đúng người.';
+          }
+        }
+        
+        setFlash({ type: 'error', text: errorMessage });
+        setLoading(false);
+        return;
       }
 
-      if (data.responseCode && data.responseCode !== 'S0000') {
-        let errorMessage = data?.message || data?.error || 'Không thể thực hiện check-in'
-        
-        if (data.responseCode === 'S0004' || data.responseCode === 'INVALID_REQUEST') {
-          errorMessage = 'Thời gian check-in không hợp lệ.\n' +
-            'Vui lòng kiểm tra:\n' +
-            '• Thời gian hiện tại phải trong khoảng từ ngày check-in đến ngày check-out'
-        }
-        
-        setFlash({ type: 'error', text: errorMessage })
-        setLoading(false)
-        return
-      }
-
-      const checkInData = data?.data || data;
-      const successMessage = data?.message || 'Check-in thành công và đã cấp chìa khóa!';
-      
-      setFlash({ type: 'success', text: successMessage });
-      
-      const finalRoomKey = checkInData?.roomCode || result.roomCode || `KEY-${result.bookingId}-${Date.now()}`;
-      setRoomKey(finalRoomKey);
-      setKeyIssued(true);
+      setRoomKey(data?.data?.roomCode || bookingInfo.roomCode || `KEY-${bookingInfo.bookingId}`);
+      setStep('success');
+      setFlash({ type: 'success', text: 'Check-in thành công!' });
     } catch (error: any) {
       setFlash({ type: 'error', text: error?.message || 'Lỗi khi thực hiện check-in' });
     } finally {
@@ -632,338 +356,279 @@ export default function CheckInPage() {
     }
   };
 
+  const resetAll = () => {
+    setStep('scan');
+    setBookingInfo(null);
+    setRoomKey(null);
+    setCameraError(null);
+    isProcessingRef.current = false;
+  };
+
+  const formatDate = (date?: string) => date ? new Date(date).toLocaleDateString('vi-VN') : 'N/A';
+
   return (
-    <>
-      {/* Header */}
-      <div className="bg-white border-b border-gray-200 px-4 py-4">
-        <div className="max-w-4xl mx-auto">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
-              <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            </div>
-            <div>
-              <h1 className="text-xl lg:text-2xl font-bold text-gray-900">Check-in</h1>
-              <p className="text-sm text-gray-600 mt-1">Quét mã QR để xác thực và check-in</p>
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
+      <div className="max-w-2xl mx-auto px-6 pt-4 pb-6">
+        {/* Header */}
+        <div className="bg-white shadow-sm border border-gray-200 rounded-2xl overflow-hidden mb-6">
+          <div className="border-b border-gray-200/50 px-6 py-4">
+            <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+              <div>
+                <p className="text-sm text-gray-500 mb-1">Xác thực</p>
+                <h1 className="text-3xl font-bold text-gray-900 leading-tight">Check-in</h1>
+                <p className="text-sm text-gray-500 mt-1">Quét mã QR và xác thực khuôn mặt để nhận phòng</p>
+              </div>
             </div>
           </div>
         </div>
-      </div>
 
-      {/* Content */}
-      <div className="w-full max-w-4xl mx-auto px-4 py-4">
-        <div className="space-y-4">
-          {/* Flash Messages */}
-          {flash && (
-            <div className={`rounded-lg border p-4 text-sm ${
-              flash.type === 'success' 
-                ? 'bg-green-50 border-green-200 text-green-800' 
-                : 'bg-red-50 border-red-200 text-red-800'
-            }`}>
-              {flash.text}
-            </div>
-          )}
-
-          {/* QR Scanner Card */}
-          <Card className="border-0 shadow-none">
-            <CardHeader className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-4 px-4">
-              <h2 className="text-lg font-semibold">Quét mã QR</h2>
-            </CardHeader>
-            <CardBody className="space-y-4 p-4">
-              <div className="relative flex justify-center items-center">
-                <div 
-                  id="qr-reader" 
-                  ref={scannerRef}
-                  className="rounded-lg overflow-hidden border-2 border-blue-500 qr-scanner-container"
-                  style={{ 
-                    aspectRatio: '1 / 1',
-                    width: 'min(85vw, 70vh, 600px)',
-                    maxWidth: '100%',
-                    maxHeight: '70vh',
-                    position: 'relative'
-                  }}
-                />
-                {scanning && (
-                  <div className="absolute top-2 left-2 bg-blue-600 text-white px-3 py-1 rounded-full text-sm font-medium flex items-center gap-2 z-10">
-                    <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
-                    Đang quét mã QR...
-                  </div>
-                )}
-                {!scanning && !qrScanner && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-gray-100 bg-opacity-90 z-10">
-                    <div className="text-center">
-                      <p className="text-gray-600 mb-2">Camera chưa sẵn sàng</p>
-                      <Button
-                        onClick={handleRestartScan}
-                        className="bg-blue-600 hover:bg-blue-700 text-white"
-                      >
-                        Khởi động camera
-                      </Button>
+        {/* Progress */}
+        <div className="bg-white shadow-sm border border-gray-200 rounded-2xl overflow-hidden mb-6">
+          <CardBody className="py-4">
+            <div className="flex items-center justify-between">
+              {['scan', 'info', 'face', 'success'].map((s, i) => (
+                <div key={s} className="flex items-center flex-1">
+                  <div className="flex flex-col items-center flex-1">
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold shadow-sm transition-all ${
+                      step === s ? 'bg-[hsl(var(--primary))] text-white scale-110' :
+                      ['scan', 'info', 'face', 'success'].indexOf(step) > i ? 'bg-green-500 text-white' :
+                      'bg-gray-200 text-gray-500'
+                    }`}>
+                      {['scan', 'info', 'face', 'success'].indexOf(step) > i ? (
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                      ) : (
+                        i + 1
+                      )}
                     </div>
+                    <span className={`text-xs mt-2 font-medium ${
+                      step === s ? 'text-[hsl(var(--primary))]' :
+                      ['scan', 'info', 'face', 'success'].indexOf(step) > i ? 'text-green-600' :
+                      'text-gray-500'
+                    }`}>
+                      {s === 'scan' ? 'Quét QR' : s === 'info' ? 'Thông tin' : s === 'face' ? 'Xác thực' : 'Hoàn tất'}
+                    </span>
                   </div>
-                )}
-              </div>
-              <p className="text-sm text-gray-600 text-center">
-                Đưa mã QR vào khung hình. Mã sẽ được tự động quét và xác thực.
-              </p>
-              
-              {/* Upload file QR code */}
-              <div className="border-t border-gray-200 pt-4">
-                <label className="block text-sm font-medium text-gray-700 mb-3">
-                  Hoặc tải ảnh mã QR từ máy tính
-                </label>
-                <div className="flex gap-3">
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    onChange={handleFileChange}
-                    className="hidden"
-                    id="qr-file-input"
-                    disabled={uploadingFile}
-                  />
-                  <label
-                    htmlFor="qr-file-input"
-                    className="flex-1 cursor-pointer"
-                  >
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      className="w-full"
-                      disabled={uploadingFile}
-                      onClick={() => fileInputRef.current?.click()}
-                    >
-                      {uploadingFile ? 'Đang đọc...' : '📁 Chọn ảnh QR từ máy tính'}
-                    </Button>
-                  </label>
-                </div>
-              </div>
-
-              {scanning && (
-                <Button
-                  onClick={handleRestartScan}
-                  variant="secondary"
-                  className="w-full"
-                >
-                  🔄 Khởi động lại quét
-                </Button>
-              )}
-            </CardBody>
-          </Card>
-        </div>
-      </div>
-
-      {/* Verification Result Modal */}
-      <Modal
-        open={modalOpen}
-        onClose={() => {
-          if (keyIssued) {
-            return;
-          }
-          setModalOpen(false);
-          setShowCamera(false);
-          if (result?.valid) {
-            setResult(null);
-          }
-          // Không tự động restart scanner - để người dùng tự quyết định
-        }}
-        title={result?.valid ? "✅ Xác thực QR thành công" : "❌ Xác thực QR thất bại"}
-      >
-        {result?.valid ? (
-          <div className="space-y-4">
-            {/* Thông tin đặt phòng - chỉ hiển thị khi chưa mở camera */}
-            {!showCamera && !keyIssued && (
-              <>
-                <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                  <p className="text-sm font-semibold text-green-800">
-                    Mã QR hợp lệ - Thông tin đặt phòng:
-                  </p>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Mã đặt phòng</p>
-                    <p className="text-sm font-medium text-gray-900">{result.bookingCode || `#${result.bookingId}`}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Tên khách hàng</p>
-                    <p className="text-sm font-medium text-gray-900">{result.userName || 'N/A'}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Email</p>
-                    <p className="text-sm font-medium text-gray-900">{result.userEmail || 'N/A'}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Số điện thoại</p>
-                    <p className="text-sm font-medium text-gray-900">{result.phoneNumber || 'N/A'}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Phòng</p>
-                    <p className="text-sm font-medium text-gray-900">{result.roomCode || 'N/A'}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Số khách</p>
-                    <p className="text-sm font-medium text-gray-900">{result.numGuests || 'N/A'}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Ngày check-in</p>
-                    <p className="text-sm font-medium text-gray-900">
-                      {result.checkinDate ? new Date(result.checkinDate).toLocaleString('vi-VN') : 'N/A'}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Ngày check-out</p>
-                    <p className="text-sm font-medium text-gray-900">
-                      {result.checkoutDate ? new Date(result.checkoutDate).toLocaleString('vi-VN') : 'N/A'}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Nút để bắt đầu xác thực check-in */}
-                <div className="flex gap-3 pt-4 border-t">
-                  <Button
-                    onClick={() => setShowCamera(true)}
-                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white"
-                  >
-                    🔐 Tiến hành xác thực check-in
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    onClick={() => {
-                      setModalOpen(false);
-                      setResult(null);
-                      setShowCamera(false);
-                      // Không tự động restart scanner
-                    }}
-                  >
-                    Đóng
-                  </Button>
-                </div>
-              </>
-            )}
-
-            {/* Camera for face verification - hiển thị khi showCamera = true */}
-            {showCamera && !keyIssued && (
-              <div className="space-y-4 pt-4 border-t border-gray-200">
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                  <p className="text-sm text-blue-800">
-                    Vui lòng đưa khuôn mặt vào khung hình và nhấn nút để chụp ảnh và check-in.
-                  </p>
-                </div>
-                
-                <div className="relative rounded overflow-hidden border border-gray-200 h-[300px] bg-gray-900 webcam-container" style={{ width: '100%' }}>
-                  <WebcamComponent
-                    ref={webcamRef as any}
-                    audio={false}
-                    className="w-full h-full object-cover webcam-video"
-                    screenshotFormat="image/jpeg"
-                    screenshotQuality={0.9}
-                    videoConstraints={{ 
-                      facingMode: "user",
-                      width: { ideal: 640 },
-                      height: { ideal: 480 },
-                      frameRate: { ideal: 15, max: 30 } // Tăng FPS lên để video mượt hơn
-                    }}
-                    width={640}
-                    height={480}
-                    onUserMedia={() => setCameraError(null)}
-                    onUserMediaError={(e: unknown) => {
-                      const name = (e as any)?.name;
-                      if (name === "NotAllowedError") {
-                        setCameraError("Bạn chưa cấp quyền camera. Vui lòng cho phép và thử lại.");
-                      } else if (name === "NotFoundError" || name === "OverconstrainedError") {
-                        setCameraError("Không tìm thấy thiết bị camera phù hợp.");
-                      } else {
-                        setCameraError("Không thể truy cập camera. Vui lòng thử lại.");
-                      }
-                    }}
-                  />
-                  
-                  {/* Hiển thị lỗi trong khung camera */}
-                  {(cameraError || (flash && flash.type === 'error')) && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-gray-900 bg-opacity-95 z-10">
-                      <div className="bg-red-50 border-2 border-red-300 rounded-lg p-4 mx-4 max-w-md text-center">
-                        <div className="text-red-600 text-4xl mb-2">⚠️</div>
-                        <p className="text-sm font-semibold text-red-800 mb-1">Lỗi</p>
-                        <p className="text-sm text-red-700">{cameraError || flash?.text}</p>
-                      </div>
-                    </div>
+                  {i < 3 && (
+                    <div className={`flex-1 h-1 mx-2 rounded-full transition-all ${
+                      ['scan', 'info', 'face', 'success'].indexOf(step) > i ? 'bg-green-500' : 'bg-gray-200'
+                    }`} />
                   )}
                 </div>
-
-                <div className="flex gap-3">
-                  <Button
-                    onClick={handleCheckIn}
-                    disabled={loading || !!cameraError}
-                    className="flex-1 bg-green-600 hover:bg-green-700 text-white"
-                  >
-                    {loading ? 'Đang xử lý...' : '📸 Chụp ảnh & Check-in'}
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    onClick={() => setShowCamera(false)}
-                    disabled={loading}
-                  >
-                    Hủy
-                  </Button>
-                </div>
-              </div>
-            )}
-
-            {keyIssued && roomKey && (
-              <div className="bg-gradient-to-r from-green-50 to-emerald-50 border-2 border-green-300 rounded-lg p-6 text-center mt-4">
-                <div className="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                </div>
-                <h3 className="text-xl font-bold text-green-800 mb-4">Check-in thành công!</h3>
-                <div className="bg-white rounded-lg p-4 border-2 border-green-300 mb-4">
-                  <p className="text-xs text-gray-500 font-semibold uppercase mb-2">Mã chìa khóa phòng</p>
-                  <p className="text-2xl font-bold text-green-600">{roomKey}</p>
-                  <p className="text-sm text-gray-600 mt-2">Phòng: {result?.roomCode || 'N/A'}</p>
-                </div>
-                <Button
-                  onClick={() => {
-                    setModalOpen(false);
-                    setResult(null);
-                    setKeyIssued(false);
-                    setRoomKey(null);
-                    handleRestartScan();
-                  }}
-                  className="w-full bg-green-600 hover:bg-green-700 text-white"
-                >
-                  Hoàn tất
-                </Button>
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="space-y-4">
-            <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-              <p className="text-sm font-semibold text-red-800 mb-2">
-                Mã QR không hợp lệ hoặc đã hết hạn
-              </p>
-              <p className="text-sm text-red-700">
-                {result?.error || 'Vui lòng kiểm tra lại mã QR và thử lại.'}
-              </p>
+              ))}
             </div>
-            <Button
-              variant="secondary"
-              onClick={() => {
-                setModalOpen(false);
-                setResult(null);
-                // Không tự động restart scanner
-              }}
-              className="w-full"
-            >
-              Đóng
-            </Button>
+          </CardBody>
+        </div>
+
+        {/* Flash */}
+        {flash && (
+          <div className={`mb-4 p-3 rounded-xl border shadow-sm animate-fade-in flex items-center gap-2 ${
+            flash.type === 'success' ? 'bg-green-50 text-green-800 border-green-100' : 'bg-red-50 text-red-800 border-red-100'
+          }`}>
+            <svg className={`w-5 h-5 flex-shrink-0 ${flash.type === 'success' ? 'text-green-500' : 'text-red-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              {flash.type === 'success' 
+                ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              }
+            </svg>
+            <span className="text-sm font-medium">{flash.text}</span>
           </div>
         )}
-      </Modal>
-    </>
+
+        {/* Step 1: QR Scan */}
+        {step === 'scan' && (
+          <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-md rounded-2xl overflow-hidden">
+            <CardHeader className="bg-[hsl(var(--page-bg))]/40 border-b border-gray-200 !px-6 py-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-[hsl(var(--primary))] rounded-xl flex items-center justify-center flex-shrink-0">
+                  <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
+                  </svg>
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold text-gray-900">Quét mã QR</h2>
+                  <p className="text-sm text-gray-500">Đưa mã QR vào khung hình</p>
+                </div>
+              </div>
+            </CardHeader>
+            <CardBody className="p-6">
+              <div className="relative aspect-square max-w-md mx-auto rounded-xl overflow-hidden bg-gray-100 mb-6 border-2 border-gray-200 shadow-inner">
+                <div id="qr-reader" ref={scannerRef} className="w-full h-full" />
+                
+                {scanning && (
+                  <div className="absolute top-4 left-4 bg-[hsl(var(--primary))] text-white px-4 py-2 rounded-xl text-xs font-semibold shadow-lg flex items-center gap-2">
+                    <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
+                    Đang quét...
+                  </div>
+                )}
+              </div>
+
+              <input ref={fileInputRef} type="file" accept="image/*" onChange={handleFileUpload} className="hidden" id="qr-file" />
+              <Button variant="secondary" className="w-full h-12 text-sm font-medium rounded-xl" disabled={loading} onClick={() => fileInputRef.current?.click()}>
+                <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+                {loading ? 'Đang xử lý...' : 'Tải ảnh QR từ thiết bị'}
+              </Button>
+            </CardBody>
+          </Card>
+        )}
+
+        {/* Step 2: Booking Info */}
+        {step === 'info' && bookingInfo && (
+          <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-md rounded-2xl overflow-hidden">
+            <CardHeader className="bg-[hsl(var(--page-bg))]/40 border-b border-gray-200 !px-6 py-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-[hsl(var(--primary))] rounded-xl flex items-center justify-center flex-shrink-0">
+                  <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold text-gray-900">Thông tin đặt phòng</h2>
+                  <p className="text-sm text-gray-500">Kiểm tra thông tin trước khi tiếp tục</p>
+                </div>
+              </div>
+            </CardHeader>
+            <CardBody className="p-6">
+              <div className="space-y-3 mb-6">
+                <InfoRow label="Mã đặt phòng" value={bookingInfo.bookingCode || `#${bookingInfo.bookingId}`} />
+                <InfoRow label="Khách hàng" value={bookingInfo.userName || 'N/A'} />
+                <InfoRow label="Email" value={bookingInfo.userEmail || 'N/A'} />
+                <InfoRow label="Điện thoại" value={bookingInfo.phoneNumber || 'N/A'} />
+                <InfoRow label="Phòng" value={bookingInfo.roomCode || 'N/A'} highlight />
+                <InfoRow label="Số khách" value={String(bookingInfo.numGuests || 'N/A')} />
+                <InfoRow label="Check-in" value={formatDate(bookingInfo.checkinDate)} />
+                <InfoRow label="Check-out" value={formatDate(bookingInfo.checkoutDate)} />
+              </div>
+
+              <div className="flex gap-3 pt-4 border-t border-gray-200">
+                <Button variant="secondary" className="flex-1 h-12 text-sm font-medium rounded-xl" onClick={resetAll}>
+                  Quay lại
+                </Button>
+                <Button variant="primary" className="flex-1 h-12 text-sm font-medium rounded-xl" onClick={() => setStep('face')}>
+                  Tiếp tục
+                  <svg className="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                </Button>
+              </div>
+            </CardBody>
+          </Card>
+        )}
+
+        {/* Step 3: Face Capture */}
+        {step === 'face' && bookingInfo && (
+          <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-md rounded-2xl overflow-hidden">
+            <CardHeader className="bg-[hsl(var(--page-bg))]/40 border-b border-gray-200 !px-6 py-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-[hsl(var(--primary))] rounded-xl flex items-center justify-center flex-shrink-0">
+                  <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                  </svg>
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold text-gray-900">Xác thực khuôn mặt</h2>
+                  <p className="text-sm text-gray-500">Đưa khuôn mặt vào khung hình</p>
+                </div>
+              </div>
+            </CardHeader>
+            <CardBody className="p-6">
+              <div className="relative aspect-[4/3] rounded-xl overflow-hidden bg-gray-100 mb-6 border-2 border-gray-200 shadow-inner">
+                <WebcamComponent
+                  ref={webcamRef}
+                  audio={false}
+                  className="w-full h-full object-cover"
+                  screenshotFormat="image/jpeg"
+                  screenshotQuality={0.9}
+                  videoConstraints={{ facingMode: "user", width: 640, height: 480 }}
+                  onUserMedia={() => setCameraError(null)}
+                  onUserMediaError={() => setCameraError("Không thể truy cập camera")}
+                />
+                
+                <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                  <div className="w-48 h-60 border-4 border-[hsl(var(--primary))]/60 rounded-[50%] shadow-lg"></div>
+                </div>
+
+                {cameraError && (
+                  <div className="absolute inset-0 bg-gray-900/90 flex items-center justify-center">
+                    <div className="text-center p-4">
+                      <svg className="w-12 h-12 text-red-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                      </svg>
+                      <p className="text-red-400 text-sm font-medium">{cameraError}</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-3 pt-4 border-t border-gray-200">
+                <Button variant="secondary" className="flex-1 h-12 text-sm font-medium rounded-xl" onClick={() => setStep('info')} disabled={loading}>
+                  Quay lại
+                </Button>
+                <Button variant="primary" className="flex-1 h-12 text-sm font-medium rounded-xl" onClick={handleCheckIn} disabled={loading || !!cameraError}>
+                  {loading ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></div>
+                      Đang xử lý...
+                    </>
+                  ) : (
+                    <>
+                      Check-in
+                      <svg className="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                    </>
+                  )}
+                </Button>
+              </div>
+            </CardBody>
+          </Card>
+        )}
+
+        {/* Step 4: Success */}
+        {step === 'success' && (
+          <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-md rounded-2xl overflow-hidden">
+            <CardBody className="p-8">
+              <div className="text-center">
+                <div className="w-20 h-20 bg-gradient-to-br from-green-400 to-green-600 rounded-full flex items-center justify-center mx-auto mb-6 shadow-lg">
+                  <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                  </svg>
+                </div>
+                <h2 className="text-2xl font-bold text-gray-900 mb-2">Check-in thành công!</h2>
+                <p className="text-gray-500 mb-6">Chào mừng bạn đến với hệ thống</p>
+                
+                <div className="bg-gradient-to-r from-[hsl(var(--primary))]/10 to-[hsl(var(--primary))]/5 rounded-xl p-6 mb-6 border-2 border-[hsl(var(--primary))]/20">
+                  <p className="text-sm text-gray-600 mb-2 font-medium">Phòng của bạn</p>
+                  <p className="text-3xl font-bold text-[hsl(var(--primary))]">{roomKey}</p>
+                </div>
+
+                <Button variant="primary" className="w-full h-12 text-sm font-medium rounded-xl" onClick={resetAll}>
+                  Hoàn tất
+                  <svg className="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                </Button>
+              </div>
+            </CardBody>
+          </Card>
+        )}
+      </div>
+    </div>
   );
 }
 
+function InfoRow({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
+  return (
+    <div className={`flex items-center justify-between p-4 rounded-xl border transition-colors ${
+      highlight 
+        ? 'bg-gradient-to-r from-[hsl(var(--primary))]/10 to-[hsl(var(--primary))]/5 border-[hsl(var(--primary))]/20' 
+        : 'bg-gray-50 border-gray-200'
+    }`}>
+      <span className="text-sm font-medium text-gray-600">{label}</span>
+      <span className={`font-bold text-base ${highlight ? 'text-[hsl(var(--primary))]' : 'text-gray-900'}`}>{value}</span>
+    </div>
+  );
+}

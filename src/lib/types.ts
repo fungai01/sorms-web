@@ -24,6 +24,7 @@ export interface User {
   phone_number?: string;
   status: UserStatus;
   roles?: string[];
+  avatarUrl?: string;
   created_at: string;
   updated_at: string;
 }

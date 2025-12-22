@@ -4,7 +4,11 @@ import ConditionalLayout from "@/components/layouts/Layout";
 export default function UserLayout({ children }: { children: ReactNode }) {
   return (
     <ConditionalLayout>
-      {children}
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50" suppressHydrationWarning>
+        <div className="w-full max-w-7xl mx-auto" suppressHydrationWarning>
+          {children}
+        </div>
+      </div>
     </ConditionalLayout>
   );
 }

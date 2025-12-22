@@ -56,6 +56,10 @@ export default function BookingsPage() {
   const [detailOpen, setDetailOpen] = useState(false)
   const [selected, setSelected] = useState<Booking | null>(null)
 
+  // Face images cache: userId -> face image URL or null
+  const [faceImages, setFaceImages] = useState<Record<string, string | null>>({})
+  const [loadingFaces, setLoadingFaces] = useState<Record<string, boolean>>({})
+
   const [editOpen, setEditOpen] = useState(false)
   const [edit, setEdit] = useState<{ 
     id?: number, code: string, userId?: number, roomId: number, 
@@ -118,6 +122,65 @@ export default function BookingsPage() {
     if (user) return user.full_name || user.email || `#${b.userId}`
     return b.userId ? `#${b.userId}` : "Chưa xác định"
   }, [users])
+
+  // Helper: Get face image URL for a user
+  const getUserFaceImage = useCallback((userId: string | number | undefined) => {
+    if (!userId) return null
+    const userIdStr = String(userId)
+    // Always check users array first (source of truth)
+    const user = users.find(u => String(u.id) === userIdStr)
+    if (user?.avatarUrl) {
+      return user.avatarUrl
+    }
+    // Fallback to cache if user not found or no avatarUrl
+    return faceImages[userIdStr] || null
+  }, [faceImages, users])
+
+  // Fetch face image for a user
+  const fetchFaceImage = useCallback(async (userId: string) => {
+    if (!userId || faceImages[userId] !== undefined || loadingFaces[userId]) {
+      return // Already fetched or loading
+    }
+
+    setLoadingFaces(prev => ({ ...prev, [userId]: true }))
+    try {
+      const response = await apiClient.getUserFaceInfo(userId)
+      if (response.success && response.data) {
+        // API trả về { success: true, message: "...", student: { class_id, num_images, student_id } }
+        // Nếu có face image URL trong response, lưu vào cache
+        // Hiện tại API chỉ trả về metadata, không có image URL
+        // Dùng avatarUrl từ UserResponse nếu có
+        const user = users.find(u => String(u.id) === String(userId))
+        const imageUrl = user?.avatarUrl || null
+        setFaceImages(prev => ({ ...prev, [userId]: imageUrl }))
+      } else {
+        setFaceImages(prev => ({ ...prev, [userId]: null }))
+      }
+    } catch (error) {
+      console.error(`Failed to fetch face image for user ${userId}:`, error)
+      setFaceImages(prev => ({ ...prev, [userId]: null }))
+    } finally {
+      setLoadingFaces(prev => {
+        const newState = { ...prev }
+        delete newState[userId]
+        return newState
+      })
+    }
+  }, [faceImages, loadingFaces, users])
+
+  // Fetch face images for all bookings when users are loaded
+  useEffect(() => {
+    if (users.length === 0) return // Wait for users to load
+    bookings.forEach(booking => {
+      if (booking.userId) {
+        const userIdStr = String(booking.userId)
+        // Only fetch if not already cached and user exists
+        if (faceImages[userIdStr] === undefined && !loadingFaces[userIdStr]) {
+          fetchFaceImage(userIdStr)
+        }
+      }
+    })
+  }, [bookings, users, faceImages, loadingFaces, fetchFaceImage])
 
   // Filtered users for searchable dropdown
   const filteredUsers = useMemo(() => {
@@ -544,10 +607,32 @@ export default function BookingsPage() {
                     </tr>
                   </THead>
                   <TBody>
-                    {filtered.slice((page - 1) * size, page * size).map((row, index) => (
+                    {filtered.slice((page - 1) * size, page * size).map((row, index) => {
+                      const faceImageUrl = getUserFaceImage(row.userId)
+                      return (
                       <tr key={row.id} className={`transition-colors ${index % 2 === 0 ? 'bg-white' : 'bg-gray-100'} hover:bg-[#f2f8fe]`}>
                         <td className="px-4 py-3 font-medium text-center text-gray-900">{row.code}</td>
-                        <td className="px-4 py-3 text-left text-gray-700">{getCustomerDisplay(row)}</td>
+                        <td className="px-4 py-3 text-left text-gray-700">
+                          <div className="flex items-center gap-3">
+                            {faceImageUrl ? (
+                              <img 
+                                src={faceImageUrl} 
+                                alt={getCustomerDisplay(row)}
+                                className="w-10 h-10 rounded-full object-cover border-2 border-gray-200 flex-shrink-0"
+                                onError={(e) => {
+                                  e.currentTarget.style.display = 'none'
+                                }}
+                              />
+                            ) : (
+                              <div className="w-10 h-10 rounded-full bg-[hsl(var(--primary)/0.12)] flex items-center justify-center border-2 border-gray-200 flex-shrink-0">
+                                <svg className="w-6 h-6 text-[hsl(var(--primary))]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                                </svg>
+                              </div>
+                            )}
+                            <span>{getCustomerDisplay(row)}</span>
+                          </div>
+                        </td>
                         <td className="px-4 py-3 text-center text-gray-700 font-semibold">{getRoomName(row.roomId)}</td>
                         <td className="px-4 py-3 text-center text-gray-700">
                           {formatDate(row.checkinDate)} - {formatDate(row.checkoutDate)}
@@ -561,22 +646,36 @@ export default function BookingsPage() {
                               </div>
                             </td>
                       </tr>
-                    ))}
+                      )
+                    })}
                   </TBody>
                 </Table>
               </div>
 
               {/* Mobile Cards */}
               <div className="lg:hidden space-y-3 p-4">
-                {filtered.slice((page - 1) * size, page * size).map((row) => (
+                {filtered.slice((page - 1) * size, page * size).map((row) => {
+                  const faceImageUrl = getUserFaceImage(row.userId)
+                  return (
                   <div key={row.id} className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4 transition-colors hover:bg-[#f2f8fe]">
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex items-center gap-3 min-w-0">
-                        <div className="w-11 h-11 rounded-xl bg-[hsl(var(--primary)/0.12)] flex items-center justify-center flex-shrink-0">
-                          <svg className="w-6 h-6 text-[hsl(var(--primary))]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                                </svg>
-                                </div>
+                        {faceImageUrl ? (
+                          <img 
+                            src={faceImageUrl} 
+                            alt={getCustomerDisplay(row)}
+                            className="w-11 h-11 rounded-xl object-cover border-2 border-gray-200 flex-shrink-0"
+                            onError={(e) => {
+                              e.currentTarget.style.display = 'none'
+                            }}
+                          />
+                        ) : (
+                          <div className="w-11 h-11 rounded-xl bg-[hsl(var(--primary)/0.12)] flex items-center justify-center flex-shrink-0">
+                            <svg className="w-6 h-6 text-[hsl(var(--primary))]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                            </svg>
+                          </div>
+                        )}
                         <div className="min-w-0">
                           <h3 className="text-base font-bold text-gray-900 truncate">{row.code}</h3>
                           <p className="text-sm text-gray-600 truncate">{getCustomerDisplay(row)}</p>
@@ -598,7 +697,8 @@ export default function BookingsPage() {
                       <Button variant="danger" className="h-10 text-sm font-medium" onClick={() => confirmDelete(row.id)}>Xóa</Button>
                           </div>
                         </div>
-                      ))}
+                      )
+                    })}
                     </div>
 
               {/* Pagination */}
@@ -666,10 +766,33 @@ export default function BookingsPage() {
                   {/* Khách hàng và Phòng */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                     <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-[hsl(var(--primary)/0.25)]">
-                      <p className="text-sm sm:text-base font-semibold text-gray-700 break-words leading-relaxed">
-                        <span className="text-gray-600">Khách hàng:</span>{" "}
-                        <span className="font-bold text-[hsl(var(--primary))]">{getCustomerDisplay(selected)}</span>
-                    </p>
+                      <div className="flex items-center gap-3">
+                        {(() => {
+                          const faceImageUrl = getUserFaceImage(selected.userId)
+                          return faceImageUrl ? (
+                            <img 
+                              src={faceImageUrl} 
+                              alt={getCustomerDisplay(selected)}
+                              className="w-16 h-16 rounded-full object-cover border-2 border-[hsl(var(--primary)/0.25)] flex-shrink-0"
+                              onError={(e) => {
+                                e.currentTarget.style.display = 'none'
+                              }}
+                            />
+                          ) : (
+                            <div className="w-16 h-16 rounded-full bg-[hsl(var(--primary)/0.12)] flex items-center justify-center border-2 border-[hsl(var(--primary)/0.25)] flex-shrink-0">
+                              <svg className="w-8 h-8 text-[hsl(var(--primary))]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                              </svg>
+                            </div>
+                          )
+                        })()}
+                        <div className="min-w-0">
+                          <p className="text-xs text-gray-600 mb-1">Khách hàng</p>
+                          <p className="text-sm sm:text-base font-bold text-[hsl(var(--primary))] break-words">
+                            {getCustomerDisplay(selected)}
+                          </p>
+                        </div>
+                      </div>
                   </div>
                     <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-[hsl(var(--primary)/0.25)]">
                       <p className="text-sm sm:text-base font-semibold text-gray-700 break-words leading-relaxed">

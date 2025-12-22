@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState, useEffect, useRef } from "react";
+import { useMemo, useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { useAvailableRooms, useRoomTypes } from "@/hooks/useApi";
 import { apiClient } from "@/lib/api-client";
 import type { Room, RoomType } from "@/lib/types";
@@ -10,26 +11,20 @@ import Badge from "@/components/ui/Badge";
 import Input from "@/components/ui/Input";
 import Modal from "@/components/ui/Modal";
 import { useAuth } from "@/hooks/useAuth";
-import { getFaceStatus, registerFace } from "@/lib/services";
+import { getFaceStatus, registerFace, deleteFace } from "@/lib/services";
+import { FaceCapture } from "@/components/ui/FaceCapture";
 import { isValidCCCD, isValidEmail, isValidPhone, isValidDateOfBirth, validatePersonalInfo } from "@/lib/utils";
 import Image from "next/image";
 import roomImage from "@/img/Room.jpg";
-import dynamic from "next/dynamic";
-import * as faceapi from "face-api.js";
 
-// Dynamic import Webcam để tránh SSR issues
-const WebcamComponent = dynamic(
-  // @ts-ignore - react-webcam type incompatibility with Next.js dynamic import
-  () => import("react-webcam"),
-  { 
-    ssr: false,
-    loading: () => <div className="w-full h-full bg-gray-900 flex items-center justify-center text-white">Đang tải camera...</div>
-  }
-) as any;
 
 export default function BookRoomPage() {
+  const BOOKING_INFO_KEY = "booking_personal_info";
+  const router = useRouter();
   const [checkin, setCheckin] = useState("");
   const [checkout, setCheckout] = useState("");
+  const [checkinTime, setCheckinTime] = useState("14:00");
+  const [checkoutTime, setCheckoutTime] = useState("12:00");
   const [roomTypeId, setRoomTypeId] = useState<number | "">("");
   const [bookingLoading, setBookingLoading] = useState(false);
   const [flash, setFlash] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -38,11 +33,14 @@ export default function BookRoomPage() {
   const [detailModalOpen, setDetailModalOpen] = useState(false);
   const [confirmModalOpen, setConfirmModalOpen] = useState(false);
   const [selectedRoom, setSelectedRoom] = useState<Room | null>(null);
-  const [faceStatus, setFaceStatus] = useState<{ registered: boolean; loading: boolean }>({ registered: false, loading: false });
+  // Bỏ bước chụp khuôn mặt tại flow đặt phòng; người dùng sẽ đăng ký tại /user/face-register
+  const [useExistingFace] = useState(true);
   
   // Separate dates for confirmation modal
   const [modalCheckin, setModalCheckin] = useState("");
   const [modalCheckout, setModalCheckout] = useState("");
+  const [modalCheckinTime, setModalCheckinTime] = useState("14:00");
+  const [modalCheckoutTime, setModalCheckoutTime] = useState("12:00");
   
   // Multi-step form states
   const [currentStep, setCurrentStep] = useState(1);
@@ -54,12 +52,11 @@ export default function BookRoomPage() {
     phone: "",
     email: "",
   });
-  const [showContactFields, setShowContactFields] = useState(true);
-  const [showCamera, setShowCamera] = useState(false);
-  const [faceDetected, setFaceDetected] = useState(false);
-  const [faceDetecting, setFaceDetecting] = useState(false);
-  const [capturedImage, setCapturedImage] = useState<string | null>(null);
-  const [capturedImages, setCapturedImages] = useState<{
+
+  // Đăng ký khuôn mặt trực tiếp trong flow đặt phòng (5 ảnh)
+  const [faceCaptureOpen, setFaceCaptureOpen] = useState(false);
+  const [faceCaptureStep, setFaceCaptureStep] = useState<1 | 2 | 3 | 4 | 5>(1);
+  const [faceCaptureImages, setFaceCaptureImages] = useState<{
     faceFront: string | null;
     faceLeft: string | null;
     faceRight: string | null;
@@ -72,14 +69,11 @@ export default function BookRoomPage() {
     cccdFront: null,
     cccdBack: null,
   });
-  const [currentPhotoStep, setCurrentPhotoStep] = useState<1 | 2 | 3 | 4 | 5>(1); // 1: faceFront, 2: faceLeft, 3: faceRight, 4: cccdFront, 5: cccdBack
-  const [modelsLoaded, setModelsLoaded] = useState(false);
-  const webcamRef = useRef<any>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const detectionIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const stableFaceCountRef = useRef<number>(0);
+  const [faceRegistering, setFaceRegistering] = useState(false);
+  const [showContactFields, setShowContactFields] = useState(true);
   
   const { user } = useAuth();
+  const [faceStatus, setFaceStatus] = useState<{ registered: boolean; loading: boolean }>({ registered: false, loading: false });
 
   const { data: roomsData, loading: roomsLoading } = useAvailableRooms(
     checkin || undefined,
@@ -110,6 +104,119 @@ export default function BookRoomPage() {
     }
   }, [flash]);
 
+  // Nhận ảnh từ FaceCapture trong flow đặt phòng
+  const handleCapturedFaceImage = async (imageSrc: string) => {
+    const stepMap: { [k in 1 | 2 | 3 | 4 | 5]: keyof typeof faceCaptureImages } = {
+      1: "faceFront",
+      2: "faceLeft",
+      3: "faceRight",
+      4: "cccdFront",
+      5: "cccdBack",
+    };
+
+    const key = stepMap[faceCaptureStep];
+
+    setFaceCaptureImages((prev) => ({
+      ...prev,
+      [key]: imageSrc,
+    }));
+
+    // Sau khi chụp:
+    // - Nếu còn bước tiếp theo: chuyển sang bước tiếp theo và giữ modal mở để chụp tiếp
+    // - Nếu đã là bước 5: đóng modal
+    if (faceCaptureStep < 5) {
+      const next = (faceCaptureStep + 1) as 1 | 2 | 3 | 4 | 5;
+      setFaceCaptureStep(next);
+      setCurrentStep(2); // vẫn ở bước 2, chỉ đổi nội dung gợi ý
+    } else {
+      setFaceCaptureOpen(false);
+    }
+  };
+
+  const allFaceImagesCaptured =
+    faceCaptureImages.faceFront &&
+    faceCaptureImages.faceLeft &&
+    faceCaptureImages.faceRight &&
+    faceCaptureImages.cccdFront &&
+    faceCaptureImages.cccdBack;
+
+  const handleSubmitFaceRegister = async () => {
+    if (!allFaceImagesCaptured) {
+      setFlash({
+        type: "error",
+        text: "Vui lòng chụp đủ 5 ảnh (3 khuôn mặt + 2 mặt CCCD) trước khi đăng ký khuôn mặt.",
+      });
+      return;
+    }
+
+    try {
+      setFaceRegistering(true);
+
+      // Nếu đã có dữ liệu khuôn mặt thì xóa trước khi đăng ký lại
+      if (faceStatus.registered) {
+        try {
+          await deleteFace(0); // backend dùng userId từ token, tham số này không quan trọng
+        } catch (e) {
+          console.warn("Xóa dữ liệu khuôn mặt cũ thất bại (bỏ qua, tiếp tục đăng ký mới):", e);
+        }
+      }
+
+      const imageSrcs = [
+        faceCaptureImages.faceFront,
+        faceCaptureImages.faceLeft,
+        faceCaptureImages.faceRight,
+        faceCaptureImages.cccdFront,
+        faceCaptureImages.cccdBack,
+      ].filter(Boolean) as string[];
+
+      const blobs = await Promise.all(
+        imageSrcs.map((src, idx) =>
+          fetch(src)
+            .then((res) => res.blob())
+            .then(
+              (blob) =>
+                new File([blob], `face-${idx}-${Date.now()}.jpg`, {
+                  type: "image/jpeg",
+                })
+            )
+        )
+      );
+
+      const formData = new FormData();
+      blobs.forEach((file) => formData.append("images", file));
+
+      await registerFace(formData);
+
+      setFlash({
+        type: "success",
+        text: "Đăng ký khuôn mặt thành công! Hệ thống sẽ sử dụng dữ liệu này cho các lần check-in.",
+      });
+      setFaceStatus({ registered: true, loading: false });
+      // Sau khi đăng ký khuôn mặt thành công, tự động chuyển sang bước xác nhận đặt phòng
+      setCurrentStep(3);
+    } catch (err: any) {
+      console.error("Face register error:", err);
+      const rawMessage = err?.message || "";
+      let friendly = rawMessage || "Đăng ký khuôn mặt thất bại. Vui lòng thử lại.";
+
+      if (
+        rawMessage.toLowerCase().includes("unauthenticated") ||
+        rawMessage.toLowerCase().includes("not authenticated") ||
+        rawMessage.toLowerCase().includes("unauthorized")
+      ) {
+        friendly = "Phiên đăng nhập đã hết hạn hoặc không hợp lệ. Vui lòng đăng xuất và đăng nhập lại trước khi đăng ký khuôn mặt.";
+      }
+
+      setFlash({
+        type: "error",
+        text: friendly,
+      });
+      setFormError(friendly);
+    } finally {
+      setFaceRegistering(false);
+    }
+  };
+
   // Initialize personal info from user
   useEffect(() => {
     if (user) {
@@ -126,242 +233,139 @@ export default function BookRoomPage() {
     }
   }, [user]);
 
-  // Load face-api.js models
+  // Check face status once user is known
   useEffect(() => {
-    const loadModels = async () => {
+    const check = async () => {
+      if (!user) return;
+      setFaceStatus({ registered: false, loading: true });
       try {
-        const MODEL_URL = "/models";
-        await Promise.all([
-          faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-          faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-        ]);
-        setModelsLoaded(true);
+        const res = await getFaceStatus(0); // bookingId not required, API uses userId
+        setFaceStatus({ registered: !!res?.registered, loading: false });
       } catch (err) {
-        console.error("Error loading face-api models:", err);
-        setFormError("Không thể tải mô hình nhận diện khuôn mặt. Vui lòng thử lại.");
+        console.warn("Face status check failed:", err);
+        setFaceStatus({ registered: false, loading: false });
       }
     };
-    
-    loadModels();
+    check();
+  }, [user]);
+
+  // Prefill từ localStorage để người dùng không phải nhập lại mỗi lần
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const cached = localStorage.getItem(BOOKING_INFO_KEY);
+    if (!cached) return;
+    try {
+      const data = JSON.parse(cached);
+      if (data && typeof data === "object") {
+        setPersonalInfo((prev) => ({
+          ...prev,
+          ...data,
+        }));
+        if (data.email || data.phone) {
+          setShowContactFields(false);
+        }
+      }
+    } catch {
+      // ignore cache parse error
+    }
   }, []);
 
-  // Face detection when camera is active (only for face photos, not CCCD)
+  // Lưu tạm thông tin nhập để lần sau tự động điền
   useEffect(() => {
-    const isFacePhoto = currentPhotoStep <= 3; // Steps 1-3 are face photos
-    const currentImage = currentPhotoStep === 1 ? capturedImages.faceFront 
-      : currentPhotoStep === 2 ? capturedImages.faceLeft 
-      : currentPhotoStep === 3 ? capturedImages.faceRight 
-      : null;
-    
-    if (showCamera && modelsLoaded && webcamRef.current && canvasRef.current && isFacePhoto && !currentImage) {
-      const STABLE_THRESHOLD = 15; // Giảm xuống 15 frames (1.5 giây) để nhanh hơn
-      stableFaceCountRef.current = 0;
-      let isCapturing = false; // Flag để tránh chụp nhiều lần
-      
-      const detectFace = async () => {
-        if (!webcamRef.current || !canvasRef.current || currentImage || isCapturing) return;
-        
-        try {
-          const video = webcamRef.current.video;
-          if (!video || video.readyState !== 4) return;
-
-          const displaySize = { width: video.width, height: video.height };
-          canvasRef.current.width = displaySize.width;
-          canvasRef.current.height = displaySize.height;
-
-          const detections = await faceapi
-            .detectAllFaces(video, new faceapi.TinyFaceDetectorOptions())
-            .withFaceLandmarks();
-
-          const ctx = canvasRef.current.getContext("2d");
-          if (ctx) {
-            ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-            
-            if (detections.length === 1) {
-              const detection = detections[0];
-              const box = detection.detection.box;
-              
-              ctx.strokeStyle = "#00ff00";
-              ctx.lineWidth = 2;
-              ctx.strokeRect(box.x, box.y, box.width, box.height);
-              
-              if (detection.landmarks) {
-                ctx.fillStyle = "#00ff00";
-                detection.landmarks.positions.forEach((point: any) => {
-                  ctx.beginPath();
-                  ctx.arc(point.x, point.y, 2, 0, 2 * Math.PI);
-                  ctx.fill();
-                });
-              }
-              
-              setFaceDetected(true);
-              stableFaceCountRef.current++;
-              
-              // Hiển thị progress bar ở dưới cùng
-              const progress = Math.min((stableFaceCountRef.current / STABLE_THRESHOLD) * 100, 100);
-              ctx.fillStyle = "rgba(0, 255, 0, 0.5)";
-              ctx.fillRect(0, displaySize.height - 8, (displaySize.width * progress) / 100, 8);
-              
-              // Hiển thị countdown số lớn ở giữa
-              const remaining = Math.max(0, STABLE_THRESHOLD - stableFaceCountRef.current);
-              if (remaining > 0) {
-                ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
-                ctx.fillRect(displaySize.width / 2 - 40, displaySize.height / 2 - 30, 80, 60);
-                ctx.fillStyle = "#ffffff";
-                ctx.font = "bold 36px Arial";
-                ctx.textAlign = "center";
-                ctx.fillText(`${remaining}`, displaySize.width / 2, displaySize.height / 2 + 10);
-              }
-              
-              // Tự động chụp khi đạt ngưỡng
-              if (!faceDetecting && !currentImage && stableFaceCountRef.current >= STABLE_THRESHOLD && !isCapturing) {
-                isCapturing = true;
-                stableFaceCountRef.current = 0;
-                // Gọi capturePhoto ngay lập tức
-                setTimeout(() => {
-                  if (webcamRef.current && !currentImage) {
-                    capturePhoto();
-                  }
-                }, 50);
-              }
-            } else if (detections.length === 0) {
-              setFaceDetected(false);
-              stableFaceCountRef.current = 0;
-            } else {
-              setFaceDetected(false);
-              stableFaceCountRef.current = 0;
-              ctx.fillStyle = "rgba(255, 0, 0, 0.5)";
-              ctx.fillRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-              ctx.fillStyle = "#ffffff";
-              ctx.font = "20px Arial";
-              ctx.textAlign = "center";
-              ctx.fillText("Phát hiện nhiều khuôn mặt. Vui lòng chỉ có 1 người trong khung hình.", displaySize.width / 2, displaySize.height / 2);
-            }
-          }
-        } catch (err) {
-          console.error("Face detection error:", err);
-        }
-      };
-
-      detectionIntervalRef.current = setInterval(detectFace, 100);
-    }
-
-    return () => {
-      if (detectionIntervalRef.current) {
-        clearInterval(detectionIntervalRef.current);
-      }
-      stableFaceCountRef.current = 0;
-    };
-  }, [showCamera, modelsLoaded, currentPhotoStep, capturedImages, faceDetecting]);
-
-  const capturePhoto = () => {
-    // For CCCD photos (steps 4-5), no face detection required
-    const isFacePhoto = currentPhotoStep <= 3;
-    
-    if (isFacePhoto && (!webcamRef.current || !faceDetected)) {
-      setFormError("Vui lòng đảm bảo có đúng 1 khuôn mặt trong khung hình");
-      return;
-    }
-
-    if (!webcamRef.current) {
-      setFormError("Camera chưa sẵn sàng");
-      return;
-    }
-
+    if (typeof window === "undefined") return;
     try {
-      setFaceDetecting(true);
-      const imageSrc = webcamRef.current.getScreenshot();
-      if (imageSrc) {
-        // Save to appropriate key based on current step
-        const imageKey = currentPhotoStep === 1 ? 'faceFront'
-          : currentPhotoStep === 2 ? 'faceLeft'
-          : currentPhotoStep === 3 ? 'faceRight'
-          : currentPhotoStep === 4 ? 'cccdFront'
-          : 'cccdBack';
-        
-        setCapturedImages(prev => ({ ...prev, [imageKey]: imageSrc }));
-        
-        // Stop detection interval for face photos
-        if (isFacePhoto && detectionIntervalRef.current) {
-          clearInterval(detectionIntervalRef.current);
+      localStorage.setItem(BOOKING_INFO_KEY, JSON.stringify(personalInfo));
+    } catch {
+      // ignore write error
+    }
+  }, [personalInfo]);
+
+  // Fetch chi tiết hồ sơ người dùng để tự động điền form đặt phòng (ưu tiên thông tin đã xác thực)
+  useEffect(() => {
+    if (!user) return;
+    const token = typeof window !== "undefined" ? localStorage.getItem("auth_access_token") : null;
+    if (!token) return;
+
+    const controller = new AbortController();
+
+    const loadProfile = async () => {
+      try {
+        const res = await fetch("/api/system/users?self=1", {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          signal: controller.signal,
+        });
+
+        if (!res.ok) return;
+
+        const data = await res.json().catch(() => null);
+        const items: any[] = Array.isArray(data?.items)
+          ? data.items
+          : Array.isArray(data?.data?.items)
+          ? data.data.items
+          : Array.isArray(data?.data)
+          ? data.data
+          : Array.isArray(data)
+          ? data
+          : [];
+
+        const me = items.find((u) => (u.email || "").toLowerCase() === (user.email || "").toLowerCase()) || items[0];
+        if (!me) return;
+
+        const fullNameFromProfile =
+          me.fullName ??
+          me.full_name ??
+          (me.firstName && me.lastName ? `${me.firstName} ${me.lastName}` : undefined) ??
+          user?.name;
+
+        setPersonalInfo((prev) => ({
+          ...prev,
+          fullName: fullNameFromProfile || prev.fullName,
+          dateOfBirth: me.dateOfBirth ?? me.date_of_birth ?? prev.dateOfBirth ?? "",
+          cccd: me.idCardNumber ?? me.id_card_number ?? prev.cccd ?? "",
+          phone: me.phoneNumber ?? me.phone_number ?? prev.phone ?? "",
+          email: me.email ?? prev.email ?? "",
+        }));
+
+        if (me.email || me.phoneNumber || me.phone_number) {
+          setShowContactFields(false);
         }
-        
-        // Move to next step or finish
-        if (currentPhotoStep < 5) {
-          setCurrentPhotoStep((currentPhotoStep + 1) as 1 | 2 | 3 | 4 | 5);
-          setFaceDetected(false);
-          stableFaceCountRef.current = 0;
-        } else {
-          // All photos captured, move to confirmation step
-          setShowCamera(false);
-          setCurrentStep(3);
-        }
-      } else {
-        setFormError("Không thể chụp ảnh");
+      } catch (err: any) {
+        if (err?.name === "AbortError") return;
+        console.error("Failed to load user profile for booking form:", err);
       }
-    } catch (err) {
-      console.error("Capture error:", err);
-      setFormError("Lỗi khi chụp ảnh");
-    } finally {
-      setFaceDetecting(false);
-    }
-  };
+    };
 
+    loadProfile();
+    return () => controller.abort();
+  }, [user]);
+
+ 
+  // Bước 1 -> Bước 2 (kiểm tra khuôn mặt)
   const handleStep1Next = () => {
-    const validation = validatePersonalInfo(personalInfo);
-    
-    if (!validation.isValid) {
-      setFormError(validation.errors[0]); // Hiển thị lỗi đầu tiên
-      return;
-    }
-
-    setFormError(null);
-    setCurrentStep(2);
-    setCurrentPhotoStep(1);
-    setCapturedImages({
-      faceFront: null,
-      faceLeft: null,
-      faceRight: null,
-      cccdFront: null,
-      cccdBack: null,
-    });
-    setShowCamera(true);
-  };
-
-  const handleStep2Next = () => {
-    // Check if all 5 photos are captured
-    const allCaptured = capturedImages.faceFront && 
-      capturedImages.faceLeft && 
-      capturedImages.faceRight && 
-      capturedImages.cccdFront && 
-      capturedImages.cccdBack;
-    
-    if (!allCaptured) {
-      setFormError("Vui lòng chụp đầy đủ 5 ảnh: khuôn mặt chính diện, trái, phải, CCCD mặt trước và mặt sau");
-      return;
-    }
-    setFormError(null);
-    setShowCamera(false);
-    setCurrentStep(3);
-  };
-
-  const handleConfirmBookingWithFace = async () => {
-    // Validate lại tất cả thông tin trước khi submit
     const validation = validatePersonalInfo(personalInfo);
     if (!validation.isValid) {
       setFormError(validation.errors[0]);
       return;
     }
+    setFormError(null);
+    setCurrentStep(2);
+  };
 
-    // Check if all 5 photos are captured
-    const allCaptured = capturedImages.faceFront && 
-      capturedImages.faceLeft && 
-      capturedImages.faceRight && 
-      capturedImages.cccdFront && 
-      capturedImages.cccdBack;
-    
-    if (!allCaptured) {
-      setFormError("Vui lòng chụp đầy đủ 5 ảnh: khuôn mặt chính diện, trái, phải, CCCD mặt trước và mặt sau");
+  // Bước 2 -> Bước 3 (xác nhận đặt phòng)
+  const handleStep2Next = () => {
+    setCurrentStep(3);
+  };
+
+  // Xác nhận đặt phòng (sau khi đã qua bước kiểm tra khuôn mặt)
+  const handleConfirmBookingWithFace = async () => {
+    // Validate lại tất cả thông tin trước khi submit
+    const validation = validatePersonalInfo(personalInfo);
+    if (!validation.isValid) {
+      setFormError(validation.errors[0]);
       return;
     }
     
@@ -393,10 +397,14 @@ export default function BookRoomPage() {
       setBookingLoading(true);
       setFormError(null);
 
+      // Kết hợp ngày và giờ thành datetime string
+      const checkinDateTime = `${modalCheckin}T${modalCheckinTime}:00`;
+      const checkoutDateTime = `${modalCheckout}T${modalCheckoutTime}:00`;
+
       const bookingData = {
         roomId: selectedRoom.id,
-        checkinDate: modalCheckin,
-        checkoutDate: modalCheckout,
+        checkinDate: checkinDateTime,
+        checkoutDate: checkoutDateTime,
         numGuests: 1,
       };
       
@@ -409,51 +417,11 @@ export default function BookRoomPage() {
       const booking = bookingResponse.data as any;
       const bookingId = booking?.id || booking?.bookingId || 0;
 
-      // Đăng ký khuôn mặt với tất cả ảnh khuôn mặt (backend yêu cầu 3-5 ảnh)
-      const formData = new FormData();
-      
-      // Helper function to convert base64 to File
-      const base64ToFile = async (base64: string, filename: string): Promise<File> => {
-        const response = await fetch(base64);
-        const blob = await response.blob();
-        return new File([blob], filename, { type: "image/jpeg" });
-      };
-
-      // Backend expects "images" parameter (List<MultipartFile>)
-      // Add face images (3 face photos are required, CCCD is optional)
-      const faceImageFiles: File[] = [];
-      
-      if (capturedImages.faceFront) {
-        const file = await base64ToFile(capturedImages.faceFront, `face-front-${Date.now()}.jpg`);
-        faceImageFiles.push(file);
+      // Nếu chưa có khuôn mặt đã đăng ký, chuyển sang trang đăng ký khuôn mặt
+      if (!faceStatus.registered) {
+        router.push(bookingId ? `/user/face-register?bookingId=${bookingId}` : "/user/face-register");
+        return;
       }
-      if (capturedImages.faceLeft) {
-        const file = await base64ToFile(capturedImages.faceLeft, `face-left-${Date.now()}.jpg`);
-        faceImageFiles.push(file);
-      }
-      if (capturedImages.faceRight) {
-        const file = await base64ToFile(capturedImages.faceRight, `face-right-${Date.now()}.jpg`);
-        faceImageFiles.push(file);
-      }
-
-      // Ensure we have at least 3 face images (backend requirement)
-      if (faceImageFiles.length < 3) {
-        // If we don't have 3 different angles, duplicate the front image
-        while (faceImageFiles.length < 3 && capturedImages.faceFront) {
-          const file = await base64ToFile(capturedImages.faceFront, `face-${Date.now()}-${faceImageFiles.length}.jpg`);
-          faceImageFiles.push(file);
-        }
-      }
-
-      // Add all face images to "images" parameter (backend expects this)
-      faceImageFiles.forEach((file) => {
-        formData.append("images", file);
-      });
-
-      // Note: CCCD images are not sent to face recognition API
-      // They might be stored separately if needed for identity verification
-
-      await registerFace(bookingId, formData);
 
       setFlash({ type: 'success', text: 'Đặt phòng thành công! Vui lòng chờ xác nhận.' });
       setConfirmModalOpen(false);
@@ -461,15 +429,8 @@ export default function BookRoomPage() {
       setModalCheckin("");
       setModalCheckout("");
       setCurrentStep(1);
-      setCurrentPhotoStep(1);
-      setCapturedImages({
-        faceFront: null,
-        faceLeft: null,
-        faceRight: null,
-        cccdFront: null,
-        cccdBack: null,
-      });
-      setCapturedImage(null);
+
+      // Reset lại form thông tin cá nhân về thông tin user hiện tại
       setPersonalInfo({
         fullName: user?.name || (user?.firstName && user?.lastName ? `${user.firstName} ${user.lastName}` : "") || "",
         dateOfBirth: user?.dob || "",
@@ -479,7 +440,18 @@ export default function BookRoomPage() {
       });
     } catch (err: any) {
       console.error("Booking error:", err);
-      setFormError(err?.message || "Có lỗi xảy ra khi đặt phòng");
+      let errorMessage = err?.message || "Có lỗi xảy ra khi đặt phòng";
+      
+      // Dịch lỗi từ backend sang tiếng Việt
+      if (errorMessage.toLowerCase().includes("check-out date must be after check-in")) {
+        errorMessage = "Ngày check-out phải sau ngày check-in";
+      } else if (errorMessage.toLowerCase().includes("check-in date")) {
+        errorMessage = "Ngày check-in không hợp lệ";
+      } else if (errorMessage.toLowerCase().includes("room not available")) {
+        errorMessage = "Phòng không còn trống trong khoảng thời gian này";
+      }
+      
+      setFormError(errorMessage);
     } finally {
       setBookingLoading(false);
     }
@@ -506,29 +478,25 @@ export default function BookRoomPage() {
     setSelectedRoom(room);
     setModalCheckin(checkin);
     setModalCheckout(checkout);
+    setModalCheckinTime(checkinTime);
+    setModalCheckoutTime(checkoutTime);
     setConfirmModalOpen(true);
     setCurrentStep(1);
-    setCurrentPhotoStep(1);
-    setCapturedImage(null);
-    setCapturedImages({
-      faceFront: null,
-      faceLeft: null,
-      faceRight: null,
-      cccdFront: null,
-      cccdBack: null,
-    });
-    setFormError(null);
-    setShowCamera(false);
-    setFaceDetected(false);
-    if (detectionIntervalRef.current) {
-      clearInterval(detectionIntervalRef.current);
-    }
-    setPersonalInfo({
-      fullName: user?.name || (user?.firstName && user?.lastName ? `${user.firstName} ${user.lastName}` : "") || "",
+    // Giữ lại thông tin đã nhập trước đó; chỉ điền mặc định nếu trống
+    setPersonalInfo((prev) => {
+      const isEmpty =
+        !prev.fullName && !prev.phone && !prev.email && !prev.cccd && !prev.dateOfBirth;
+      if (!isEmpty) return prev;
+      return {
+        fullName:
+          user?.name ||
+          (user?.firstName && user?.lastName ? `${user.firstName} ${user.lastName}` : "") ||
+          "",
       dateOfBirth: user?.dob || "",
       cccd: "",
       phone: user?.phoneNumber || "",
       email: user?.email || "",
+      };
     });
   };
 
@@ -593,143 +561,163 @@ export default function BookRoomPage() {
   };
 
   return (
-    <div className="px-4 lg:px-6 py-6">
-      <div className="mb-6">
-        <p className="text-sm text-gray-500 mb-1">Đặt phòng</p>
-        <h1 className="text-2xl font-bold text-gray-900">Tìm và đặt phòng</h1>
-        <p className="text-sm text-gray-600 mt-2">
-          Chọn ngày và loại phòng để xem danh sách phòng khả dụng
-        </p>
-      </div>
-
-      {flash && (
-        <div className={`mb-4 p-3 rounded-lg ${
-          flash.type === 'success' 
-            ? 'bg-green-50 text-green-800 border border-green-200' 
-            : 'bg-red-50 text-red-800 border border-red-200'
-        }`}>
-          {flash.text}
-        </div>
-      )}
-
-      {/* Filter section - Header */}
-      <Card className="mb-6">
-        <CardBody>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Ngày nhận phòng
-              </label>
-              <Input
-                type="date"
-                value={checkin}
-                onChange={(e) => setCheckin(e.target.value)}
-                min={new Date().toISOString().split('T')[0]}
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Ngày trả phòng
-              </label>
-              <Input
-                type="date"
-                value={checkout}
-                onChange={(e) => setCheckout(e.target.value)}
-                min={checkin || new Date().toISOString().split('T')[0]}
-              />
-            </div>
-            <div className="flex items-end">
-              {(checkin || checkout) ? (
-                <Button
-                  variant="secondary"
-                  onClick={() => {
-                    setCheckin("");
-                    setCheckout("");
-                  }}
-                  className="w-full"
-                >
-                  Xóa bộ lọc
-                </Button>
-              ) : (
-                <div className="w-full">
-                  {checkin && checkout && calculateNights() > 0 && (
-                    <div className="p-3 bg-blue-50 rounded-lg border border-blue-200">
-                      <p className="text-xs text-blue-600 font-medium text-center">
-                        <span className="font-bold">{calculateNights()}</span> đêm
-                      </p>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-          {checkin && checkout && calculateNights() > 0 && (
-            <div className="mt-4 pt-4 border-t border-gray-200">
-              <div className="flex items-center justify-center gap-2 text-sm text-gray-600">
-                <span className="font-medium">Số đêm:</span>
-                <span className="font-bold text-[hsl(var(--primary))]">{calculateNights()}</span>
+    <div className="px-6 pt-4 pb-6" suppressHydrationWarning>
+      <div className="max-w-7xl mx-auto space-y-6">
+        {/* Header */}
+        <div className="bg-white shadow-sm border border-gray-200 rounded-2xl overflow-hidden">
+          <div className="border-b border-gray-200/50 px-6 py-4">
+            <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+              <div>
+                <h1 className="text-3xl font-bold text-gray-900 leading-tight">Tìm và đặt phòng</h1>
+                <p className="mt-1 text-sm text-gray-500">
+                  Chọn ngày và loại phòng để xem danh sách phòng khả dụng
+                </p>
               </div>
             </div>
-          )}
-        </CardBody>
-      </Card>
+          </div>
+        </div>
+
+        {/* Flash Messages */}
+        {flash && (
+          <div className={`py-2.5 rounded-xl px-4 border shadow-sm animate-fade-in flex items-center gap-2 ${
+            flash.type === 'success' ? 'bg-green-50 text-green-800 border-green-100' : 'bg-red-50 text-red-800 border-red-100'
+          }`}>
+            <svg className={`w-5 h-5 ${flash.type === 'success' ? 'text-green-500' : 'text-red-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              {flash.type === 'success' 
+                ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              }
+            </svg>
+            <span className="text-sm font-medium">{flash.text}</span>
+          </div>
+        )}
+
+        {/* Filter section */}
+        <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-md rounded-2xl overflow-hidden">
+          <CardHeader className="bg-[hsl(var(--page-bg))]/40 border-b border-gray-200 !px-6 py-3">
+            <h2 className="text-xl font-bold text-gray-900">Bộ lọc tìm kiếm</h2>
+          </CardHeader>
+          <CardBody className="p-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Ngày nhận phòng
+                </label>
+                <input
+                  type="date"
+                  value={checkin}
+                  onChange={(e) => setCheckin(e.target.value)}
+                  min={new Date().toISOString().split('T')[0]}
+                  className="w-full h-11 px-3 text-sm border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] bg-white"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Giờ nhận phòng
+                </label>
+                <input
+                  type="time"
+                  value={checkinTime}
+                  onChange={(e) => setCheckinTime(e.target.value)}
+                  className="w-full h-11 px-3 text-sm border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] bg-white"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Ngày trả phòng
+                </label>
+                <input
+                  type="date"
+                  value={checkout}
+                  onChange={(e) => setCheckout(e.target.value)}
+                  min={checkin || new Date().toISOString().split('T')[0]}
+                  className="w-full h-11 px-3 text-sm border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] bg-white"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Giờ trả phòng
+                </label>
+                <input
+                  type="time"
+                  value={checkoutTime}
+                  onChange={(e) => setCheckoutTime(e.target.value)}
+                  className="w-full h-11 px-3 text-sm border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] bg-white"
+                />
+              </div>
+              <div className="flex items-end">
+                {(checkin || checkout) ? (
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      setCheckin("");
+                      setCheckout("");
+                      setCheckinTime("14:00");
+                      setCheckoutTime("12:00");
+                    }}
+                    className="w-full h-11"
+                  >
+                    Xóa bộ lọc
+                  </Button>
+                ) : (
+                  <div className="w-full" />
+                )}
+              </div>
+            </div>
+          </CardBody>
+        </Card>
 
         {/* Available rooms */}
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-xl font-bold text-gray-900">Phòng khả dụng</h2>
-              <p className="text-sm text-gray-500 mt-1">
-                {checkin && checkout 
-                  ? `Tìm thấy ${filteredRooms.length} phòng từ ${new Date(checkin).toLocaleDateString("vi-VN")} đến ${new Date(checkout).toLocaleDateString("vi-VN")}`
-                  : "Chọn ngày để xem phòng khả dụng"}
-              </p>
+        <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-md rounded-2xl overflow-hidden">
+          <CardHeader className="bg-[hsl(var(--page-bg))]/40 border-b border-gray-200 !px-6 py-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-gray-900">Phòng khả dụng</h2>
+                <p className="text-sm text-gray-500">
+                  {checkin && checkout 
+                    ? `Tìm thấy ${filteredRooms.length} phòng từ ${new Date(checkin).toLocaleDateString("vi-VN")} đến ${new Date(checkout).toLocaleDateString("vi-VN")}`
+                    : "Chọn ngày để xem phòng khả dụng"}
+                </p>
+              </div>
+              {filteredRooms.length > 0 && (
+                <span className="text-sm font-semibold text-[hsl(var(--primary))] bg-[hsl(var(--primary)/0.12)] px-3 py-1 rounded-full">
+                  {filteredRooms.length} phòng
+                </span>
+              )}
             </div>
-            {filteredRooms.length > 0 && (
-              <Badge tone="info" className="text-sm px-3 py-1">
-                {filteredRooms.length} phòng
-              </Badge>
-            )}
-          </div>
+          </CardHeader>
+          <CardBody className="p-6">
 
           {roomsLoading ? (
-            <Card>
-              <CardBody>
-                <div className="py-12 text-center">
-                  <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-[hsl(var(--primary))] mb-3"></div>
-                  <p className="text-sm text-gray-500">Đang tải danh sách phòng...</p>
-                </div>
-              </CardBody>
-            </Card>
+              <div className="py-12 text-center">
+                <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-[hsl(var(--primary))] mb-3"></div>
+                <p className="text-sm text-gray-500">Đang tải danh sách phòng...</p>
+              </div>
           ) : filteredRooms.length === 0 ? (
-            <Card>
-              <CardBody>
-                <div className="py-12 text-center">
-                  <p className="text-sm text-gray-500 font-medium">
-                    {checkin && checkout
-                      ? "Không có phòng phù hợp với bộ lọc của bạn"
-                      : "Vui lòng chọn ngày check-in và check-out để xem phòng khả dụng"}
+              <div className="py-12 text-center">
+                <svg className="w-12 h-12 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                </svg>
+                <p className="text-sm text-gray-500 font-medium">
+                  {checkin && checkout
+                    ? "Không có phòng phù hợp với bộ lọc của bạn"
+                    : "Vui lòng chọn ngày check-in và check-out để xem phòng khả dụng"}
+                </p>
+                {checkin && checkout && (
+                  <p className="text-xs text-gray-400 mt-2">
+                    Thử thay đổi bộ lọc hoặc chọn khoảng thời gian khác
                   </p>
-                  {checkin && checkout && (
-                    <p className="text-xs text-gray-400 mt-2">
-                      Thử thay đổi bộ lọc hoặc chọn khoảng thời gian khác
-                    </p>
-                  )}
-                </div>
-              </CardBody>
-            </Card>
+                )}
+              </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {filteredRooms.map((room: Room) => {
                 const roomType = roomTypes.find((rt: RoomType) => rt.id === room.roomTypeId);
                 const isAvailable = room.status === "AVAILABLE";
                 const canBook = isAvailable && !bookingLoading;
-                const totalPrice = roomType && checkin && checkout 
-                  ? roomType.basePrice * calculateNights() 
-                  : roomType?.basePrice || 0;
 
                 return (
-                  <Card key={room.id} className={`transition-all hover:shadow-lg overflow-hidden border-gray-200 ${
+                  <div key={room.id} className={`border border-gray-200 rounded-xl overflow-hidden transition-all hover:shadow-lg hover:border-gray-300 ${
                     !isAvailable ? 'opacity-75' : ''
                   }`}>
                     {/* Room thumbnail with overlay info */}
@@ -758,13 +746,7 @@ export default function BookRoomPage() {
                                 </Badge>
                               )}
                             </div>
-                            {roomType && (
-                              <div className="text-sm font-semibold drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
-                                Giá: {roomType.basePrice === 0 || !roomType.basePrice 
-                                  ? <span className="text-green-300 font-bold">miễn phí</span>
-                                  : <span className="text-white">{roomType.basePrice.toLocaleString("vi-VN")} VNĐ/tháng</span>}
-                              </div>
-                            )}
+                            {/* Giá phòng đã được ẩn theo yêu cầu, không hiển thị giá ở đây */}
                           </div>
                           {isAvailable && (
                             <Badge tone="success" className="text-xs font-semibold px-2.5 py-1 bg-white text-green-700 border-0 shadow-md shrink-0">
@@ -780,39 +762,13 @@ export default function BookRoomPage() {
                       </div>
                     </div>
 
-                    <CardBody className="p-5">
+                    <div className="p-5">
                       <div className="space-y-4">
-                        {/* Total price if dates selected */}
-                        {checkin && checkout && calculateNights() > 0 && roomType && (
-                          <div className="pt-2 border-t border-gray-200">
-                            {roomType.basePrice > 0 ? (
-                              <>
-                                <div className="flex items-center justify-between mb-1">
-                                  <span className="text-gray-600 text-sm">Tổng cộng:</span>
-                                  <span className="text-lg font-bold text-[hsl(var(--primary))]">
-                                    {totalPrice.toLocaleString("vi-VN")} VNĐ
-                                  </span>
-                                </div>
-                                <p className="text-xs text-gray-500">
-                                  {calculateNights()} đêm × {roomType.basePrice.toLocaleString("vi-VN")} VNĐ/tháng
-                                </p>
-                              </>
-                            ) : (
-                              <div className="flex items-center justify-between">
-                                <span className="text-gray-600 text-sm">Tổng cộng:</span>
-                                <span className="text-lg font-bold text-green-600">
-                                  Miễn phí
-                                </span>
-                              </div>
-                            )}
-                          </div>
-                        )}
-
                         {/* Action buttons */}
                         <div className="flex gap-3 pt-2">
                           <Button
-                            variant="primary"
-                            className="flex-1 text-sm font-semibold"
+                            variant="secondary"
+                            className="flex-1 h-10 text-sm font-semibold bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]"
                             onClick={() => handleViewDetails(room)}
                           >
                             Xem chi tiết
@@ -820,12 +776,12 @@ export default function BookRoomPage() {
                           <Button
                             onClick={() => handleBookRoom(room)}
                             disabled={!canBook}
-                            variant={canBook ? "secondary" : "secondary"}
-                            className="flex-1 text-sm font-semibold"
+                            variant="primary"
+                            className="flex-1 h-10 text-sm font-semibold"
                           >
                             {bookingLoading ? (
                               <span className="flex items-center gap-2">
-                                <span className="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600"></span>
+                                <span className="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-white"></span>
                                 Đang xử lý...
                               </span>
                             ) : !isAvailable ? (
@@ -836,13 +792,15 @@ export default function BookRoomPage() {
                           </Button>
                         </div>
                       </div>
-                    </CardBody>
-                  </Card>
+                    </div>
+                  </div>
                 );
               })}
             </div>
           )}
-        </div>
+          </CardBody>
+        </Card>
+      </div>
 
       {/* Room Detail Modal */}
       <Modal
@@ -900,13 +858,7 @@ export default function BookRoomPage() {
                     <div className="text-gray-600">
                       <span>Sức chứa: <strong className="text-gray-900">{roomType.maxOccupancy} người</strong></span>
                     </div>
-                    <div className="text-gray-600">
-                      <span>Giá: <strong className="text-gray-900">
-                        {roomType.basePrice === 0 || !roomType.basePrice 
-                          ? "miễn phí" 
-                          : `${roomType.basePrice.toLocaleString("vi-VN")} VNĐ/tháng`}
-                      </strong></span>
-                    </div>
+                    {/* Giá phòng đã được ẩn trong modal chi tiết */}
                   </div>
                 )}
 
@@ -935,7 +887,7 @@ export default function BookRoomPage() {
         <div className="mt-6 pt-4 border-t border-gray-200">
           <Button
             variant="primary"
-            className="w-full"
+            className="w-full h-11"
             onClick={() => {
               setDetailModalOpen(false);
               if (selectedRoom) {
@@ -957,21 +909,9 @@ export default function BookRoomPage() {
           setSelectedRoom(null);
           setModalCheckin("");
           setModalCheckout("");
+          setModalCheckinTime("14:00");
+          setModalCheckoutTime("10:00");
           setCurrentStep(1);
-          setCurrentPhotoStep(1);
-          setCapturedImage(null);
-          setCapturedImages({
-            faceFront: null,
-            faceLeft: null,
-            faceRight: null,
-            cccdFront: null,
-            cccdBack: null,
-          });
-          setShowCamera(false);
-          setFaceDetected(false);
-          if (detectionIntervalRef.current) {
-            clearInterval(detectionIntervalRef.current);
-          }
         }}
         title="Đặt phòng"
         size="lg"
@@ -1115,20 +1055,67 @@ export default function BookRoomPage() {
                   </>
                 )}
 
+                {/* Ngày giờ check-in / check-out */}
+                <div className="pt-2 border-t border-gray-200">
+                  <h4 className="text-sm font-semibold text-gray-900 mb-3">Thời gian đặt phòng</h4>
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                        Check-in <span className="text-red-500">*</span>
+                      </label>
+                      <div className="grid grid-cols-2 gap-3">
+                        <input
+                          type="date"
+                          value={modalCheckin}
+                          onChange={(e) => setModalCheckin(e.target.value)}
+                          min={new Date().toISOString().split('T')[0]}
+                          className="w-full h-11 px-3 text-sm border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] bg-white"
+                        />
+                        <input
+                          type="time"
+                          value={modalCheckinTime}
+                          onChange={(e) => setModalCheckinTime(e.target.value)}
+                          className="w-full h-11 px-3 text-sm border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] bg-white"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                        Check-out <span className="text-red-500">*</span>
+                      </label>
+                      <div className="grid grid-cols-2 gap-3">
+                        <input
+                          type="date"
+                          value={modalCheckout}
+                          onChange={(e) => setModalCheckout(e.target.value)}
+                          min={modalCheckin || new Date().toISOString().split('T')[0]}
+                          className="w-full h-11 px-3 text-sm border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] bg-white"
+                        />
+                        <input
+                          type="time"
+                          value={modalCheckoutTime}
+                          onChange={(e) => setModalCheckoutTime(e.target.value)}
+                          className="w-full h-11 px-3 text-sm border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] bg-white"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 <div className="flex gap-3 pt-4">
                   <Button variant="secondary" onClick={() => {
                     setConfirmModalOpen(false);
                     setSelectedRoom(null);
                     setModalCheckin("");
                     setModalCheckout("");
-                  }} className="flex-1">
+                  }} className="flex-1 h-11">
                     Hủy
                   </Button>
                   <Button 
                     variant="primary" 
                     onClick={handleStep1Next} 
-                    className="flex-1"
-                    disabled={!validatePersonalInfo(personalInfo).isValid}
+                    className="flex-1 h-11"
+                    disabled={!validatePersonalInfo(personalInfo).isValid || !modalCheckin || !modalCheckout}
                   >
                     Tiếp theo
                   </Button>
@@ -1136,225 +1123,182 @@ export default function BookRoomPage() {
               </div>
             )}
 
-            {/* Step 2: Photo Capture (5 photos) */}
-            {currentStep === 2 && (() => {
-              const photoSteps = [
-                { num: 1, title: "Khuôn mặt chính diện", key: "faceFront" as const },
-                { num: 2, title: "Khuôn mặt trái", key: "faceLeft" as const },
-                { num: 3, title: "Khuôn mặt phải", key: "faceRight" as const },
-                { num: 4, title: "CCCD mặt trước", key: "cccdFront" as const },
-                { num: 5, title: "CCCD mặt sau", key: "cccdBack" as const },
-              ];
-              
-              const currentStepInfo = photoSteps[currentPhotoStep - 1];
-              const currentImage = capturedImages[currentStepInfo.key];
-              const isFacePhoto = currentPhotoStep <= 3;
-              const allCaptured = capturedImages.faceFront && 
-                capturedImages.faceLeft && 
-                capturedImages.faceRight && 
-                capturedImages.cccdFront && 
-                capturedImages.cccdBack;
-              
-              return (
+            {/* Step 2: Trạng thái khuôn mặt / đăng ký hoặc dùng lại */}
+            {currentStep === 2 && (
                 <div className="space-y-4">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg font-semibold text-gray-900">Chụp ảnh</h3>
-                    <Badge tone="info" className="text-sm">
-                      {currentPhotoStep}/5
-                    </Badge>
-                  </div>
-                  
-                  {/* Progress indicator */}
-                  <div className="flex items-center gap-2 mb-4">
-                    {photoSteps.map((step, idx) => (
-                      <div key={step.num} className="flex-1 flex items-center">
-                        <div className={`flex-1 h-2 rounded-full ${
-                          idx < currentPhotoStep - 1 ? 'bg-green-500' :
-                          idx === currentPhotoStep - 1 ? 'bg-[hsl(var(--primary))]' :
-                          'bg-gray-200'
-                        }`} />
-                        {idx < photoSteps.length - 1 && (
-                          <div className={`w-2 h-2 rounded-full mx-1 ${
-                            idx < currentPhotoStep - 1 ? 'bg-green-500' :
-                            idx === currentPhotoStep - 1 ? 'bg-[hsl(var(--primary))]' :
-                            'bg-gray-200'
-                          }`} />
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                  
-                  <div className="p-3 bg-blue-50 rounded-lg border border-blue-200 mb-4">
-                    <p className="text-sm font-medium text-blue-900">
-                      Bước {currentPhotoStep}/5: {currentStepInfo.title}
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">Trạng thái khuôn mặt</h3>
+                <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                  {faceStatus.loading ? (
+                    <p className="text-sm text-gray-600">Đang kiểm tra dữ liệu khuôn mặt...</p>
+                  ) : faceStatus.registered ? (
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-green-700">Đã có dữ liệu khuôn mặt</p>
+                        <p className="text-xs text-gray-500">
+                          Bạn có thể tiếp tục hoặc đăng ký lại nếu muốn cập nhật.
                     </p>
                   </div>
-                  
-                  {showCamera && (isFacePhoto ? modelsLoaded : true) ? (
-                    <div className="relative bg-gray-900 rounded-lg overflow-hidden" style={{ aspectRatio: '4/3' }}>
-                      <WebcamComponent
-                        audio={false}
-                        ref={webcamRef}
-                        screenshotFormat="image/jpeg"
-                        videoConstraints={{
-                          facingMode: currentPhotoStep <= 3 ? "user" : { exact: "environment" },
-                          width: 1280,
-                          height: 720,
-                        }}
-                        className="w-full h-full object-cover"
-                      />
-                      {isFacePhoto && (
-                        <canvas
-                          ref={canvasRef}
-                          className="absolute inset-0 pointer-events-none"
-                          style={{ width: '100%', height: '100%' }}
-                        />
-                      )}
-                      
-                      {isFacePhoto && !faceDetected && (
-                        <div className="absolute inset-0 flex items-center justify-center bg-black/50">
-                          <div className="text-white text-center p-4">
-                            <p className="text-lg font-semibold mb-2">Đang chờ nhận diện khuôn mặt...</p>
-                            <p className="text-sm">
-                              {currentPhotoStep === 1 && "Vui lòng nhìn thẳng vào camera"}
-                              {currentPhotoStep === 2 && "Vui lòng quay mặt sang trái"}
-                              {currentPhotoStep === 3 && "Vui lòng quay mặt sang phải"}
-                            </p>
-                          </div>
-                        </div>
-                      )}
-                      
-                      {isFacePhoto && faceDetected && (
-                        <div className="absolute top-4 left-4 bg-green-500 text-white px-3 py-1 rounded-full text-sm font-semibold">
-                          ✓ Đã phát hiện khuôn mặt
-                        </div>
-                      )}
-                      
-                      {!isFacePhoto && (
-                        <div className="absolute inset-0 flex items-center justify-center bg-black/30">
-                          <div className="text-white text-center p-4 bg-black/50 rounded-lg">
-                            <p className="text-lg font-semibold mb-2">
-                              {currentPhotoStep === 4 && "Chụp mặt trước CCCD"}
-                              {currentPhotoStep === 5 && "Chụp mặt sau CCCD"}
-                            </p>
-                            <p className="text-sm">Đảm bảo ảnh rõ ràng, đầy đủ thông tin</p>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ) : showCamera && isFacePhoto && !modelsLoaded ? (
-                    <div className="bg-gray-900 rounded-lg flex items-center justify-center text-white p-12" style={{ aspectRatio: '4/3' }}>
-                      <div className="text-center">
-                        <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-white mb-3"></div>
-                        <p>Đang tải mô hình nhận diện...</p>
+                      <Badge tone="success">Đã đăng ký</Badge>
                       </div>
-                    </div>
-                  ) : null}
-
-                  {/* Preview of captured images */}
-                  {Object.values(capturedImages).some(img => img !== null) && (
-                    <div className="mt-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
-                      <p className="text-sm font-medium text-gray-700 mb-2">Ảnh đã chụp:</p>
-                      <div className="grid grid-cols-5 gap-2">
-                        {photoSteps.map((step) => {
-                          const img = capturedImages[step.key];
-                          return (
-                            <div key={step.num} className="relative">
-                              {img ? (
-                                <img 
-                                  src={img} 
-                                  alt={step.title} 
-                                  className="w-full aspect-square object-cover rounded border-2 border-green-500" 
-                                />
-                              ) : (
-                                <div className="w-full aspect-square bg-gray-200 rounded border-2 border-gray-300 flex items-center justify-center">
-                                  <span className="text-xs text-gray-400">{step.num}</span>
-                                </div>
-                              )}
-                              <p className="text-xs text-gray-600 mt-1 text-center">{step.title}</p>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="space-y-2 text-sm text-gray-600">
-                    <p><strong>Hướng dẫn:</strong></p>
-                    <ul className="list-disc list-inside space-y-1 text-xs">
-                      {currentPhotoStep === 1 && (
-                        <>
-                          <li>Nhìn thẳng vào camera, không nghiêng đầu</li>
-                          <li>Đảm bảo ánh sáng đủ và rõ ràng</li>
-                          <li>Không đeo khẩu trang hoặc che khuất khuôn mặt</li>
-                          <li>Hệ thống sẽ tự động chụp sau 1.5 giây khi phát hiện ổn định</li>
-                        </>
+                  ) : (
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-red-700">Chưa có dữ liệu khuôn mặt</p>
+                        <p className="text-xs text-gray-500">
+                          Cần đăng ký trước khi hoàn tất đặt phòng.
+                        </p>
+                          </div>
+                      <Badge tone="warning">Chưa đăng ký</Badge>
+                        </div>
                       )}
-                      {currentPhotoStep === 2 && (
-                        <>
-                          <li>Quay mặt sang trái một góc khoảng 45 độ</li>
-                          <li>Giữ nguyên tư thế, không di chuyển</li>
-                          <li>Đảm bảo toàn bộ khuôn mặt trong khung hình</li>
-                          <li>Hệ thống sẽ tự động chụp sau 1.5 giây khi phát hiện ổn định</li>
-                        </>
-                      )}
-                      {currentPhotoStep === 3 && (
-                        <>
-                          <li>Quay mặt sang phải một góc khoảng 45 độ</li>
-                          <li>Giữ nguyên tư thế, không di chuyển</li>
-                          <li>Đảm bảo toàn bộ khuôn mặt trong khung hình</li>
-                          <li>Hệ thống sẽ tự động chụp sau 1.5 giây khi phát hiện ổn định</li>
-                        </>
-                      )}
-                      {currentPhotoStep === 4 && (
-                        <>
-                          <li>Đặt CCCD/CMND phẳng, không bị cong</li>
-                          <li>Đảm bảo ánh sáng đủ, không bị phản quang</li>
-                          <li>Chụp toàn bộ mặt trước của CCCD/CMND</li>
-                          <li>Ảnh phải rõ ràng, đọc được tất cả thông tin</li>
-                        </>
-                      )}
-                      {currentPhotoStep === 5 && (
-                        <>
-                          <li>Lật CCCD/CMND sang mặt sau</li>
-                          <li>Đặt phẳng, không bị cong</li>
-                          <li>Chụp toàn bộ mặt sau của CCCD/CMND</li>
-                          <li>Ảnh phải rõ ràng, đọc được tất cả thông tin</li>
-                        </>
-                      )}
-                    </ul>
                   </div>
-
-                  <div className="flex gap-3 pt-4">
+                  
+                <div className="flex gap-3">
+                  <Button
+                    variant="secondary"
+                    onClick={() => setCurrentStep(1)}
+                    className="flex-1 h-11"
+                  >
+                    Quay lại
+                  </Button>
+                  {faceStatus.registered ? (
+                    <>
                     <Button 
                       variant="secondary" 
+                        disabled={faceStatus.loading || faceRegistering}
                       onClick={() => { 
-                        setCurrentStep(1); 
-                        setShowCamera(false);
-                        setCurrentPhotoStep(1);
+                          setFaceCaptureImages({
+                            faceFront: null,
+                            faceLeft: null,
+                            faceRight: null,
+                            cccdFront: null,
+                            cccdBack: null,
+                          });
+                          setFaceCaptureStep(1);
+                          setFaceCaptureOpen(true);
                       }} 
-                      className="flex-1"
+                      className="flex-1 h-11"
                     >
-                      Quay lại
+                        Đăng ký lại
                     </Button>
-                    {allCaptured ? (
-                      <Button variant="primary" onClick={handleStep2Next} className="flex-1">
-                        Hoàn tất
+                      <Button
+                        variant="primary"
+                        disabled={faceStatus.loading || faceRegistering}
+                        onClick={handleStep2Next}
+                        className="flex-1 h-11"
+                      >
+                        Tiếp tục
                       </Button>
+                    </>
                     ) : (
                       <Button 
                         variant="primary" 
-                        onClick={capturePhoto} 
-                        disabled={(isFacePhoto && !faceDetected) || faceDetecting} 
-                        className="flex-1"
+                      disabled={faceStatus.loading || faceRegistering}
+                      onClick={() => {
+                        setFaceCaptureImages({
+                          faceFront: null,
+                          faceLeft: null,
+                          faceRight: null,
+                          cccdFront: null,
+                          cccdBack: null,
+                        });
+                        setFaceCaptureStep(1);
+                        setFaceCaptureOpen(true);
+                      }}
+                        className="flex-1 h-11"
                       >
-                        {faceDetecting ? "Đang xử lý..." : currentImage ? "Chụp lại" : "Chụp ảnh"}
+                      Đăng ký khuôn mặt
                       </Button>
                     )}
                   </div>
-                </div>
-              );
-            })()}
+
+                  {/* Preview các ảnh đã chụp nếu có */}
+                  {(faceCaptureImages.faceFront ||
+                    faceCaptureImages.faceLeft ||
+                    faceCaptureImages.faceRight ||
+                    faceCaptureImages.cccdFront ||
+                    faceCaptureImages.cccdBack) && (
+                    <div className="mt-4 space-y-2">
+                      <p className="text-xs font-medium text-gray-700">
+                        Ảnh đã chụp cho đăng ký khuôn mặt:
+                      </p>
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                        {faceCaptureImages.faceFront && (
+                          <div>
+                            <p className="text-xs text-gray-600 mb-1">Khuôn mặt chính diện</p>
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={faceCaptureImages.faceFront}
+                              alt="Khuôn mặt chính diện"
+                              className="w-full aspect-video object-cover rounded border"
+                            />
+                        </div>
+                      )}
+                        {faceCaptureImages.faceLeft && (
+                          <div>
+                            <p className="text-xs text-gray-600 mb-1">Khuôn mặt bên trái</p>
+                            <img
+                              src={faceCaptureImages.faceLeft}
+                              alt="Khuôn mặt bên trái"
+                              className="w-full aspect-video object-cover rounded border"
+                            />
+                        </div>
+                      )}
+                        {faceCaptureImages.faceRight && (
+                          <div>
+                            <p className="text-xs text-gray-600 mb-1">Khuôn mặt bên phải</p>
+                            <img
+                              src={faceCaptureImages.faceRight}
+                              alt="Khuôn mặt bên phải"
+                              className="w-full aspect-video object-cover rounded border"
+                            />
+                        </div>
+                      )}
+                        {faceCaptureImages.cccdFront && (
+                          <div>
+                            <p className="text-xs font-semibold text-gray-700 mb-1">CCCD mặt trước</p>
+                            <img
+                              src={faceCaptureImages.cccdFront}
+                              alt="CCCD mặt trước"
+                              className="w-full aspect-video object-cover rounded border"
+                            />
+                    </div>
+                        )}
+                        {faceCaptureImages.cccdBack && (
+                          <div>
+                            <p className="text-xs font-semibold text-gray-700 mb-1">CCCD mặt sau</p>
+                            <img
+                              src={faceCaptureImages.cccdBack}
+                              alt="CCCD mặt sau"
+                              className="w-full aspect-video object-cover rounded border"
+                            />
+                                </div>
+                              )}
+                      </div>
+                      
+                      {/* Chỉ hiển thị nút gửi khi đã chụp đủ ảnh */}
+                      {allFaceImagesCaptured && (
+                        <div className="flex gap-3 pt-3">
+                          <Button 
+                            variant="primary" 
+                            className="flex-1 h-11"
+                            onClick={handleSubmitFaceRegister}
+                            disabled={faceRegistering}
+                          >
+                            {faceRegistering ? "Đang đăng ký khuôn mặt..." : "Gửi / cập nhật dữ liệu khuôn mặt"}
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                {!faceStatus.registered && !allFaceImagesCaptured && (
+                  <p className="text-xs text-gray-500 text-center">
+                    Hệ thống sẽ đăng ký khuôn mặt trực tiếp trong bước này. Vui lòng chụp đủ 5 ảnh để tiếp tục.
+                  </p>
+                    )}
+                  </div>
+            )}
 
             {/* Step 3: Confirmation */}
             {currentStep === 3 && (
@@ -1385,89 +1329,42 @@ export default function BookRoomPage() {
                         </div>
                       )}
                       <div className="flex justify-between">
-                      <span className="text-gray-600">Check-in:</span>
-                      <span className="font-medium text-gray-900">
-                        {new Date(modalCheckin).toLocaleDateString("vi-VN")}
-                      </span>
-                    </div>
+                        <span className="text-gray-600">Check-in:</span>
+                        <span className="font-medium text-gray-900">
+                          {new Date(modalCheckin).toLocaleDateString("vi-VN")} lúc {modalCheckinTime}
+                        </span>
+                      </div>
                       <div className="flex justify-between">
-                      <span className="text-gray-600">Check-out:</span>
-                      <span className="font-medium text-gray-900">
-                        {new Date(modalCheckout).toLocaleDateString("vi-VN")}
-                      </span>
-                    </div>
+                        <span className="text-gray-600">Check-out:</span>
+                        <span className="font-medium text-gray-900">
+                          {new Date(modalCheckout).toLocaleDateString("vi-VN")} lúc {modalCheckoutTime}
+                        </span>
+                      </div>
                           </div>
                   </div>
 
-                  {/* Preview all captured images */}
-                  {(capturedImages.faceFront || capturedImages.faceLeft || capturedImages.faceRight || capturedImages.cccdFront || capturedImages.cccdBack) && (
-                    <div className="space-y-3">
-                      <p className="text-sm font-medium text-gray-700 mb-2">Ảnh đã chụp:</p>
-                      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                        {capturedImages.faceFront && (
-                          <div>
-                            <p className="text-xs text-gray-600 mb-1">Khuôn mặt chính diện</p>
-                            <img src={capturedImages.faceFront} alt="Face front" className="w-full rounded-lg border-2 border-gray-200" />
-                          </div>
-                        )}
-                        {capturedImages.faceLeft && (
-                          <div>
-                            <p className="text-xs text-gray-600 mb-1">Khuôn mặt trái</p>
-                            <img src={capturedImages.faceLeft} alt="Face left" className="w-full rounded-lg border-2 border-gray-200" />
-                          </div>
-                        )}
-                        {capturedImages.faceRight && (
-                          <div>
-                            <p className="text-xs text-gray-600 mb-1">Khuôn mặt phải</p>
-                            <img src={capturedImages.faceRight} alt="Face right" className="w-full rounded-lg border-2 border-gray-200" />
-                          </div>
-                        )}
-                        {capturedImages.cccdFront && (
-                          <div>
-                            <p className="text-xs text-gray-600 mb-1">CCCD mặt trước</p>
-                            <img src={capturedImages.cccdFront} alt="CCCD front" className="w-full rounded-lg border-2 border-gray-200" />
-                          </div>
-                        )}
-                        {capturedImages.cccdBack && (
-                          <div>
-                            <p className="text-xs text-gray-600 mb-1">CCCD mặt sau</p>
-                            <img src={capturedImages.cccdBack} alt="CCCD back" className="w-full rounded-lg border-2 border-gray-200" />
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
                 </div>
 
                 <div className="flex gap-3 pt-4">
                   <Button 
                     variant="secondary" 
-                    onClick={() => { 
-                      setCurrentStep(2); 
-                      setShowCamera(true);
-                      // Go back to first incomplete photo step
-                      if (!capturedImages.faceFront) setCurrentPhotoStep(1);
-                      else if (!capturedImages.faceLeft) setCurrentPhotoStep(2);
-                      else if (!capturedImages.faceRight) setCurrentPhotoStep(3);
-                      else if (!capturedImages.cccdFront) setCurrentPhotoStep(4);
-                      else setCurrentPhotoStep(5);
-                    }} 
+                    onClick={() => setCurrentStep(1)}
                     disabled={bookingLoading}
-                    className="flex-1"
+                    className="flex-1 h-11"
                   >
-                    Quay lại chỉnh sửa
+                    Chỉnh sửa
                   </Button>
-                  <Button 
-                    variant="primary" 
-                    onClick={handleConfirmBookingWithFace} 
+                  <Button
+                    variant="primary"
+                    onClick={handleConfirmBookingWithFace}
                     disabled={bookingLoading}
-                    className="flex-1"
+                    className="flex-1 h-11"
                   >
                     {bookingLoading ? (
                       <span className="flex items-center gap-2">
                         <span className="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-white"></span>
                         Đang xử lý...
-                              </span>
+                      </span>
                     ) : (
                       "Xác nhận đặt phòng"
                     )}
@@ -1478,41 +1375,92 @@ export default function BookRoomPage() {
                   </div>
                 ) : (
           <div className="space-y-4">
-                  <div className="p-3 bg-amber-50 rounded-lg border border-amber-200">
-                    <p className="text-sm text-amber-700 font-medium mb-3">
-                      Vui lòng chọn ngày check-in và check-out để tiếp tục đặt phòng.
+                  <div className="p-4 bg-amber-50 rounded-xl border border-amber-200">
+                    <p className="text-sm text-amber-700 font-medium mb-4">
+                      Vui lòng chọn ngày và giờ check-in, check-out để tiếp tục đặt phòng.
                     </p>
-                    <div className="space-y-3">
+                    <div className="space-y-4">
+                      {/* Check-in */}
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1.5">Ngày check-in</label>
-                        <Input
-                          type="date"
-                          value={modalCheckin}
-                          onChange={(e) => setModalCheckin(e.target.value)}
-                          min={new Date().toISOString().split('T')[0]}
-                          className="text-sm"
-                        />
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Ngày check-in</label>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="relative">
+                            <input
+                              type="date"
+                              value={modalCheckin}
+                              onChange={(e) => setModalCheckin(e.target.value)}
+                              min={new Date().toISOString().split('T')[0]}
+                              className="w-full h-11 px-3 text-sm border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] bg-white"
+                            />
+                          </div>
+                          <div className="relative">
+                            <input
+                              type="time"
+                              value={modalCheckinTime}
+                              onChange={(e) => setModalCheckinTime(e.target.value)}
+                              className="w-full h-11 px-3 text-sm border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] bg-white"
+                            />
+                          </div>
+                        </div>
                       </div>
+                      
+                      {/* Check-out */}
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1.5">Ngày check-out</label>
-                        <Input
-                          type="date"
-                          value={modalCheckout}
-                          onChange={(e) => setModalCheckout(e.target.value)}
-                          min={modalCheckin || new Date().toISOString().split('T')[0]}
-                          className="text-sm"
-                        />
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Ngày check-out</label>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="relative">
+                            <input
+                              type="date"
+                              value={modalCheckout}
+                              onChange={(e) => setModalCheckout(e.target.value)}
+                              min={modalCheckin || new Date().toISOString().split('T')[0]}
+                              className="w-full h-11 px-3 text-sm border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] bg-white"
+                            />
+                          </div>
+                          <div className="relative">
+                            <input
+                              type="time"
+                              value={modalCheckoutTime}
+                              onChange={(e) => setModalCheckoutTime(e.target.value)}
+                              className="w-full h-11 px-3 text-sm border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] bg-white"
+                            />
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
-            <div className="flex gap-3 pt-4">
-              <Button variant="secondary" onClick={() => setConfirmModalOpen(false)} className="flex-1">
+            <div className="flex gap-3 pt-2">
+              <Button variant="secondary" onClick={() => setConfirmModalOpen(false)} className="flex-1 h-11">
                 Hủy
                 </Button>
               </div>
             </div>
         )}
       </Modal>
+
+      {/* Modal chụp 5 ảnh khuôn mặt + CCCD trong flow đặt phòng */}
+      <FaceCapture
+        open={faceCaptureOpen}
+        onClose={() => setFaceCaptureOpen(false)}
+        loading={faceRegistering}
+        onCapture={handleCapturedFaceImage}
+        title={
+          faceCaptureStep === 4
+            ? "Chụp CCCD mặt trước"
+            : faceCaptureStep === 5
+            ? "Chụp CCCD mặt sau"
+            : "Chụp ảnh khuôn mặt"
+        }
+        overlayType={
+          faceCaptureStep === 1
+            ? "front"
+            : faceCaptureStep === 2
+            ? "left"
+            : faceCaptureStep === 3
+            ? "right"
+            : undefined
+        }
+      />
     </div>
   );
 }

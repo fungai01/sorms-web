@@ -53,7 +53,7 @@ export async function getFaceStatus(bookingId: number) {
   }
 }
 
-export async function registerFace(bookingId: number, formData: FormData) {
+export async function registerFace(formData: FormData) {
   const userInfo = getUserInfo()
   if (!userInfo?.id) {
     throw new Error('Not authenticated')
@@ -81,12 +81,12 @@ export async function registerFace(bookingId: number, formData: FormData) {
     newFormData.append('images', file)
   })
 
-  // Don't include Authorization header for multipart/form-data (browser will set it)
   const url = `${API_CONFIG.BASE_URL}/ai/recognition/face/register?student_id=${userInfo.id}`
+  const headers = getAuthHeaders() // vẫn cần Authorization, KHÔNG set Content-Type để browser tự thêm boundary
 
   const res = await fetch(url, {
     method: 'POST',
-    // Don't set Content-Type header, browser will set it with boundary
+    headers,
     body: newFormData,
   })
 

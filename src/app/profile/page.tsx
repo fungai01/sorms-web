@@ -181,6 +181,7 @@ function InfoRow({ label, value, loading, hideIfEmpty = true }: { label: string;
 }
 
 export default function ProfilePage() {
+  const BOOKING_INFO_KEY = "booking_personal_info";
   const router = useRouter();
   const { user, isAuthenticated, isLoading } = useAuth();
   
@@ -208,6 +209,24 @@ export default function ProfilePage() {
       profile.email
     );
   }, [profile]);
+
+  // Share essential profile fields to booking form cache
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!profile) return;
+    const cache = {
+      fullName: profile.fullName || displayName || "",
+      dateOfBirth: toInputDate(profile.dateOfBirth),
+      cccd: profile.idCardNumber || "",
+      phone: profile.phoneNumber || "",
+      email: profile.email || "",
+    };
+    try {
+      localStorage.setItem(BOOKING_INFO_KEY, JSON.stringify(cache));
+    } catch {
+      // ignore storage errors
+    }
+  }, [profile, displayName]);
 
   const backUrl = useMemo(() => {
     if (typeof window !== "undefined") {
@@ -306,14 +325,51 @@ export default function ProfilePage() {
     setSelectedWard("");
   }, [selectedProvince, allCommunes]);
 
-  // Auto-fill address detail with ward + province + Việt Nam
+  // Auto-fill address detail with ward + province + Việt Nam (only when empty)
   useEffect(() => {
     const provinceName = provinces.find((p) => p.code === selectedProvince)?.name;
     const wardName = wards.find((w) => w.code === selectedWard)?.name;
     const autoPart = [wardName, provinceName, "Việt Nam"].filter(Boolean).join(", ");
-    if (autoPart) setAddressDetail(autoPart);
-    else setAddressDetail("");
-  }, [selectedProvince, selectedWard, provinces, wards]);
+    if (!addressDetail?.trim() && autoPart) {
+      setAddressDetail(autoPart);
+    }
+  }, [selectedProvince, selectedWard, provinces, wards, addressDetail]);
+
+  // Prefill address selections from existing profile when data is available
+  useEffect(() => {
+    if (!editModalOpen || !profile) return;
+    if (!provinces.length || !allCommunes.length) return;
+    const stateValue = (profile.state || "").trim();
+    const cityValue = (profile.city || "").trim();
+
+    if (!selectedProvince && stateValue) {
+      const provinceMatch = provinces.find(
+        (p) => p.code === stateValue || p.name.toLowerCase() === stateValue.toLowerCase()
+      );
+      if (provinceMatch) {
+        setSelectedProvince(provinceMatch.code);
+      }
+    }
+
+    if (!selectedWard && cityValue) {
+      const wardMatch = allCommunes.find((w) => {
+        const matchesProvince = selectedProvince
+          ? w.provinceCode === selectedProvince
+          : true;
+        return matchesProvince && (w.code === cityValue || w.name.toLowerCase() === cityValue.toLowerCase());
+      });
+      if (wardMatch) {
+        setSelectedWard(wardMatch.code);
+        if (!selectedProvince) {
+          setSelectedProvince(wardMatch.provinceCode);
+        }
+      }
+    }
+
+    if (profile.address && !addressDetail) {
+      setAddressDetail(profile.address);
+    }
+  }, [editModalOpen, profile, provinces, allCommunes, selectedProvince, selectedWard, addressDetail]);
 
   // Load profile from API - only current user's data
   useEffect(() => {
@@ -478,8 +534,18 @@ export default function ProfilePage() {
   const openEdit = () => {
     if (!profile) return;
     setAddressDetail(profile.address || "");
-    setSelectedProvince("");
-    setSelectedWard("");
+    // Attempt to pre-select province/ward with currently loaded data
+    const stateValue = (profile.state || "").trim();
+    const cityValue = (profile.city || "").trim();
+    const provinceMatch = provinces.find(
+      (p) => p.code === stateValue || p.name.toLowerCase() === stateValue.toLowerCase()
+    );
+    const wardMatch = allCommunes.find((w) => {
+      const matchesProvince = provinceMatch ? w.provinceCode === provinceMatch.code : true;
+      return matchesProvince && (w.code === cityValue || w.name.toLowerCase() === cityValue.toLowerCase());
+    });
+    setSelectedProvince(provinceMatch?.code || "");
+    setSelectedWard(wardMatch?.code || "");
     setEditForm({
       id: profile.id,
       email: profile.email || "",
@@ -564,8 +630,9 @@ export default function ProfilePage() {
     const wardName = wards.find((w) => w.code === String(selectedWard))?.name;
     const composedAddress = [wardName, addressDetail || editForm.address].filter(Boolean).join(", ");
 
-    // Always use the authenticated user's own ID (profile > auth user > form)
-    const safeIdRaw = profile?.id ?? profile?.userProfileId ?? (user as any)?.id ?? editForm.id;
+    // Always use the authenticated user's own ID (auth user > profile > form)
+    // Đảm bảo id gửi lên trùng với id trong token, để API route nhận diện là cập nhật profile của chính mình
+    const safeIdRaw = (user as any)?.id ?? profile?.id ?? profile?.userProfileId ?? editForm.id;
     const safeId = safeIdRaw ? String(safeIdRaw) : '';
     if (!safeId) {
       setFlash({ type: "error", text: "Không tìm thấy ID người dùng để cập nhật." });
