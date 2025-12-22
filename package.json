@@ -15,9 +15,9 @@
   "dependencies": {
     "@heroicons/react": "^2.2.0",
     "@tailwindcss/postcss": "^4.0.0",
-    "@tensorflow/tfjs-core": "^3.21.0",
-    "@tensorflow/tfjs-backend-cpu": "^3.21.0",
-    "@tensorflow/tfjs-backend-webgl": "^3.21.0",
+    "@tensorflow/tfjs-core": "4.22.0",
+    "@tensorflow/tfjs-backend-cpu": "4.22.0",
+    "@tensorflow/tfjs-backend-webgl": "4.22.0",
     "@tolgee/core": "^6.2.7",
     "@tolgee/react": "^6.2.7",
     "@types/qrcode": "^1.5.6",
@@ -48,6 +48,7 @@
     "typescript": "^5.7.2"
   },
   "overrides": {
-    "node-fetch": "^2.7.0"
+    "node-fetch": "^2.7.0",
+    "@tensorflow/tfjs-core": "4.22.0"
   }
 }
