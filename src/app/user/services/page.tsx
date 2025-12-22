@@ -621,32 +621,32 @@ export default function RequestServicePage() {
 
                 {/* Total */}
                 {selectedService && (
-                  <div className="bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 text-white rounded-xl p-5 shadow-xl border border-gray-700">
-                    <div className="flex items-center justify-between mb-3 pb-3 border-b border-gray-700">
+                  <div className="bg-gradient-to-br from-[hsl(var(--primary)/0.1)] via-[hsl(var(--primary)/0.05)] to-transparent rounded-xl p-5 shadow-md border-2 border-[hsl(var(--primary)/0.3)]">
+                    <div className="flex items-center justify-between mb-3 pb-3 border-b border-gray-200">
                       <div className="flex items-center gap-2">
-                        <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg className="w-5 h-5 text-[hsl(var(--primary))]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
                         </svg>
-                        <span className="text-gray-300 text-sm font-medium">Chi tiết đơn hàng</span>
+                        <span className="text-gray-600 text-sm font-medium">Chi tiết đơn hàng</span>
                       </div>
                     </div>
                     <div className="space-y-2 mb-4">
                       <div className="flex items-center justify-between text-sm">
-                        <span className="text-gray-400">Dịch vụ</span>
-                        <span className="text-gray-200 font-medium">{selectedService.name}</span>
+                        <span className="text-gray-500">Dịch vụ</span>
+                        <span className="text-gray-900 font-medium">{selectedService.name}</span>
                       </div>
                       <div className="flex items-center justify-between text-sm">
-                        <span className="text-gray-400">Số lượng</span>
-                        <span className="text-gray-200 font-medium">x {quantity}</span>
+                        <span className="text-gray-500">Số lượng</span>
+                        <span className="text-gray-900 font-medium">x {quantity}</span>
                       </div>
                       <div className="flex items-center justify-between text-sm">
-                        <span className="text-gray-400">Đơn giá</span>
-                        <span className="text-gray-200 font-medium">{formatMoney(selectedService.unitPrice)}/{selectedService.unitName}</span>
+                        <span className="text-gray-500">Đơn giá</span>
+                        <span className="text-gray-900 font-medium">{formatMoney(selectedService.unitPrice)}/{selectedService.unitName}</span>
                       </div>
                     </div>
-                    <div className="flex items-center justify-between pt-4 border-t-2 border-gray-700">
-                      <span className="text-lg font-semibold">Tổng cộng</span>
-                      <span className="text-3xl font-bold text-white">{formatMoney(totalPrice)}</span>
+                    <div className="flex items-center justify-between pt-4 border-t-2 border-gray-200">
+                      <span className="text-lg font-semibold text-gray-900">Tổng cộng</span>
+                      <span className="text-3xl font-bold text-[hsl(var(--primary))]">{formatMoney(totalPrice)}</span>
                     </div>
                   </div>
                 )}
