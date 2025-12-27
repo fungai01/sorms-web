@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import * as faceapi from "face-api.js";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
@@ -32,8 +33,13 @@ export default function OpenDoorPage() {
   const [result, setResult] = useState<{ success: boolean; message?: string } | null>(null);
   const [flash, setFlash] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [faceBox, setFaceBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  const [faceStatus, setFaceStatus] = useState<"no-face" | "off-center" | "too-close" | "too-far" | "good">("no-face");
+  const [faceModelLoaded, setFaceModelLoaded] = useState(false);
+  const [cameraReady, setCameraReady] = useState(false);
   
   const webcamRef = useRef<any>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
     if (flash) {
@@ -41,6 +47,198 @@ export default function OpenDoorPage() {
       return () => clearTimeout(timer);
     }
   }, [flash]);
+
+  // Load model nhận diện khuôn mặt cho việc "canh" trên FE
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadModels = async () => {
+      try {
+        // Kiểm tra xem model đã được load chưa (tránh load lại khi hot reload)
+        if (faceapi.nets.tinyFaceDetector.isLoaded) {
+          if (!cancelled) {
+            setFaceModelLoaded(true);
+          }
+          return;
+        }
+
+        // Import backend động để tránh đăng ký kernel nhiều lần trong Next.js hot reload
+        // Chỉ import khi chưa có backend nào được set
+        if (faceapi?.tf) {
+          const currentBackend = faceapi.tf.getBackend?.();
+          if (!currentBackend) {
+            // Dynamic import backend để tránh đăng ký kernel nhiều lần
+            await import("@tensorflow/tfjs-backend-webgl");
+            await faceapi.tf.setBackend("webgl");
+          }
+          await faceapi.tf.ready();
+        }
+
+        // Các file model cần được đặt tại thư mục public/models
+        const MODEL_URL = "/models";
+        await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+        if (!cancelled) {
+          setFaceModelLoaded(true);
+        }
+      } catch (err) {
+        console.error("Không thể load model face-api:", err);
+      }
+    };
+
+    loadModels();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Helper function để validate video element trong Next.js 15
+  const isValidVideoElement = (video: any): video is HTMLVideoElement => {
+    if (!video) return false;
+    
+    // Kiểm tra là HTMLVideoElement thực sự
+    if (!(video instanceof HTMLVideoElement)) return false;
+    
+    // Kiểm tra video đã được mount trong DOM
+    if (!document.body.contains(video)) return false;
+    
+    // Kiểm tra các thuộc tính cần thiết
+    if (
+      video.tagName !== "VIDEO" ||
+      video.readyState !== 4 ||
+      video.videoWidth === 0 ||
+      video.videoHeight === 0 ||
+      video.paused ||
+      video.ended
+    ) {
+      return false;
+    }
+    
+    // Kiểm tra video có stream data
+    if (!video.srcObject && !video.src) return false;
+    
+    return true;
+  };
+
+  // Liên tục canh vị trí khuôn mặt: lệch / gần / xa / tốt
+  useEffect(() => {
+    if (!faceModelLoaded || !selectedRoom || !cameraReady) {
+      // Khi chưa load model, chưa chọn phòng hoặc camera chưa sẵn sàng thì không detect
+      setFaceStatus("no-face");
+      return;
+    }
+
+    let interval: any;
+    let isDetecting = false; // Tránh detect đồng thời nhiều lần
+    let timeoutId: any;
+    let retryCount = 0;
+    const MAX_RETRIES = 10;
+
+    // Đợi một chút sau khi camera ready để đảm bảo video có frame trong Next.js 15
+    timeoutId = setTimeout(() => {
+      const startDetect = () => {
+        interval = setInterval(async () => {
+          // Nếu đang detect thì skip
+          if (isDetecting) return;
+
+          const video = webcamRef.current?.video as HTMLVideoElement | null;
+
+          // Validate video element một cách chặt chẽ cho Next.js 15
+          if (!isValidVideoElement(video)) {
+            retryCount++;
+            if (retryCount > MAX_RETRIES) {
+              setFaceStatus("no-face");
+            }
+            return;
+          }
+
+          // Reset retry count khi video hợp lệ
+          retryCount = 0;
+
+          // Đảm bảo video element thực sự sẵn sàng và có frame data
+          // Trong Next.js 15, cần đợi video thực sự có frame trước khi detect
+          // Kiểm tra video có đang phát và có frame data
+          if (video.paused || video.ended || video.readyState < 4) {
+            return;
+          }
+
+          // Đảm bảo video có frame data hợp lệ (videoWidth và videoHeight > 0)
+          if (video.videoWidth === 0 || video.videoHeight === 0) {
+            return;
+          }
+
+          isDetecting = true;
+          try {
+            // Sử dụng video element trực tiếp (theo yêu cầu chỉ dùng <video>, <canvas>, hoặc <img>)
+            // Đảm bảo video element đã được mount trong DOM và có frame data hợp lệ
+            const detection = await faceapi.detectSingleFace(
+              video,
+              new faceapi.TinyFaceDetectorOptions()
+            );
+
+            if (!detection) {
+              setFaceStatus("no-face");
+              setFaceBox(null);
+              isDetecting = false;
+              return;
+            }
+
+            const { box } = detection;
+            const frameW = video.videoWidth || 1;
+            const frameH = video.videoHeight || 1;
+
+            // Lưu lại box tỉ lệ để có thể vẽ khung từ FE (không phụ thuộc backend)
+            setFaceBox({
+              x: box.x / frameW,
+              y: box.y / frameH,
+              width: box.width / frameW,
+              height: box.height / frameH,
+            });
+
+            const centerX = (box.x + box.width / 2) / frameW;
+            const centerY = (box.y + box.height / 2) / frameH;
+            const faceAreaRatio = (box.width * box.height) / (frameW * frameH);
+
+            const isOffCenter =
+              Math.abs(centerX - 0.5) > 0.15 || Math.abs(centerY - 0.5) > 0.15;
+
+            if (isOffCenter) {
+              setFaceStatus("off-center");
+            } else if (faceAreaRatio > 0.35) {
+              setFaceStatus("too-close");
+            } else if (faceAreaRatio < 0.08) {
+              setFaceStatus("too-far");
+            } else {
+              setFaceStatus("good");
+            }
+          } catch (err) {
+            console.error("Lỗi khi detect khuôn mặt:", err);
+            setFaceStatus("no-face");
+          } finally {
+            isDetecting = false;
+          }
+        }, 700);
+      };
+
+      // Kiểm tra webcamRef có tồn tại không (quan trọng cho Next.js 15)
+      if (!webcamRef.current) {
+        console.warn("webcamRef chưa sẵn sàng trong Next.js 15");
+        setFaceStatus("no-face");
+        return;
+      }
+      
+      startDetect();
+    }, 1000); // Đợi 1000ms sau khi camera ready để đảm bảo Next.js 15 mount đúng
+
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      if (interval) clearInterval(interval);
+      // Cleanup canvas
+      if (canvasRef.current) {
+        canvasRef.current = null;
+      }
+    };
+  }, [faceModelLoaded, selectedRoom, cameraReady]);
 
   // Normalize rooms data từ hook
   const rooms: Room[] = Array.isArray(roomsData) ? roomsData : [];
@@ -99,6 +297,9 @@ export default function OpenDoorPage() {
     setSelectedRoom(room);
     setResult(null);
     setCameraError(null);
+    setFaceBox(null);
+    setFaceStatus("no-face");
+    setCameraReady(false);
   };
 
   const handleOpenDoor = async () => {
@@ -106,6 +307,8 @@ export default function OpenDoorPage() {
 
     setLoading(true);
     setResult(null);
+    setFaceBox(null);
+    // Không reset faceStatus ở đây để giữ hướng dẫn, chỉ disable nút khi không "good"
 
     try {
       const screenshot = webcamRef.current.getScreenshot({ width: 800, height: 600, screenshotQuality: 0.9 });
@@ -149,6 +352,26 @@ export default function OpenDoorPage() {
       const doorData = data?.data || data;
       const accessGranted = doorData?.access === true;
 
+      // Nếu backend trả về toạ độ khung khuôn mặt, ví dụ:
+      // doorData.faceBox = { x: 0.2, y: 0.25, width: 0.5, height: 0.5 }
+      // (các giá trị là tỉ lệ so với chiều rộng/chiều cao ảnh, từ 0 đến 1)
+      if (doorData?.faceBox) {
+        const box = doorData.faceBox;
+        if (
+          typeof box.x === 'number' &&
+          typeof box.y === 'number' &&
+          typeof box.width === 'number' &&
+          typeof box.height === 'number'
+        ) {
+          setFaceBox({
+            x: box.x,
+            y: box.y,
+            width: box.width,
+            height: box.height,
+          });
+        }
+      }
+
       if (!res.ok || !accessGranted) {
         setResult({ success: false, message: doorData?.message || 'Xác thực khuôn mặt thất bại' });
         setFlash({ type: 'error', text: doorData?.message || 'Không thể mở cửa' });
@@ -168,6 +391,9 @@ export default function OpenDoorPage() {
     setSelectedRoom(null);
     setResult(null);
     setCameraError(null);
+    setFaceBox(null);
+    setFaceStatus("no-face");
+    setCameraReady(false);
   };
 
   const getStatusText = (status?: string) => {
@@ -372,14 +598,46 @@ export default function OpenDoorPage() {
                   screenshotFormat="image/jpeg"
                   screenshotQuality={0.9}
                   videoConstraints={{ facingMode: "user", width: 800, height: 600 }}
-                  onUserMedia={() => setCameraError(null)}
+                  onUserMedia={() => {
+                    setCameraError(null);
+                    // Đợi một chút để đảm bảo video element được mount trong Next.js 15
+                    setTimeout(() => {
+                      const video = webcamRef.current?.video;
+                      if (video && video instanceof HTMLVideoElement) {
+                        setCameraReady(true);
+                      } else {
+                        // Retry sau 200ms nếu video chưa sẵn sàng
+                        setTimeout(() => {
+                          const retryVideo = webcamRef.current?.video;
+                          if (retryVideo && retryVideo instanceof HTMLVideoElement) {
+                            setCameraReady(true);
+                          }
+                        }, 200);
+                      }
+                    }, 100);
+                  }}
                   onUserMediaError={() => setCameraError("Không thể truy cập camera")}
                 />
-                
-                {/* Face guide */}
+
+                {/* Khung gợi ý ban đầu (giữ lại nếu cần) */}
                 <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
                   <div className="w-72 h-96 border-4 border-[hsl(var(--primary))]/60 rounded-[50%] shadow-lg"></div>
                 </div>
+
+                {/* Vẽ khung khuôn mặt dựa trên dữ liệu backend trả về
+                    Giả định: faceBox.x, y, width, height là tỉ lệ (0–1) theo chiều rộng/chiều cao */}
+                {faceBox && (
+                  <div
+                    className="absolute border-4 border-green-400 rounded-xl pointer-events-none shadow-lg"
+                    style={{
+                      left: `${faceBox.x * 100}%`,
+                      top: `${faceBox.y * 100}%`,
+                      width: `${faceBox.width * 100}%`,
+                      height: `${faceBox.height * 100}%`,
+                      boxSizing: 'border-box',
+                    }}
+                  />
+                )}
 
                 {cameraError && (
                   <div className="absolute inset-0 bg-gray-900/90 flex items-center justify-center">
@@ -412,7 +670,13 @@ export default function OpenDoorPage() {
                     </svg>
                     <div>
                       <p className="text-sm font-semibold text-blue-900 mb-1">Hướng dẫn</p>
-                      <p className="text-xs text-blue-800 leading-relaxed">Đưa khuôn mặt vào khung oval, đảm bảo ánh sáng đủ và nhấn nút xác thực để mở cửa.</p>
+                      <p className="text-xs text-blue-800 leading-relaxed">
+                        {faceStatus === "no-face" && "Không thấy khuôn mặt, vui lòng đưa mặt vào khung oval."}
+                        {faceStatus === "off-center" && "Khuôn mặt đang lệch, hãy canh khuôn mặt vào giữa khung oval."}
+                        {faceStatus === "too-close" && "Bạn đang quá gần, hãy lùi xa camera một chút."}
+                        {faceStatus === "too-far" && "Bạn đang quá xa, hãy tiến lại gần camera hơn."}
+                        {faceStatus === "good" && "Vị trí tốt, giữ nguyên khuôn mặt và nhấn nút để chụp và gửi xác thực."}
+                      </p>
                     </div>
                   </div>
                 </div>
@@ -421,7 +685,7 @@ export default function OpenDoorPage() {
                   variant="primary"
                   className="w-full h-12 text-base font-semibold rounded-xl shadow-sm hover:shadow-md transition-all"
                   onClick={handleOpenDoor}
-                  disabled={loading || !!cameraError}
+                  disabled={loading || !!cameraError || faceStatus !== "good"}
                 >
                   {loading ? (
                     <>

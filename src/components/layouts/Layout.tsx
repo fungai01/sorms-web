@@ -15,9 +15,8 @@ interface ConditionalLayoutProps {
 function ConditionalLayoutContent({ children }: ConditionalLayoutProps) {
   const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [sidebarVisible, setSidebarVisible] = useState(true); // Sidebar visibility (show/hide)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(true); // Sidebar collapsed state (icon/full)
-  // Removed SidebarContext dependency
+  const [sidebarVisible, setSidebarVisible] = useState(true);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(true); 
   const [user, setUser] = useState<{
     name: string;
     email: string;
@@ -25,7 +24,6 @@ function ConditionalLayoutContent({ children }: ConditionalLayoutProps) {
     avatar?: string;
   } | null>(null);
 
-  // Check if current path should skip header, footer, and sidebar
   const skipLayout = pathname?.startsWith('/verification/checkin') || pathname?.startsWith('/verification/open-door');
 
   // Persist sidebar state across page navigation

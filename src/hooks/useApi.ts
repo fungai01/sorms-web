@@ -1,129 +1,77 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useMemo } from 'react'
+import useSWR from 'swr'
 import { apiClient, ApiResponse } from '@/lib/api-client'
+import { authFetch } from '@/lib/http'
 
-interface UseApiState<T> {
+// SWR fetcher helpers
+const jsonFetcher = async <T = any>(endpoint: string): Promise<T> => {
+  const res = await authFetch(endpoint, {
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include'
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || res.statusText)
+  }
+  return res.json().catch(() => ({} as T))
+}
+
+const listFetcher = async <T = any>(endpoint: string): Promise<T[]> => {
+  const data: any = await jsonFetcher(endpoint)
+  const items: T[] = Array.isArray(data?.items)
+    ? data.items
+    : Array.isArray(data?.data?.content)
+      ? data.data.content
+      : Array.isArray(data?.content)
+        ? data.content
+        : Array.isArray(data)
+          ? data
+          : []
+  return items
+}
+
+type UseApiState<T> = {
   data: T | null
   loading: boolean
   error: string | null
-  refetch: () => Promise<void>
+  mutate: (data?: T | Promise<T> | ((prev: T | null) => T | null), shouldRevalidate?: boolean) => Promise<T | undefined>
+  refetch: () => Promise<T | undefined>
 }
 
-export function useApi<T>(
-  apiCall: () => Promise<ApiResponse<T>>,
-  dependencies: any[] = []
-): UseApiState<T> {
-  const [data, setData] = useState<T | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  // Use useRef to store the latest apiCall function to avoid recreating fetchData
-  const apiCallRef = useRef(apiCall)
-  useEffect(() => {
-    apiCallRef.current = apiCall
+// SWR-wrapped list hook
+function useList<T = any>(key: string | null, refreshInterval?: number): UseApiState<T[]> {
+  const { data, error, isLoading, mutate } = useSWR<T[]>(key, listFetcher, {
+    refreshInterval,
+    dedupingInterval: 5000,
   })
 
-  // Memoize dependencies string to detect actual changes
-  const depsString = JSON.stringify(dependencies)
-  const prevDepsRef = useRef<string>('')
-  
-  const fetchData = useCallback(async () => {
-    try {
-      setLoading(true)
-      setError(null)
-      const response = await apiCallRef.current()
-      
-      if (response.success) {
-        setData(response.data || null)
-      } else {
-        const errorMessage =
-          typeof response.error === 'string' && response.error.trim()
-            ? response.error.trim()
-            : ''
-        setError(errorMessage)
-      }
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : ''
-      setError(errorMessage)
-    } finally {
-      setLoading(false)
-    }
-  }, []) // Empty deps - fetchData never changes
-
-  useEffect(() => {
-    // Always fetch on initial mount (when prevDepsRef is empty)
-    if (prevDepsRef.current === '') {
-      prevDepsRef.current = depsString
-      fetchData()
-      return
-    }
-    
-    // Only fetch if dependencies actually changed
-    if (prevDepsRef.current !== depsString) {
-      prevDepsRef.current = depsString
-      fetchData()
-    }
-  }, [depsString, fetchData])
-
   return {
-    data,
-    loading,
-    error,
-    refetch: fetchData,
+    data: (data || null) as T[] | null,
+    loading: isLoading,
+    error: error ? (error as Error).message : null,
+    mutate: mutate as any,
+    refetch: () => mutate()
   }
 }
 
-// Helper function to call Next.js API routes (proxy to backend)
-async function fetchFromProxy<T>(endpoint: string): Promise<{ success: boolean; data?: T; error?: string }> {
-  try {
-    const headers: HeadersInit = { 'Content-Type': 'application/json' }
-
-    // Use authFetch to automatically attach Authorization from cookies/localStorage
-    const res = await (await import('@/lib/http')).authFetch(endpoint, {
-      headers,
-      credentials: 'include'
-    })
-
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({ error: '' }))
-      return {
-        success: false,
-        error: errorData.error || ''
-      }
-    }
-
-    const data = await res.json()
-    return {
-      success: true,
-      data
-    }
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : ''
-    }
+// SWR-wrapped single resource hook (JSON)
+function useJson<T = any>(key: string | null, refreshInterval?: number): UseApiState<T> {
+  const { data, error, isLoading, mutate } = useSWR<T>(key, jsonFetcher, {
+    refreshInterval,
+    dedupingInterval: 5000,
+  })
+  return {
+    data: (data ?? null) as T | null,
+    loading: isLoading,
+    error: error ? (error as Error).message : null,
+    mutate: mutate as any,
+    refetch: () => mutate()
   }
-}
-
-// Normalize list results to always return an array
-async function fetchList<T = any>(endpoint: string): Promise<ApiResponse<T[]>> {
-  const res = await fetchFromProxy<any>(endpoint)
-  if (!res.success) return { success: false, error: res.error || '' }
-  const d = res.data
-  const items: T[] = Array.isArray(d?.items)
-    ? d.items
-    : Array.isArray(d?.data?.content)
-      ? d.data.content
-      : Array.isArray(d?.content)
-        ? d.content
-        : Array.isArray(d)
-          ? d
-          : []
-  return { success: true, data: items }
 }
 
 // Supported hooks tied to real APIs only - using Next.js API routes as proxy
 export function useRooms() {
-  return useApi(() => fetchList('/api/system/rooms'))
+  return useList('/api/system/rooms')
 }
 
 // Fetch rooms with backend-side filters (status, roomTypeId)
@@ -134,8 +82,7 @@ export function useRoomsFiltered(status?: string, roomTypeId?: number, startTime
   if (startTime) params.set('startTime', startTime)
   if (endTime) params.set('endTime', endTime)
   const endpoint = `/api/system/rooms${params.toString() ? `?${params.toString()}` : ''}`
-  // Always normalize list responses to an array so UI can render immediately on first load
-  return useApi(() => fetchList(endpoint), [endpoint])
+  return useList(endpoint)
 }
 
 export function useAvailableRooms(startTime?: string, endTime?: string) {
@@ -144,11 +91,11 @@ export function useAvailableRooms(startTime?: string, endTime?: string) {
   if (startTime) params.set('startTime', startTime)
   if (endTime) params.set('endTime', endTime)
   const endpoint = `/api/system/rooms?${params.toString()}`
-  return useApi(() => fetchFromProxy(endpoint), [endpoint])
+  return useList(endpoint)
 }
 
 export function useRoomTypes() {
-  return useApi(() => fetchList('/api/system/room-types'))
+  return useList('/api/system/room-types')
 }
 
 // Booking hooks
@@ -158,19 +105,17 @@ export function useBookings(status?: string) {
     status && status !== 'ALL'
       ? `/api/system/bookings?status=${encodeURIComponent(status)}`
       : '/api/system/bookings'
-
-  // Use fetchList to normalize response to array format (same as useRoomsFiltered)
-  return useApi(() => fetchList(endpoint), [endpoint])
+  return useList(endpoint)
 }
 
 // Dành riêng cho dashboard user: lấy toàn bộ bookings để tính toán phòng trống
 export function useAllBookings() {
-  return useApi(() => fetchFromProxy('/api/system/bookings'))
+  return useJson('/api/system/bookings')
 }
 
 export function useUserBookings() {
   // Use system bookings endpoint with user context
-  return useApi(() => fetchFromProxy('/api/system/bookings'))
+  return useJson('/api/system/bookings')
 }
 
 export function useServices(params?: { q?: string; sortBy?: string; sortOrder?: string; isActive?: boolean; page?: number; size?: number }) {
@@ -182,7 +127,7 @@ export function useServices(params?: { q?: string; sortBy?: string; sortOrder?: 
   if (params?.page !== undefined) queryParams.set('page', String(params.page))
   if (params?.size !== undefined) queryParams.set('size', String(params.size))
   const endpoint = `/api/system/services${queryParams.toString() ? `?${queryParams.toString()}` : ''}`
-  return useApi(() => fetchList(endpoint), [endpoint])
+  return useList(endpoint)
 }
 
 export function useServiceOrders(status?: string) {
@@ -191,12 +136,12 @@ export function useServiceOrders(status?: string) {
   const endpoint = status && status !== 'ALL'
     ? `/api/system/orders?status=${encodeURIComponent(status)}`
     : '/api/system/orders'
-  return useApi(() => fetchList(endpoint), [endpoint])
+  return useList(endpoint)
 }
 
 export function useServiceOrdersByBooking(bookingId: number) {
   const endpoint = `/api/system/orders?my=true&bookingId=${bookingId}`
-  return useApi(() => fetchList(endpoint), [bookingId])
+  return useList(endpoint)
 }
 
 // User service orders - get all orders for current user
@@ -204,51 +149,50 @@ export function useMyServiceOrders(bookingId?: number) {
   const endpoint = bookingId 
     ? `/api/system/orders?my=true&bookingId=${bookingId}`
     : `/api/system/orders?my=true`
-  return useApi(() => fetchList(endpoint), [endpoint])
+  return useList(endpoint)
 }
 
 // Single service order detail
 export function useServiceOrder(orderId: number) {
-  return useApi(() => apiClient.getServiceOrder(orderId), [orderId])
+  return useJson(`/api/system/orders/${orderId}`)
 }
 
 export function useStaffUsers() {
-  return useApi(() => fetchList('/api/user/staff'))
+  return useList('/api/user/staff')
 }
 
 // Dashboard stats derived from real endpoints
 export function useDashboardStats() {
-  return useApi(() => apiClient.getDashboardStats())
+  return useJson('/api/system/dashboard')
 }
 
 export function useOccupancyStats() {
-  return useApi(() => apiClient.getOccupancyStats())
+  return useJson('/api/system/dashboard/occupancy')
 }
 
 export function useBookingStats() {
-  return useApi(() => apiClient.getBookingStats())
+  return useJson('/api/system/dashboard/bookings')
 }
 
 export function usePaymentStats() {
-  return useApi(() => apiClient.getPaymentStats())
+  return useJson('/api/system/dashboard/payments')
 }
 
 // Staff profiles
 export function useStaffProfiles() {
-  return useApi(() => apiClient.getStaffProfiles())
+  return useList('/api/system/staff-profiles')
 }
 
 export function useStaffProfilesFiltered(status?: string, department?: string) {
   // Prefer normalized API from apiClient, with optional filters
-  return useApi(() => {
-    if (status && status !== 'ALL') {
-      return apiClient.getStaffProfilesByStatus(status)
-    }
-    if (department && department !== 'ALL') {
-      return apiClient.getStaffProfilesByDepartment(department)
-    }
-    return apiClient.getStaffProfiles()
+  const key = useMemo(() => {
+    const q = new URLSearchParams()
+    if (status && status !== 'ALL') q.set('status', status)
+    if (department && department !== 'ALL') q.set('department', department)
+    const qs = q.toString()
+    return `/api/system/staff-profiles${qs ? `?${qs}` : ''}`
   }, [status, department])
+  return useList(key)
 }
 
 // Users management - filters are forwarded to backend via Next.js API route
@@ -260,7 +204,7 @@ export function useUsers(params?: { role?: string; status?: string; page?: numbe
   if (params?.size !== undefined) query.set('size', String(params.size))
   if (params?.keyword) query.set('q', params.keyword)
   const endpoint = `/api/system/users${query.toString() ? `?${query.toString()}` : ''}`
-  return useApi(() => fetchFromProxy(endpoint), [endpoint])
+  return useJson(endpoint, 30000)
 }
 
 // Staff tasks
@@ -278,7 +222,7 @@ export function useStaffTasks(params?: {
     queryParams.set('relatedId', String(params.relatedId))
   }
   const endpoint = `/api/system/tasks${queryParams.toString() ? `?${queryParams.toString()}` : ''}`
-  return useApi(() => fetchList(endpoint), [endpoint])
+  return useList(endpoint, 30000)
 }
 
 // Roles management
@@ -288,10 +232,15 @@ export function useRoles(params?: { q?: string; page?: number; size?: number }) 
   if (params?.page !== undefined) query.set('page', String(params.page))
   if (params?.size !== undefined) query.set('size', String(params.size))
   const endpoint = `/api/system/roles${query.toString() ? `?${query.toString()}` : ''}`
-  return useApi(() => fetchFromProxy(endpoint), [endpoint])
+  return useList(endpoint)
 }
 
 // Payments - use backend API via apiClient (normalized)
 export function usePayments() {
-  return useApi(() => apiClient.getPaymentTransactions())
+  return useList('/api/system/payments')
+}
+
+// Current user info (self)
+export function useSelfUser() {
+  return useJson('/api/system/users?self=1')
 }

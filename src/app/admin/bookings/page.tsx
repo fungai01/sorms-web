@@ -8,7 +8,7 @@ import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import Modal from "@/components/ui/Modal";
 import { Table, THead, TBody } from "@/components/ui/Table";
 import { type Booking, type BookingStatus, type User } from '@/lib/types'
-import { useBookings, useRooms, useRoomsFiltered, useUsers } from '@/hooks/useApi'
+import { useUsers, useBookings, useRooms, useRoomsFiltered } from '@/hooks/useApi'
 import { apiClient } from '@/lib/api-client'
 import { formatDate, formatDateTime } from '@/lib/utils'
 
@@ -27,19 +27,26 @@ export default function BookingsPage() {
   const [query, setQuery] = useState("")
   const [filterStatus, setFilterStatus] = useState<"ALL" | BookingStatus>("ALL")
   
-  // API hooks
-  const { data: bookingsData, refetch: refetchBookings, loading: loadingBookings } = useBookings(
-    filterStatus !== 'ALL' ? filterStatus : undefined
-  )
-  
+  // Bookings với polling 10s (hook SWR)
+  const {
+    data: bookingsData,
+    loading: loadingBookings,
+    mutate: mutateBookings,
+  } = useBookings(filterStatus !== 'ALL' ? filterStatus : undefined)
   const bookings = (bookingsData || []) as Booking[]
 
-  // Lấy tất cả phòng (dùng khi sửa)
-  const { data: roomsData, refetch: refetchRooms } = useRooms()
+  // Lấy tất cả phòng (dùng khi sửa) - poll dài hơn
+  const {
+    data: roomsData,
+    mutate: mutateRooms
+  } = useRooms()
   const allRooms = (roomsData || []) as any[]
   
   // Lấy phòng trống (dùng khi tạo mới)
-  const { data: availableRoomsData, refetch: refetchAvailableRooms } = useRoomsFiltered('AVAILABLE')
+  const {
+    data: availableRoomsData,
+    mutate: mutateAvailableRooms
+  } = useRoomsFiltered('AVAILABLE')
   const availableRooms = (availableRoomsData || []) as any[]
 
   const { data: usersData } = useUsers({ size: 1000 })
@@ -389,10 +396,12 @@ export default function BookingsPage() {
       : await apiClient.createBooking(payload)
 
     if (response.success) {
-      await refetchBookings()
+      await mutateBookings()
+      mutateRooms()
+      mutateAvailableRooms()
       setFlash({ type: 'success', text: edit.id ? 'Đã cập nhật đặt phòng.' : 'Đã tạo đặt phòng mới.' })
-          handleCloseEdit()
-      } else {
+      handleCloseEdit()
+    } else {
       const errorMsg = response.error || response.message || ''
       const errorLower = errorMsg.toLowerCase()
       
@@ -428,37 +437,42 @@ export default function BookingsPage() {
   const handleApprove = useCallback(async (bookingId: number) => {
     const response = await apiClient.approveBooking(bookingId, undefined, 'Đã duyệt bởi admin')
     if (response.success) {
-      await refetchBookings()
-      // Refresh danh sách phòng sau khi approve booking
-      await refetchRooms()
-      await refetchAvailableRooms()
+      // Optimistic mutate: cập nhật status tại cache, sau đó revalidate
+      mutateBookings((prev: any[] | null) => {
+        if (!prev) return prev
+        return prev.map((b: any) => b.id === bookingId ? { ...b, status: 'APPROVED' } : b)
+      }, false)
+      await mutateBookings()
+      mutateRooms()
+      mutateAvailableRooms()
       setFlash({ type: 'success', text: 'Đã duyệt đặt phòng thành công.' })
-      // Đóng modal nếu đang mở
       if (editOpen && edit.id === bookingId) {
-          handleCloseEdit()
-        }
-      } else {
+        handleCloseEdit()
+      }
+    } else {
       setFlash({ type: 'error', text: response.error || response.message || 'Không thể duyệt đặt phòng.' })
     }
-  }, [refetchBookings, refetchRooms, refetchAvailableRooms, editOpen, edit.id, handleCloseEdit])
+  }, [mutateBookings, mutateRooms, mutateAvailableRooms, editOpen, edit.id, handleCloseEdit])
 
   // Reject booking
   const handleReject = useCallback(async (bookingId: number) => {
     const response = await apiClient.rejectBooking(bookingId, undefined, 'Đã từ chối bởi admin')
     if (response.success) {
-      await refetchBookings()
-      // Refresh danh sách phòng sau khi reject booking (vì backend đã trả lại phòng về AVAILABLE)
-      await refetchRooms()
-      await refetchAvailableRooms()
+      mutateBookings((prev: any[] | null) => {
+        if (!prev) return prev
+        return prev.map((b: any) => b.id === bookingId ? { ...b, status: 'REJECTED' } : b)
+      }, false)
+      await mutateBookings()
+      mutateRooms()
+      mutateAvailableRooms()
       setFlash({ type: 'success', text: 'Đã từ chối đặt phòng thành công.' })
-      // Đóng modal nếu đang mở
       if (editOpen && edit.id === bookingId) {
         handleCloseEdit()
       }
     } else {
       setFlash({ type: 'error', text: response.error || response.message || 'Không thể từ chối đặt phòng.' })
     }
-  }, [refetchBookings, refetchRooms, refetchAvailableRooms, editOpen, edit.id, handleCloseEdit])
+  }, [mutateBookings, mutateRooms, mutateAvailableRooms, editOpen, edit.id, handleCloseEdit])
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -500,17 +514,20 @@ export default function BookingsPage() {
     
     const response = await apiClient.deleteBooking(confirmOpen.id)
     if (response.success) {
-      await refetchBookings()
-      // Refresh danh sách phòng sau khi xóa booking (vì backend đã trả lại phòng về AVAILABLE)
-      await refetchRooms()
-      await refetchAvailableRooms()
+      mutateBookings((prev: any[] | null) => {
+        if (!prev) return prev
+        return prev.filter((b: any) => b.id !== confirmOpen.id)
+      }, false)
+      await mutateBookings()
+      mutateRooms()
+      mutateAvailableRooms()
       setConfirmOpen({ open: false })
-        setFlash({ type: 'success', text: 'Đã xóa đặt phòng.' })
+      setFlash({ type: 'success', text: 'Đã xóa đặt phòng.' })
     } else {
       setFlash({ type: 'error', text: response.error || response.message || '' })
       setConfirmOpen({ open: false })
-      }
     }
+  }
     
   const renderStatusChip = (s: BookingStatus) => {
     const toneMap: Record<BookingStatus, any> = {

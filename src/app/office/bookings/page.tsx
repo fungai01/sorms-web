@@ -513,29 +513,42 @@ export default function OfficeBookingsPage() {
   }, [bookingsWithOverride, searchQuery, checkinFrom, checkinTo, checkoutFrom, checkoutTo, guestsMin, guestsMax, userIdFilter, roomIdFilter, filterStatus]);
 
   const handleApprove = async (booking: BookingRequest) => {
+    const startedAt = performance.now();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    const prevStatus = statusOverrides[booking.id];
+
+    // Optimistic UI: đóng modal + set status ngay để tránh cảm giác chờ
     setApprovingId(booking.id);
+    setStatusOverrides(prev => ({ ...prev, [booking.id]: 'APPROVED' }));
+    setApprovalModalOpen(false);
+    setSelectedBooking(null);
+
     try {
       const token = authService.getAccessToken();
-      const headers: HeadersInit = {};
+      const userInfo = authService.getUserInfo();
+      const headers: HeadersInit = { 'Content-Type': 'application/json' };
       if (token) {
         headers['Authorization'] = `Bearer ${token}`;
       }
 
+      const body = {
+        approverId: userInfo?.id || undefined,
+        decision: 'APPROVED',
+      };
+
       const res = await fetch(`/api/system/bookings?action=approve&id=${booking.id}`, {
         method: 'POST',
-        headers
-      })
+        headers,
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
       if (res.ok) {
-        // Cập nhật UI ngay lập tức
-        setStatusOverrides(prev => ({ ...prev, [booking.id]: 'APPROVED' }));
         setFlash({ type: 'success', text: 'Đã duyệt đặt phòng thành công!' });
-        // Đóng modal ngay để tránh cảm giác bị đứng
-        setApprovalModalOpen(false);
-        setSelectedBooking(null);
-        // Refetch danh sách nhưng không chờ để UI không bị khựng
-        refetchBookings();
-        
-        // Create notification
+        refetchBookings(); // không chờ để UI không khựng
+
         createBookingNotification(
           booking.id,
           booking.userName || `User #${booking.userId}`,
@@ -543,14 +556,26 @@ export default function OfficeBookingsPage() {
           'CONFIRMED'
         );
       } else {
-        const err = await res.text()
+        const err = await res.text().catch(() => '');
+        // Rollback
+        setStatusOverrides(prev => ({ ...prev, [booking.id]: prevStatus || booking.status }));
         setFlash({ type: 'error', text: err || 'Có lỗi xảy ra khi duyệt đặt phòng' });
       }
-    } catch (error) {
-      setFlash({ type: 'error', text: 'Có lỗi xảy ra khi duyệt đặt phòng' });
+    } catch (error: any) {
+      // Rollback khi lỗi/timeout
+      setStatusOverrides(prev => ({ ...prev, [booking.id]: prevStatus || booking.status }));
+      setFlash({
+        type: 'error',
+        text: error?.name === 'AbortError'
+          ? 'Yêu cầu duyệt quá lâu, vui lòng thử lại'
+          : 'Có lỗi xảy ra khi duyệt đặt phòng'
+      });
       console.error('Booking approval error:', error);
     } finally {
+      clearTimeout(timeoutId);
       setApprovingId(null);
+      const endedAt = performance.now();
+      console.log('handleApprove duration(ms):', Math.round(endedAt - startedAt));
     }
   };
 
@@ -591,24 +616,44 @@ export default function OfficeBookingsPage() {
       return;
     }
 
+    const startedAt = performance.now();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    const prevStatus = statusOverrides[booking.id];
+
+    // Optimistic UI
     setRejectingId(booking.id);
+    setStatusOverrides(prev => ({ ...prev, [booking.id]: 'REJECTED' }));
+    setApprovalModalOpen(false);
+    setSelectedBooking(null);
+
     try {
-      const response = await apiClient.updateBooking(booking.id, {
-        ...booking,
-        status: 'REJECTED',
-        rejectionReason
+      const token = authService.getAccessToken();
+      const userInfo = authService.getUserInfo();
+      const headers: HeadersInit = { 'Content-Type': 'application/json' };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const body = {
+        approverId: userInfo?.id || undefined,
+        decision: 'REJECTED',
+        reason: rejectionReason.trim(),
+      };
+
+      const res = await fetch(`/api/system/bookings?action=approve&id=${booking.id}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: controller.signal,
       });
-      
-      if (response.success) {
-        // Cập nhật UI ngay lập tức
-        setStatusOverrides(prev => ({ ...prev, [booking.id]: 'REJECTED' }));
+      clearTimeout(timeoutId);
+
+      if (res.ok) {
         setFlash({ type: 'success', text: 'Đã từ chối đặt phòng' });
-        setApprovalModalOpen(false);
-        setSelectedBooking(null);
         setRejectionReason('');
         refetchBookings();
-        
-        // Create notification
+
         createBookingNotification(
           booking.id,
           booking.userName || `User #${booking.userId}`,
@@ -616,13 +661,24 @@ export default function OfficeBookingsPage() {
           'REJECTED'
         );
       } else {
-        setFlash({ type: 'error', text: response.error || 'Có lỗi xảy ra khi từ chối đặt phòng' });
+        const err = await res.text().catch(() => '');
+        setStatusOverrides(prev => ({ ...prev, [booking.id]: prevStatus || booking.status }));
+        setFlash({ type: 'error', text: err || 'Có lỗi xảy ra khi từ chối đặt phòng' });
       }
-    } catch (error) {
-      setFlash({ type: 'error', text: 'Có lỗi xảy ra khi từ chối đặt phòng' });
+    } catch (error: any) {
+      setStatusOverrides(prev => ({ ...prev, [booking.id]: prevStatus || booking.status }));
+      setFlash({
+        type: 'error',
+        text: error?.name === 'AbortError'
+            ? 'Yêu cầu từ chối quá lâu, vui lòng thử lại'
+            : 'Có lỗi xảy ra khi từ chối đặt phòng'
+      });
       console.error('Booking rejection error:', error);
     } finally {
+      clearTimeout(timeoutId);
       setRejectingId(null);
+      const endedAt = performance.now();
+      console.log('handleReject duration(ms):', Math.round(endedAt - startedAt));
     }
   };
 

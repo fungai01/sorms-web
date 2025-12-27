@@ -7,6 +7,7 @@ import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import Modal from "@/components/ui/Modal";
 import { useAuth } from "@/hooks/useAuth";
+import { useSelfUser } from "@/hooks/useApi";
 import {
   UserIcon,
   EnvelopeIcon,
@@ -371,90 +372,61 @@ export default function ProfilePage() {
     }
   }, [editModalOpen, profile, provinces, allCommunes, selectedProvince, selectedWard, addressDetail]);
 
-  // Load profile from API - only current user's data
+  const { data: selfUserData, loading: selfUserLoading } = useSelfUser();
+
+  // Load profile from API - only current user's data (SWR self user)
   useEffect(() => {
-    if (isLoading) return;
+    if (isLoading || selfUserLoading) return;
     if (!isAuthenticated || !user) {
       router.push("/login");
       return;
     }
     if (!user.email) return;
-    
-    const loadProfile = async () => {
-      try {
-        setLoading(true);
-        const token = localStorage.getItem("auth_access_token");
-        if (!token) {
-          console.error("[Profile] No auth token found");
-          return;
-        }
 
-        // Fetch only current user's profile using self=1
-        const res = await fetch("/api/system/users?self=1", {
-          method: "GET",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          credentials: "include",
-        });
+    setLoading(true);
+    try {
+      const items: any[] = Array.isArray((selfUserData as any)?.items)
+        ? (selfUserData as any).items
+        : Array.isArray((selfUserData as any)?.data?.items)
+          ? (selfUserData as any).data.items
+          : Array.isArray(selfUserData as any)
+            ? (selfUserData as any)
+            : [];
 
-        if (!res.ok) {
-          const errorText = await res.text().catch(() => "");
-          console.error("[Profile] Failed to load profile:", res.status, errorText);
-          setFlash({ type: "error", text: "Không thể tải thông tin hồ sơ. Vui lòng thử lại." });
-          return;
-        }
-
-        const data = await res.json().catch(() => null);
-        const items: any[] = Array.isArray(data?.items) ? data.items : Array.isArray(data?.data?.items) ? data.data.items : Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
-        const found = items.find((u) => (u.email || "").toLowerCase() === user.email!.toLowerCase());
-        
-        if (found) {
-          const mapped: UserProfile = {
-            id: found.id,
-            email: found.email,
-            fullName: found.fullName ?? found.full_name ?? user.name ?? user.email,
-            phoneNumber: found.phoneNumber ?? found.phone_number,
-            status: found.status,
-            firstName: found.firstName ?? found.first_name,
-            lastName: found.lastName ?? found.last_name,
-            dateOfBirth: found.dateOfBirth ?? found.date_of_birth,
-            gender: found.gender,
-            address: found.address,
-            city: found.city,
-            state: found.state,
-            postalCode: found.postalCode ?? found.postal_code,
-            country: found.country,
-            avatarUrl: found.avatarUrl ?? found.avatar_url ?? user.avatarUrl,
-            bio: found.bio,
-            preferredLanguage: found.preferredLanguage ?? found.preferred_language,
-            timezone: found.timezone,
-            emergencyContactName: found.emergencyContactName,
-            emergencyContactPhone: found.emergencyContactPhone,
-            emergencyContactRelationship: found.emergencyContactRelationship,
-            userProfileId: found.userProfileId,
-            idCardNumber: found.idCardNumber,
-            idCardIssueDate: found.idCardIssueDate ?? found.id_card_issue_date,
-            idCardIssuePlace: found.idCardIssuePlace ?? found.id_card_issue_place,
-            createdDate: found.createdDate,
-            lastModifiedDate: found.lastModifiedDate,
-          };
-          setProfile(mapped);
-        } else {
-          // Fallback to basic user info
-          setProfile({
-            id: user.id ?? 0,
-            email: user.email,
-            fullName: user.name ?? user.email,
-            phoneNumber: (user as any).phoneNumber,
-            avatarUrl: user.avatarUrl,
-            status: "ACTIVE",
-          });
-        }
-      } catch (error) {
-        console.error("[Profile] Error loading profile:", error);
-        setFlash({ type: "error", text: "Có lỗi xảy ra khi tải thông tin hồ sơ." });
+      const found = items.find((u) => (u.email || "").toLowerCase() === user.email!.toLowerCase());
+      
+      if (found) {
+        const mapped: UserProfile = {
+          id: found.id,
+          email: found.email,
+          fullName: found.fullName ?? found.full_name ?? user.name ?? user.email,
+          phoneNumber: found.phoneNumber ?? found.phone_number,
+          status: found.status,
+          firstName: found.firstName ?? found.first_name,
+          lastName: found.lastName ?? found.last_name,
+          dateOfBirth: found.dateOfBirth ?? found.date_of_birth,
+          gender: found.gender,
+          address: found.address,
+          city: found.city,
+          state: found.state,
+          postalCode: found.postalCode ?? found.postal_code,
+          country: found.country,
+          avatarUrl: found.avatarUrl ?? found.avatar_url ?? user.avatarUrl,
+          bio: found.bio,
+          preferredLanguage: found.preferredLanguage ?? found.preferred_language,
+          timezone: found.timezone,
+          emergencyContactName: found.emergencyContactName,
+          emergencyContactPhone: found.emergencyContactPhone,
+          emergencyContactRelationship: found.emergencyContactRelationship,
+          userProfileId: found.userProfileId,
+          idCardNumber: found.idCardNumber ?? found.id_card_number,
+          idCardIssueDate: found.idCardIssueDate ?? found.id_card_issue_date,
+          idCardIssuePlace: found.idCardIssuePlace ?? found.id_card_issue_place,
+          createdDate: found.createdDate,
+          lastModifiedDate: found.lastModifiedDate,
+        };
+        setProfile(mapped);
+      } else {
         // Fallback to basic user info
         setProfile({
           id: user.id ?? 0,
@@ -464,13 +436,22 @@ export default function ProfilePage() {
           avatarUrl: user.avatarUrl,
           status: "ACTIVE",
         });
-      } finally {
-        setLoading(false);
       }
-    };
-
-    loadProfile();
-  }, [isAuthenticated, isLoading, router, user]);
+    } catch (error) {
+      console.error("[Profile] Error loading profile:", error);
+      setFlash({ type: "error", text: "Có lỗi xảy ra khi tải thông tin hồ sơ." });
+      setProfile({
+        id: user.id ?? 0,
+        email: user.email,
+        fullName: user.name ?? user.email,
+        phoneNumber: (user as any).phoneNumber,
+        avatarUrl: user.avatarUrl,
+        status: "ACTIVE",
+      });
+    } finally {
+      setLoading(false);
+    }
+  }, [isAuthenticated, isLoading, selfUserLoading, selfUserData, router, user]);
 
   // Flash autohide
   useEffect(() => {
@@ -642,19 +623,18 @@ export default function ProfilePage() {
     try {
       setLoading(true);
       const payload = {
-        id: safeId,
+          userId: safeId,
         fullName: editForm.fullName || "",
-        email: editForm.email || "",
         phoneNumber: editForm.phoneNumber || "",
         firstName: editForm.firstName || "",
         lastName: editForm.lastName || "",
         dateOfBirth: editForm.dateOfBirth || "",
-        gender: editForm.gender || "",
+          gender: editForm.gender || "",
         address: composedAddress || editForm.address || "",
         city: wardName || editForm.city || "",
         state: provinceName || "Việt Nam",
         postalCode: editForm.postalCode || "",
-        country: "Việt Nam",
+          country: "Việt Nam",
         avatarUrl: editForm.avatarUrl || "",
         bio: editForm.bio || "",
         preferredLanguage: editForm.preferredLanguage || "",

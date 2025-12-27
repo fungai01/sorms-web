@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { useAvailableRooms, useRoomTypes } from "@/hooks/useApi";
+import { useAvailableRooms, useRoomTypes, useSelfUser } from "@/hooks/useApi";
 import { apiClient } from "@/lib/api-client";
 import type { Room, RoomType } from "@/lib/types";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
@@ -280,68 +280,42 @@ export default function BookRoomPage() {
     }
   }, [personalInfo]);
 
-  // Fetch chi tiết hồ sơ người dùng để tự động điền form đặt phòng (ưu tiên thông tin đã xác thực)
+  const { data: selfUserData, loading: selfUserLoading } = useSelfUser();
+
+  // Prefill hồ sơ người dùng cho form đặt phòng từ self user data
   useEffect(() => {
-    if (!user) return;
-    const token = typeof window !== "undefined" ? localStorage.getItem("auth_access_token") : null;
-    if (!token) return;
+    if (!user || selfUserLoading) return;
 
-    const controller = new AbortController();
-
-    const loadProfile = async () => {
-      try {
-        const res = await fetch("/api/system/users?self=1", {
-          method: "GET",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          signal: controller.signal,
-        });
-
-        if (!res.ok) return;
-
-        const data = await res.json().catch(() => null);
-        const items: any[] = Array.isArray(data?.items)
-          ? data.items
-          : Array.isArray(data?.data?.items)
-          ? data.data.items
-          : Array.isArray(data?.data)
-          ? data.data
-          : Array.isArray(data)
-          ? data
+    const items: any[] = Array.isArray((selfUserData as any)?.items)
+      ? (selfUserData as any).items
+      : Array.isArray((selfUserData as any)?.data?.items)
+        ? (selfUserData as any).data.items
+        : Array.isArray(selfUserData as any)
+          ? (selfUserData as any)
           : [];
 
-        const me = items.find((u) => (u.email || "").toLowerCase() === (user.email || "").toLowerCase()) || items[0];
-        if (!me) return;
+    const me = items.find((u) => (u.email || "").toLowerCase() === (user.email || "").toLowerCase()) || items[0];
+    if (!me) return;
 
-        const fullNameFromProfile =
-          me.fullName ??
-          me.full_name ??
-          (me.firstName && me.lastName ? `${me.firstName} ${me.lastName}` : undefined) ??
-          user?.name;
+    const fullNameFromProfile =
+      me.fullName ??
+      me.full_name ??
+      (me.firstName && me.lastName ? `${me.firstName} ${me.lastName}` : undefined) ??
+      user?.name;
 
-        setPersonalInfo((prev) => ({
-          ...prev,
-          fullName: fullNameFromProfile || prev.fullName,
-          dateOfBirth: me.dateOfBirth ?? me.date_of_birth ?? prev.dateOfBirth ?? "",
-          cccd: me.idCardNumber ?? me.id_card_number ?? prev.cccd ?? "",
-          phone: me.phoneNumber ?? me.phone_number ?? prev.phone ?? "",
-          email: me.email ?? prev.email ?? "",
-        }));
+    setPersonalInfo((prev) => ({
+      ...prev,
+      fullName: fullNameFromProfile || prev.fullName,
+      dateOfBirth: me.dateOfBirth ?? me.date_of_birth ?? prev.dateOfBirth ?? "",
+      cccd: me.idCardNumber ?? me.id_card_number ?? prev.cccd ?? "",
+      phone: me.phoneNumber ?? me.phone_number ?? prev.phone ?? "",
+      email: me.email ?? prev.email ?? "",
+    }));
 
-        if (me.email || me.phoneNumber || me.phone_number) {
-          setShowContactFields(false);
-        }
-      } catch (err: any) {
-        if (err?.name === "AbortError") return;
-        console.error("Failed to load user profile for booking form:", err);
-      }
-    };
-
-    loadProfile();
-    return () => controller.abort();
-  }, [user]);
+    if (me.email || me.phoneNumber || me.phone_number) {
+      setShowContactFields(false);
+    }
+  }, [user, selfUserLoading, selfUserData]);
 
  
   // Bước 1 -> Bước 2 (kiểm tra khuôn mặt)

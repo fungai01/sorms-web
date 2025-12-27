@@ -208,8 +208,11 @@ export async function PUT(req: NextRequest) {
     
     // If user is updating their own profile, use /users/profile endpoint
     if (isProfileUpdate) {
+      const userIdForProfile = body.userId ?? body.id ?? me?.id
+
       const payload = {
-        // Don't include id, backend will get it from security context
+        // Backend UpdateProfileRequest expects userId from body
+        userId: userIdForProfile ? String(userIdForProfile) : undefined,
         fullName: body.fullName ?? body.full_name,
         phoneNumber: body.phoneNumber ?? body.phone_number,
         firstName: body.firstName ?? body.first_name,

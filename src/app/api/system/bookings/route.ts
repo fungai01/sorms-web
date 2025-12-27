@@ -187,19 +187,19 @@ export async function POST(req: NextRequest) {
       }
 
       const body = await req.json().catch(() => ({}))
+      const decision = (body.decision || new URL(req.url).searchParams.get('decision') || 'APPROVED').toString()
+      const reason = (body.reason || new URL(req.url).searchParams.get('reason') || '').toString()
       let approverId: string | undefined = body.approverId ? String(body.approverId) : undefined
-      const reason: string | undefined = body.reason ? String(body.reason) : undefined
-      const decision: string | undefined = body.decision ? String(body.decision) : 'APPROVED'
 
-      // Lấy approverId từ token nếu chưa có trong body
+      // Lấy approverId từ token chỉ khi thiếu
       if (!approverId) {
         try {
           const userInfo = await verifyToken(req)
           if (userInfo?.id) {
             approverId = String(userInfo.id)
           } else {
-            // Thử lấy từ JWT payload trực tiếp
-            const token = getAuthorizationHeader(req).replace('Bearer ', '')
+            const authHeader = getAuthorizationHeader(req)
+            const token = authHeader ? authHeader.replace('Bearer ', '') : ''
             if (token) {
               const payload = decodeJWTPayload(token)
               if (payload?.userId) {
@@ -211,8 +211,8 @@ export async function POST(req: NextRequest) {
               }
             }
           }
-        } catch (error) {
-          console.error('Error getting approverId from token:', error)
+        } catch {
+          // ignore token decode errors, fallback to 400 below
         }
       }
 
@@ -220,21 +220,17 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Approver ID is required. Please ensure you are logged in.' }, { status: 400 })
       }
 
-      // Gọi backend với decision từ body (APPROVED hoặc REJECTED)
       const authHeader = getAuthorizationHeader(req)
       const requestHeaders: Record<string, string> = authHeader ? { Authorization: authHeader } : {}
       
       const approvePayload = {
-        bookingId: bookingId,
-        approverId: approverId,
-        decision: decision,
-        reason: reason || ''
+        bookingId,
+        approverId,
+        decision,
+        reason,
       }
       
       const backendUrl = `${API_CONFIG.BASE_URL}/bookings/${bookingId}/approve`
-      
-      console.log('Calling backend approve endpoint:', backendUrl)
-      console.log('Payload:', JSON.stringify(approvePayload, null, 2))
       
       const backendResponse = await fetch(backendUrl, {
         method: 'POST',

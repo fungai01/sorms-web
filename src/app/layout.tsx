@@ -1,5 +1,6 @@
 import './globals.css';
 import type { Metadata } from 'next';
+import { SWRConfig } from 'swr';
 
 export const metadata: Metadata = {
   title: 'SORMS - Hệ thống quản lý nhà công vụ thông minh',
@@ -20,7 +21,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <meta name="robots" content="index, follow" />
       </head>
       <body className="antialiased">
-        {children}
+        <SWRConfig
+          value={{
+            revalidateOnFocus: false,
+            revalidateOnReconnect: false,
+            dedupingInterval: 8000,
+            errorRetryCount: 1,
+          }}
+        >
+          {children}
+        </SWRConfig>
       </body>
     </html>
   );

@@ -35,7 +35,6 @@ type ServiceOrderItem = {
   unit_price: number
 }
 
-// Removed mock data; use API
 
 export default function ServiceOrdersPage() {
   const [query, setQuery] = useState("")

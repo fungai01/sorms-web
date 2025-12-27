@@ -17,8 +17,8 @@ export default function RequestServicePage() {
   const [serviceId, setServiceId] = useState<number | "">("");
   const [bookingId, setBookingId] = useState<number | "">("");
   const [quantity, setQuantity] = useState<number>(1);
-  const [date, setDate] = useState("");
-  const [note, setNote] = useState("");
+  const today = new Date().toISOString().split('T')[0];
+  const [date, setDate] = useState(today);  const [note, setNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -30,6 +30,7 @@ export default function RequestServicePage() {
   const [cartId, setCartId] = useState<number | null>(null); // Lưu cart ID sau khi tạo
   const [creatingCart, setCreatingCart] = useState(false); // Trạng thái đang tạo cart
   const creatingCartRef = useRef(false); // Ref để track việc đang tạo cart, tránh spam request
+  const findingCartRef = useRef(false); // Tránh gọi song song khi tìm cart hiện có
   
   // Pagination và search state
   const [currentPage, setCurrentPage] = useState(1);
@@ -62,12 +63,21 @@ export default function RequestServicePage() {
   const bookings = useMemo(() => {
     if (!bookingsData) return [];
     const bookingList = Array.isArray(bookingsData) ? bookingsData : (bookingsData as any).items || [];
-    
-    // Chỉ hiển thị các booking đang CHECKED_IN hoặc APPROVED và còn active
+
+    // Chỉ hiển thị các booking đang CHECKED_IN và còn active
     return bookingList.filter((b: Booking) => 
-      (b.status === "CHECKED_IN" || b.status === "APPROVED") && b.isActive !== false
+      b.status === "CHECKED_IN" && b.isActive !== false
     );
   }, [bookingsData]);
+
+  const getBookingStatus = (status?: Booking["status"]) => {
+    switch (status) {
+      case "CHECKED_IN":
+        return { label: "Đang ở", tone: "checked-in" as const };
+      default:
+        return { label: status || "Không xác định", tone: "muted" as const };
+    }
+  };
 
   const selectedService = useMemo(() => {
     if (!serviceId) return null;
@@ -88,6 +98,31 @@ export default function RequestServicePage() {
     return amount?.toLocaleString("vi-VN") + " đ";
   };
 
+  // Tìm cart (order) hiện có chưa hoàn tất để tránh tạo mới
+  const findExistingCart = useCallback(async (bookingIdParam: number) => {
+    if (!user?.id || findingCartRef.current) return null;
+
+    try {
+      findingCartRef.current = true;
+      const existingOrdersRes = await apiClient.getMyOrders(bookingIdParam);
+      if (existingOrdersRes.success && Array.isArray(existingOrdersRes.data)) {
+        const existingCart = (existingOrdersRes.data as any[]).find((order: any) => {
+          const status = order.status || order.orderStatus;
+          return status === "PENDING" || status === "IN_PROGRESS";
+        });
+        if (existingCart?.id) {
+          setCartId(existingCart.id);
+          return existingCart.id as number;
+        }
+      }
+    } catch (err) {
+      console.error("Error finding existing cart:", err);
+    } finally {
+      findingCartRef.current = false;
+    }
+    return null;
+  }, [user?.id]);
+
   // Tạo cart khi chọn booking
   const createCart = useCallback(async (bookingIdParam: number) => {
     if (!user?.id) {
@@ -95,10 +130,12 @@ export default function RequestServicePage() {
       return false;
     }
 
-    if (cartId) {
-      // Cart đã tồn tại, không cần tạo lại
-      return true;
-    }
+    // Nếu đã có cartId trong state thì không tạo mới
+    if (cartId) return true;
+
+    // Thử tìm cart hiện có trên server cho booking này
+    const existingId = await findExistingCart(bookingIdParam);
+    if (existingId) return true;
 
     // Tránh spam request - nếu đang tạo cart thì không tạo lại
     if (creatingCartRef.current) {
@@ -141,14 +178,7 @@ export default function RequestServicePage() {
       creatingCartRef.current = false;
       setCreatingCart(false);
     }
-  }, [user?.id, cartId]);
-
-  // Tự động tạo cart khi chọn booking
-  useEffect(() => {
-    if (bookingId && typeof bookingId === 'number' && user?.id && !cartId && !creatingCartRef.current) {
-      createCart(bookingId);
-    }
-  }, [bookingId, user?.id, cartId, createCart]);
+  }, [user?.id, cartId, findExistingCart]);
 
   // Reset cart khi booking bị xóa
   useEffect(() => {
@@ -167,14 +197,14 @@ export default function RequestServicePage() {
       return;
     }
 
-    // Kiểm tra booking còn active và đang CHECKED_IN hoặc APPROVED
+    // Kiểm tra booking còn active và đang CHECKED_IN
     const selectedBooking = bookings.find((b: Booking) => b.id === bookingId);
     if (!selectedBooking) {
       setError("Booking không tồn tại hoặc không còn hoạt động");
       return;
     }
-    if (selectedBooking.status !== "CHECKED_IN" && selectedBooking.status !== "APPROVED") {
-      setError("Booking phải ở trạng thái đã duyệt hoặc đã check-in để đặt dịch vụ");
+    if (selectedBooking.status !== "CHECKED_IN") {
+      setError("Booking phải ở trạng thái đã check-in để đặt dịch vụ");
       return;
     }
     if (selectedBooking.isActive === false) {
@@ -260,34 +290,6 @@ export default function RequestServicePage() {
             </span>
           )}
         </button>
-      </div>
-
-      {/* Error */}
-      {error && (
-        <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-center gap-2">
-          <svg className="w-5 h-5 text-red-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <p className="text-sm text-red-600">{error}</p>
-        </div>
-      )}
-
-      {/* Step indicator */}
-      <div className="mb-6 flex items-center gap-2 text-sm">
-        <div className={`flex items-center gap-1.5 ${serviceId ? 'text-[hsl(var(--primary))]' : 'text-gray-400'}`}>
-          <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium ${serviceId ? 'bg-[hsl(var(--primary))] text-white' : 'bg-gray-200 text-gray-500'}`}>1</span>
-          <span className="hidden sm:inline">Chọn dịch vụ</span>
-        </div>
-        <div className="w-8 h-px bg-gray-300"></div>
-        <div className={`flex items-center gap-1.5 ${bookingId ? 'text-[hsl(var(--primary))]' : 'text-gray-400'}`}>
-          <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium ${bookingId ? 'bg-[hsl(var(--primary))] text-white' : 'bg-gray-200 text-gray-500'}`}>2</span>
-          <span className="hidden sm:inline">Chọn phòng</span>
-        </div>
-        <div className="w-8 h-px bg-gray-300"></div>
-        <div className={`flex items-center gap-1.5 ${date ? 'text-[hsl(var(--primary))]' : 'text-gray-400'}`}>
-          <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium ${date ? 'bg-[hsl(var(--primary))] text-white' : 'bg-gray-200 text-gray-500'}`}>3</span>
-          <span className="hidden sm:inline">Xác nhận</span>
-        </div>
       </div>
 
       <div className="space-y-4">
@@ -438,116 +440,135 @@ export default function RequestServicePage() {
         title="Đơn đặt dịch vụ"
         size="lg"
       >
-        <form className="space-y-6" onSubmit={handleSubmit}>
-                {/* Selected Service Summary */}
-                {selectedService ? (
-                  <div className="bg-gradient-to-br from-[hsl(var(--primary)/0.1)] via-[hsl(var(--primary)/0.05)] to-transparent rounded-xl p-5 border-2 border-[hsl(var(--primary)/0.3)] shadow-sm">
-                    <div className="flex items-start gap-3">
-                      <div className="w-12 h-12 bg-[hsl(var(--primary))] rounded-lg flex items-center justify-center shrink-0">
-                        <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-start justify-between gap-2 mb-2">
-                          <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Dịch vụ đã chọn</p>
-                          <Badge tone="info" className="shrink-0">{formatMoney(selectedService.unitPrice)}/{selectedService.unitName}</Badge>
-                        </div>
-                        <h4 className="font-bold text-gray-900 text-lg mb-1">{selectedService.name}</h4>
-                        {selectedService.description && (
-                          <p className="text-sm text-gray-600 line-clamp-2">{selectedService.description}</p>
-                        )}
-                      </div>
-                    </div>
+        <form className="space-y-4" onSubmit={handleSubmit}>
+                {/* Step indicator */}
+                <div className="mb-1 flex items-center gap-2 text-xs">
+                  <div className={`flex items-center gap-1 ${serviceId ? 'text-[hsl(var(--primary))]' : 'text-gray-400'}`}>
+                    <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-medium ${serviceId ? 'bg-[hsl(var(--primary))] text-white' : 'bg-gray-200 text-gray-500'}`}>1</span>
+                    <span className="hidden sm:inline">Chọn dịch vụ</span>
                   </div>
-                ) : (
-                  <div className="bg-gray-50 rounded-xl p-6 text-center border-2 border-dashed border-gray-200">
-                    <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-3">
-                      <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                    </div>
-                    <p className="text-sm font-medium text-gray-600 mb-1">Chưa chọn dịch vụ</p>
-                    <p className="text-xs text-gray-500">Vui lòng chọn dịch vụ từ danh sách phía trên</p>
+                  <div className="w-6 h-px bg-gray-300"></div>
+                  <div className={`flex items-center gap-1 ${bookingId ? 'text-[hsl(var(--primary))]' : 'text-gray-400'}`}>
+                    <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-medium ${bookingId ? 'bg-[hsl(var(--primary))] text-white' : 'bg-gray-200 text-gray-500'}`}>2</span>
+                    <span className="hidden sm:inline">Chọn phòng</span>
+                  </div>
+                  <div className="w-6 h-px bg-gray-300"></div>
+                  <div className={`flex items-center gap-1 ${date ? 'text-[hsl(var(--primary))]' : 'text-gray-400'}`}>
+                    <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-medium ${date ? 'bg-[hsl(var(--primary))] text-white' : 'bg-gray-200 text-gray-500'}`}>3</span>
+                    <span className="hidden sm:inline">Xác nhận</span>
+                  </div>
+                </div>
+                {/* Error inside form */}
+                {error && (
+                  <div className="mb-2 p-2 bg-red-50 border border-red-200 rounded-lg flex items-center gap-2">
+                    <svg className="w-5 h-5 text-red-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <p className="text-sm text-red-600">{error}</p>
                   </div>
                 )}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                  <div className="lg:col-span-2 space-y-4">
+                    {/* Selected Service Summary */}
+                    {selectedService ? (
+                      <div className="relative bg-gray-50 rounded-lg p-3 border border-gray-200">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setServiceId("");
+                            setQuantity(1);
+                          }}
+                          className="absolute top-3 right-3 p-1.5 text-gray-400 hover:text-red-500 transition-colors"
+                          aria-label="Xóa dịch vụ đã chọn"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                        <div className="flex items-start gap-3">
+                          <div className="w-12 h-12 bg-[hsl(var(--primary))] rounded-lg flex items-center justify-center shrink-0">
+                            <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            
+                            <h4 className="font-bold text-gray-900 text-lg mb-1">{selectedService.name}</h4>
+                            {selectedService.description && (
+                              <p className="text-sm text-gray-600 line-clamp-2">{selectedService.description}</p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="bg-gray-50 rounded-lg p-3 text-center border border-dashed border-gray-200">
+                        <div className="w-12 h-12 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-2">
+                          <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                        </div>
+                        <p className="text-xs font-medium text-gray-600 mb-0.5">Chưa chọn dịch vụ</p>
+                        <p className="text-[11px] text-gray-500">Vui lòng chọn dịch vụ từ danh sách phía trên</p>
+                      </div>
+                    )}
 
-                {/* Booking Select */}
-                <div>
-                  <label className="block text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                    {/* Booking Select */}
+                    <div>
+                  <label className="block text-sm font-semibold text-gray-900 mb-2 flex items-center gap-2">
                     <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"
+                      />
                     </svg>
                     Phòng đang ở
                   </label>
                   {bookingsLoading ? (
-                    <div className="flex items-center justify-center py-8">
-                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-[hsl(var(--primary))]"></div>
-                      <span className="ml-2 text-sm text-gray-500">Đang tải...</span>
+                    <div className="flex items-center justify-center py-4">
+                      <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-[hsl(var(--primary))]"></div>
+                      <span className="ml-2 text-sm text-gray-500">Đang tải phòng...</span>
                     </div>
                   ) : bookings.length === 0 ? (
                     <div className="bg-gradient-to-r from-orange-50 to-amber-50 border-2 border-orange-200 rounded-xl p-4">
                       <div className="flex items-start gap-3">
                         <div className="w-10 h-10 bg-orange-100 rounded-lg flex items-center justify-center shrink-0">
                           <svg className="w-5 h-5 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                            />
                           </svg>
                         </div>
                         <div className="flex-1">
                           <p className="text-sm font-semibold text-orange-900 mb-1">Chưa có phòng đang ở</p>
-                          <p className="text-xs text-orange-700">Bạn cần có đặt phòng đã được duyệt và đang check-in để đặt dịch vụ</p>
+                          <p className="text-xs text-orange-700">
+                            Bạn cần có đặt phòng đang check-in để đặt dịch vụ
+                          </p>
                         </div>
                       </div>
                     </div>
                   ) : (
-                    <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
+                    <select
+                      value={bookingId || ''}
+                      onChange={(e) => setBookingId(e.target.value ? Number(e.target.value) : '')}
+                      className="w-full rounded-xl border-2 border-gray-200 px-4 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] hover:border-gray-300 transition-colors bg-white"
+                    >
+                      <option value="">-- Chọn phòng --</option>
                       {bookings.map((booking: Booking) => (
-                        <div
-                          key={booking.id}
-                          onClick={() => setBookingId(booking.id)}
-                          className={`rounded-xl border-2 p-4 cursor-pointer transition-all ${
-                            bookingId === booking.id
-                              ? "border-[hsl(var(--primary))] bg-[hsl(var(--primary)/0.08)] shadow-md ring-2 ring-[hsl(var(--primary))/0.2]"
-                              : "border-gray-200 hover:border-gray-300 hover:bg-gray-50"
-                          }`}
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="flex items-center gap-3 flex-1 min-w-0">
-                              <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${
-                                bookingId === booking.id 
-                                  ? "bg-[hsl(var(--primary))] text-white" 
-                                  : "bg-gray-100 text-gray-600"
-                              }`}>
-                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-                                </svg>
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <p className="font-semibold text-gray-900 mb-1">{booking.roomCode || `Phòng #${booking.roomId}`}</p>
-                                <p className="text-xs text-gray-500 flex items-center gap-1">
-                                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                                  </svg>
-                                  {new Date(booking.checkinDate).toLocaleDateString("vi-VN")} - {new Date(booking.checkoutDate).toLocaleDateString("vi-VN")}
-                                </p>
-                              </div>
-                            </div>
-                            {bookingId === booking.id && (
-                              <div className="w-6 h-6 bg-[hsl(var(--primary))] rounded-full flex items-center justify-center shrink-0">
-                                <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 20 20">
-                                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                                </svg>
-                              </div>
-                            )}
-                          </div>
-                        </div>
+                        <option key={booking.id} value={booking.id}>
+                          {booking.roomCode || `Phòng #${booking.roomId}`} ({getBookingStatus(booking.status).label})
+                        </option>
                       ))}
-                    </div>
+                    </select>
                   )}
                 </div>
 
-                {/* Quantity & Date */}
-                <div className="grid grid-cols-2 gap-4">
+                    {/* Quantity & Date */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-semibold text-gray-900 mb-2 flex items-center gap-2">
                       <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -556,33 +577,16 @@ export default function RequestServicePage() {
                       Số lượng
                     </label>
                     <div className="flex items-center border-2 border-gray-200 rounded-xl overflow-hidden hover:border-[hsl(var(--primary))] transition-colors">
-                      <button
-                        type="button"
-                        onClick={() => setQuantity(Math.max(1, quantity - 1))}
-                        className="px-4 py-2.5 text-gray-600 hover:text-gray-900 hover:bg-gray-50 transition-colors font-medium"
-                      >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
-                        </svg>
-                      </button>
-                      <input
-                        type="number"
-                        min={1}
-                        max={99}
-                        value={quantity}
-                        onChange={(e) => setQuantity(Math.max(1, parseInt(e.target.value) || 1))}
-                        className="w-full text-center py-2.5 text-base font-bold text-gray-900 focus:outline-none bg-white"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setQuantity(Math.min(99, quantity + 1))}
-                        className="px-4 py-2.5 text-gray-600 hover:text-gray-900 hover:bg-gray-50 transition-colors font-medium"
-                      >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                        </svg>
-                      </button>
-                    </div>
+  <input
+    type="number"
+    min={1}
+    max={99}
+    value={quantity}
+    onChange={(e) => setQuantity(Math.max(1, parseInt(e.target.value) || 1))}
+    className="w-full text-center py-2.5 text-base font-bold text-gray-900 focus:outline-none bg-white"
+  />
+
+</div>
                   </div>
                   <div>
                     <label className="block text-sm font-semibold text-gray-900 mb-2 flex items-center gap-2">
@@ -592,18 +596,18 @@ export default function RequestServicePage() {
                       Ngày sử dụng
                     </label>
                     <input
-                      type="date"
-                      value={date}
-                      onChange={(e) => setDate(e.target.value)}
-                      min={new Date().toISOString().split('T')[0]}
-                      className="w-full rounded-xl border-2 border-gray-200 px-4 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] hover:border-gray-300 transition-colors"
-                      required
-                    />
+  type="date"
+  value={date}
+  onChange={(e) => setDate(e.target.value)}
+  min={today}
+  className="w-full rounded-xl border-2 border-gray-200 px-4 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] hover:border-gray-300 transition-colors"
+  required
+/>
                   </div>
                 </div>
 
-                {/* Note */}
-                <div>
+                    {/* Note */}
+                    <div>
                   <label className="block text-sm font-semibold text-gray-900 mb-2 flex items-center gap-2">
                     <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -618,38 +622,44 @@ export default function RequestServicePage() {
                     placeholder="Nhập yêu cầu đặc biệt hoặc ghi chú..."
                   />
                 </div>
-
-                {/* Total */}
-                {selectedService && (
-                  <div className="bg-gradient-to-br from-[hsl(var(--primary)/0.1)] via-[hsl(var(--primary)/0.05)] to-transparent rounded-xl p-5 shadow-md border-2 border-[hsl(var(--primary)/0.3)]">
-                    <div className="flex items-center justify-between mb-3 pb-3 border-b border-gray-200">
-                      <div className="flex items-center gap-2">
-                        <svg className="w-5 h-5 text-[hsl(var(--primary))]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                        </svg>
-                        <span className="text-gray-600 text-sm font-medium">Chi tiết đơn hàng</span>
-                      </div>
-                    </div>
-                    <div className="space-y-2 mb-4">
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-gray-500">Dịch vụ</span>
-                        <span className="text-gray-900 font-medium">{selectedService.name}</span>
-                      </div>
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-gray-500">Số lượng</span>
-                        <span className="text-gray-900 font-medium">x {quantity}</span>
-                      </div>
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-gray-500">Đơn giá</span>
-                        <span className="text-gray-900 font-medium">{formatMoney(selectedService.unitPrice)}/{selectedService.unitName}</span>
-                      </div>
-                    </div>
-                    <div className="flex items-center justify-between pt-4 border-t-2 border-gray-200">
-                      <span className="text-lg font-semibold text-gray-900">Tổng cộng</span>
-                      <span className="text-3xl font-bold text-[hsl(var(--primary))]">{formatMoney(totalPrice)}</span>
-                    </div>
                   </div>
-                )}
+
+                  {/* Total */}
+                  <div className="lg:col-span-1">
+                    {selectedService && (
+                      <div className="bg-gradient-to-br from-[hsl(var(--primary)/0.05)] via-[hsl(var(--primary)/0.02)] to-transparent rounded-xl p-4 shadow-sm border border-[hsl(var(--primary)/0.3)] h-full flex flex-col justify-between">
+                        <div>
+                          <div className="flex items-center justify-between mb-2 pb-2 border-b border-gray-200">
+                            <div className="flex items-center gap-2">
+                              <svg className="w-5 h-5 text-[hsl(var(--primary))]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                              </svg>
+                              <span className="text-gray-700 text-sm font-semibold">Chi tiết đơn hàng</span>
+                            </div>
+                          </div>
+                          <div className="space-y-1.5 mb-3 text-sm">
+                            <div className="flex items-center justify-between">
+                              <span className="text-gray-500">Dịch vụ</span>
+                              <span className="text-gray-900 font-medium text-right line-clamp-1">{selectedService.name}</span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-gray-500">Số lượng</span>
+                              <span className="text-gray-900 font-medium">x {quantity}</span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-gray-500">Đơn giá</span>
+                              <span className="text-gray-900 font-medium">{formatMoney(selectedService.unitPrice)}/{selectedService.unitName}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="pt-2 border-t border-gray-200 flex items-center justify-between">
+                          <span className="text-sm font-semibold text-gray-900">Tổng cộng</span>
+                          <span className="text-2xl font-bold text-[hsl(var(--primary))]">{formatMoney(totalPrice)}</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
 
                 {/* Submit */}
                 <Button
