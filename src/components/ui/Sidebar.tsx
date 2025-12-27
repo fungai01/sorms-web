@@ -173,12 +173,12 @@ export default function Sidebar({ user, isVisible = false, collapsed = true, onT
           icon: <Icons.Rooms />,
           current: pathname.startsWith('/admin/rooms'),
         },
-        {
-          name: 'Quản lý tòa nhà',
-          href: '/admin/room-types',
-          icon: <Icons.RoomTypes />,
-          current: pathname.startsWith('/admin/room-types'),
-        },
+        // {
+        //   name: 'Quản lý tòa nhà',
+        //   href: '/admin/room-types',
+        //   icon: <Icons.RoomTypes />,
+        //   current: pathname.startsWith('/admin/room-types'),
+        // },
         {
           name: 'Quản lý đặt phòng',
           href: '/admin/bookings',
@@ -215,12 +215,12 @@ export default function Sidebar({ user, isVisible = false, collapsed = true, onT
           icon: <Icons.Staff />,
           current: pathname.startsWith('/admin/staff-profiles'),
         },
-        {
-          name: 'Quản lý vai trò',
-          href: '/admin/roles',
-          icon: <Icons.Roles />,
-          current: pathname.startsWith('/admin/roles'),
-        },
+        // {
+        //   name: 'Quản lý vai trò',
+        //   href: '/admin/roles',
+        //   icon: <Icons.Roles />,
+        //   current: pathname.startsWith('/admin/roles'),
+        // },
         {
           name: 'Báo cáo',
           href: '/admin/reports',

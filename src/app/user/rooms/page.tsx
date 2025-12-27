@@ -20,12 +20,17 @@ import roomImage from "@/img/Room.jpg";
 
 export default function BookRoomPage() {
   const BOOKING_INFO_KEY = "booking_personal_info";
+
+  const addDays = (dateStr: string, days: number) => {
+    const d = new Date(dateStr);
+    d.setDate(d.getDate() + days);
+    return d.toISOString().split("T")[0];
+  };
   const router = useRouter();
   const [checkin, setCheckin] = useState("");
   const [checkout, setCheckout] = useState("");
   const [checkinTime, setCheckinTime] = useState("14:00");
   const [checkoutTime, setCheckoutTime] = useState("12:00");
-  const [roomTypeId, setRoomTypeId] = useState<number | "">("");
   const [bookingLoading, setBookingLoading] = useState(false);
   const [flash, setFlash] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   
@@ -33,8 +38,6 @@ export default function BookRoomPage() {
   const [detailModalOpen, setDetailModalOpen] = useState(false);
   const [confirmModalOpen, setConfirmModalOpen] = useState(false);
   const [selectedRoom, setSelectedRoom] = useState<Room | null>(null);
-  // Bỏ bước chụp khuôn mặt tại flow đặt phòng; người dùng sẽ đăng ký tại /user/face-register
-  const [useExistingFace] = useState(true);
   
   // Separate dates for confirmation modal
   const [modalCheckin, setModalCheckin] = useState("");
@@ -79,7 +82,7 @@ export default function BookRoomPage() {
     checkin || undefined,
     checkout || undefined
   );
-  const { data: roomTypesData, loading: roomTypesLoading } = useRoomTypes();
+  const { data: roomTypesData } = useRoomTypes();
 
   const rooms = useMemo(() => {
     if (!roomsData) return [];
@@ -92,9 +95,6 @@ export default function BookRoomPage() {
     return Array.isArray(roomTypesData) ? roomTypesData : (roomTypesData as any).items || [];
   }, [roomTypesData]);
 
-  const filteredRooms = useMemo(() => {
-    return rooms;
-  }, [rooms]);
 
   // Auto-hide flash messages
   useEffect(() => {
@@ -474,59 +474,6 @@ export default function BookRoomPage() {
     });
   };
 
-  // Confirm booking
-  const handleConfirmBooking = async () => {
-    if (!selectedRoom) return;
-
-    // Require dates to be selected in modal
-    if (!modalCheckin || !modalCheckout) {
-      setFlash({ type: 'error', text: 'Vui lòng chọn ngày check-in và check-out' });
-      return;
-    }
-
-    const checkinDate = new Date(modalCheckin);
-    const checkoutDate = new Date(modalCheckout);
-    if (checkoutDate <= checkinDate) {
-      setFlash({ type: 'error', text: 'Ngày check-out phải sau ngày check-in' });
-      return;
-    }
-
-    try {
-      setBookingLoading(true);
-      const bookingData = {
-        roomId: selectedRoom.id,
-        checkinDate: modalCheckin,
-        checkoutDate: modalCheckout,
-        numGuests: 1,
-      };
-      const response = await apiClient.createBooking(bookingData);
-      if (response.success) {
-        setFlash({ type: 'success', text: 'Đặt phòng thành công! Vui lòng chờ xác nhận.' });
-        setConfirmModalOpen(false);
-        setSelectedRoom(null);
-        setModalCheckin("");
-        setModalCheckout("");
-        // Don't reset page filter dates
-      } else {
-        setFlash({ type: 'error', text: response.error || "Đặt phòng thất bại" });
-      }
-    } catch (error: any) {
-      setFlash({ type: 'error', text: error?.message || "Có lỗi xảy ra khi đặt phòng" });
-      console.error(error);
-    } finally {
-      setBookingLoading(false);
-    }
-  };
-
-  // Calculate number of nights
-  const calculateNights = () => {
-    if (!checkin || !checkout) return 0;
-    const checkinDate = new Date(checkin);
-    const checkoutDate = new Date(checkout);
-    const diffTime = Math.abs(checkoutDate.getTime() - checkinDate.getTime());
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    return diffDays;
-  };
 
   const getRoomStatusBadge = (status: string): "available" | "occupied" | "maintenance" => {
     if (status === "AVAILABLE") return "available";
@@ -580,7 +527,15 @@ export default function BookRoomPage() {
                 <input
                   type="date"
                   value={checkin}
-                  onChange={(e) => setCheckin(e.target.value)}
+                  onChange={(e) => {
+                    const nextCheckin = e.target.value;
+                    setCheckin(nextCheckin);
+
+                    // Ensure checkout > checkin
+                    if (!checkout || (nextCheckin && checkout <= nextCheckin)) {
+                      setCheckout(nextCheckin ? addDays(nextCheckin, 1) : "");
+                    }
+                  }}
                   min={new Date().toISOString().split('T')[0]}
                   className="w-full h-11 px-3 text-sm border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] bg-white"
                 />
@@ -604,7 +559,7 @@ export default function BookRoomPage() {
                   type="date"
                   value={checkout}
                   onChange={(e) => setCheckout(e.target.value)}
-                  min={checkin || new Date().toISOString().split('T')[0]}
+                  min={checkin ? addDays(checkin, 1) : new Date().toISOString().split('T')[0]}
                   className="w-full h-11 px-3 text-sm border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] bg-white"
                 />
               </div>
@@ -649,13 +604,13 @@ export default function BookRoomPage() {
                 <h2 className="text-xl font-bold text-gray-900">Phòng khả dụng</h2>
                 <p className="text-sm text-gray-500">
                   {checkin && checkout 
-                    ? `Tìm thấy ${filteredRooms.length} phòng từ ${new Date(checkin).toLocaleDateString("vi-VN")} đến ${new Date(checkout).toLocaleDateString("vi-VN")}`
+                    ? `Tìm thấy ${rooms.length} phòng từ ${new Date(checkin).toLocaleDateString("vi-VN")} đến ${new Date(checkout).toLocaleDateString("vi-VN")}`
                     : "Chọn ngày để xem phòng khả dụng"}
                 </p>
               </div>
-              {filteredRooms.length > 0 && (
+              {rooms.length > 0 && (
                 <span className="text-sm font-semibold text-[hsl(var(--primary))] bg-[hsl(var(--primary)/0.12)] px-3 py-1 rounded-full">
-                  {filteredRooms.length} phòng
+                  {rooms.length} phòng
                 </span>
               )}
             </div>
@@ -667,7 +622,7 @@ export default function BookRoomPage() {
                 <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-[hsl(var(--primary))] mb-3"></div>
                 <p className="text-sm text-gray-500">Đang tải danh sách phòng...</p>
               </div>
-          ) : filteredRooms.length === 0 ? (
+          ) : rooms.length === 0 ? (
               <div className="py-12 text-center">
                 <svg className="w-12 h-12 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
@@ -685,7 +640,7 @@ export default function BookRoomPage() {
               </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {filteredRooms.map((room: Room) => {
+              {rooms.map((room: Room) => {
                 const roomType = roomTypes.find((rt: RoomType) => rt.id === room.roomTypeId);
                 const isAvailable = room.status === "AVAILABLE";
                 const canBook = isAvailable && !bookingLoading;
@@ -786,7 +741,6 @@ export default function BookRoomPage() {
         {selectedRoom && (() => {
           const roomType = roomTypes.find((rt: RoomType) => rt.id === selectedRoom.roomTypeId);
           const isAvailable = selectedRoom.status === "AVAILABLE";
-          const canBook = isAvailable && checkin && checkout && !bookingLoading;
           
           return (
             <div className="space-y-4">
@@ -1041,7 +995,15 @@ export default function BookRoomPage() {
                         <input
                           type="date"
                           value={modalCheckin}
-                          onChange={(e) => setModalCheckin(e.target.value)}
+                          onChange={(e) => {
+                            const nextCheckin = e.target.value;
+                            setModalCheckin(nextCheckin);
+
+                            // Ensure checkout > checkin
+                            if (!modalCheckout || (nextCheckin && modalCheckout <= nextCheckin)) {
+                              setModalCheckout(nextCheckin ? addDays(nextCheckin, 1) : "");
+                            }
+                          }}
                           min={new Date().toISOString().split('T')[0]}
                           className="w-full h-11 px-3 text-sm border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] bg-white"
                         />
@@ -1062,7 +1024,7 @@ export default function BookRoomPage() {
                           type="date"
                           value={modalCheckout}
                           onChange={(e) => setModalCheckout(e.target.value)}
-                          min={modalCheckin || new Date().toISOString().split('T')[0]}
+                          min={modalCheckin ? addDays(modalCheckin, 1) : new Date().toISOString().split('T')[0]}
                           className="w-full h-11 px-3 text-sm border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] bg-white"
                         />
                         <input
@@ -1362,7 +1324,15 @@ export default function BookRoomPage() {
                             <input
                               type="date"
                               value={modalCheckin}
-                              onChange={(e) => setModalCheckin(e.target.value)}
+                              onChange={(e) => {
+                                const nextCheckin = e.target.value;
+                                setModalCheckin(nextCheckin);
+
+                                // Ensure checkout > checkin
+                                if (!modalCheckout || (nextCheckin && modalCheckout <= nextCheckin)) {
+                                  setModalCheckout(nextCheckin ? addDays(nextCheckin, 1) : "");
+                                }
+                              }}
                               min={new Date().toISOString().split('T')[0]}
                               className="w-full h-11 px-3 text-sm border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] bg-white"
                             />
@@ -1387,7 +1357,7 @@ export default function BookRoomPage() {
                               type="date"
                               value={modalCheckout}
                               onChange={(e) => setModalCheckout(e.target.value)}
-                              min={modalCheckin || new Date().toISOString().split('T')[0]}
+                              min={modalCheckin ? addDays(modalCheckin, 1) : new Date().toISOString().split('T')[0]}
                               className="w-full h-11 px-3 text-sm border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] bg-white"
                             />
                           </div>
@@ -1418,21 +1388,13 @@ export default function BookRoomPage() {
         onClose={() => setFaceCaptureOpen(false)}
         loading={faceRegistering}
         onCapture={handleCapturedFaceImage}
+        enableFaceGuidance={faceCaptureStep <= 3}
         title={
           faceCaptureStep === 4
             ? "Chụp CCCD mặt trước"
             : faceCaptureStep === 5
             ? "Chụp CCCD mặt sau"
             : "Chụp ảnh khuôn mặt"
-        }
-        overlayType={
-          faceCaptureStep === 1
-            ? "front"
-            : faceCaptureStep === 2
-            ? "left"
-            : faceCaptureStep === 3
-            ? "right"
-            : undefined
         }
       />
     </div>

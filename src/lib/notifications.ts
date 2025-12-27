@@ -283,28 +283,28 @@ export function createBookingNotification(
   switch (status) {
     case 'PENDING':
       title = 'Yêu cầu đặt phòng mới'
-      message = `Có yêu cầu đặt phòng mới từ ${guestName} cho ${roomInfo}. Vui lòng xem xét và xác nhận.`
+      message = `Có yêu cầu đặt phòng mới từ ${guestName} cho phòng${roomInfo}. Vui lòng xem xét và xác nhận.`
       type = 'info'
       visibleTo = ['admin', 'office']
       priority = 'high'
       break
     case 'CONFIRMED':
       title = 'Đặt phòng đã được xác nhận'
-      message = `Yêu cầu đặt phòng của bạn cho ${roomInfo} đã được hành chính xác nhận thành công.`
+      message = `Yêu cầu đặt phòng của bạn cho phòng${roomInfo} đã được hành chính xác nhận thành công.`
       type = 'success'
       visibleTo = ['admin', 'office', 'user']
       priority = 'normal'
       break
     case 'REJECTED':
       title = 'Đặt phòng bị từ chối'
-      message = `Yêu cầu đặt phòng của bạn cho ${roomInfo} đã bị từ chối. Lý do: ${rejectionReason || 'Không có lý do cụ thể'}.`
+      message = `Yêu cầu đặt phòng của bạn cho phòng${roomInfo} đã bị từ chối. Lý do: ${rejectionReason || 'Không có lý do cụ thể'}.`
       type = 'warning'
       visibleTo = ['admin', 'office', 'user']
       priority = 'normal'
       break
     case 'CANCELLED':
       title = 'Đặt phòng đã bị hủy'
-      message = `Đặt phòng cho ${roomInfo} đã được hủy bởi ${guestName}.`
+      message = `Đặt phòng ${roomInfo} đã được hủy bởi ${guestName}.`
       type = 'warning'
       visibleTo = ['admin', 'office', 'user']
       priority = 'normal'

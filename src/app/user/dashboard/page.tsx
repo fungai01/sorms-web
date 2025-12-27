@@ -15,23 +15,6 @@ import { getFaceStatus, registerFace, deleteFace } from "@/lib/services";
 import { FaceCapture } from "@/components/ui/FaceCapture";
 
 // ===== UI Components =====
-function KPICard({ title, value, hint }: { 
-  title: string; 
-  value: string; 
-  hint?: string; 
-}) {
-  return (
-    <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm hover:shadow-md transition-shadow">
-      <div className="flex items-center justify-between">
-        <div className="flex-1">
-          <p className="text-sm font-medium text-gray-600 mb-1">{title}</p>
-          <p className="text-3xl font-bold text-gray-900 mb-1">{value}</p>
-          {hint && <p className="text-sm text-gray-500">{hint}</p>}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 function Skeleton({ className = "h-24" }: { className?: string }) {
   return <div className={`animate-pulse rounded-xl bg-gray-100 ${className}`} />;
@@ -69,7 +52,6 @@ export default function UserDashboardPage() {
     numGuests: 1,
     note: "",
   });
-  const [cancelReason, setCancelReason] = useState("");
 
   // Face registration states
   const [faceCaptureOpen, setFaceCaptureOpen] = useState(false);
@@ -260,15 +242,14 @@ export default function UserDashboardPage() {
       setLoading(true);
       setError(null);
 
-      const response = await apiClient.deleteBooking(cancelModal.booking.id);
+            const response = await apiClient.cancelBooking(cancelModal.booking.id, "User cancelled");
 
       if (response.success) {
         setCancelModal({ open: false, booking: null });
-        setCancelReason("");
         await refetchBookings();
         setError(null);
       } else {
-        setError(response.error || "Xóa booking thất bại. Vui lòng thử lại.");
+        setError(response.error || "Hủy booking thất bại. Vui lòng thử lại.");
       }
     } catch (err: any) {
       console.error("Error deleting booking:", err);
@@ -447,34 +428,6 @@ export default function UserDashboardPage() {
           </div>
         </div>
 
-        {/* KPIs */}
-        <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-          {isLoading ? (
-            <>
-              <Skeleton className="h-28" />
-              <Skeleton className="h-28" />
-              <Skeleton className="h-28" />
-            </>
-          ) : (
-            <>
-              <KPICard 
-                title="Phòng đang ở" 
-                value={String(activeBookings.length)} 
-                hint="Phòng hiện tại"
-              />
-              <KPICard 
-                title="Chờ duyệt" 
-                value={String(pendingBookings.length)} 
-                hint="Yêu cầu đang chờ"
-              />
-              <KPICard 
-                title="Đơn dịch vụ" 
-                value={String(pendingOrders.length)} 
-                hint="Đang xử lý"
-              />
-            </>
-          )}
-        </section>
 
         {/* Main Content */}
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
@@ -511,7 +464,10 @@ export default function UserDashboardPage() {
                   <div className="space-y-3">
                     {activeBookings.slice(0, 2).map((b: Booking) => {
                       const daysLeft = getDaysRemaining(b.checkoutDate);
-                      const showCheckout = b.status === "CHECKED_IN" && daysLeft <= 2;
+                      // OLD: chỉ cho check-out khi còn <= 2 ngày
+                      // const showCheckout = b.status === "CHECKED_IN" && daysLeft <= 2;
+                      // NEW: cho phép check-out bất cứ lúc nào khi đang CHECKED_IN
+                      const showCheckout = b.status === "CHECKED_IN";
                       return (
                         <div
                           key={b.id}
@@ -655,28 +611,9 @@ export default function UserDashboardPage() {
                     </span>
                   </div>
                 </div>
-                <div className="pt-4 mt-4 border-t border-gray-200">
-                  <Link href="/user/history" className="block w-full">
-                    <Button variant="secondary" className="w-full">Xem lịch sử thuê</Button>
-                  </Link>
-                </div>
               </CardBody>
             </Card>
 
-            {/* Face Registration Alert */}
-            {!faceLoading && !faceRegistered && (
-              <Card className="border-orange-200 bg-orange-50/50 rounded-2xl overflow-hidden">
-                <CardBody className="p-6">
-                  <h4 className="font-semibold text-orange-800 mb-1">Chưa xác thực khuôn mặt</h4>
-                  <p className="text-sm text-orange-600 mb-3">
-                    Đăng ký khuôn mặt để check-in nhanh hơn
-                  </p>
-                  <Link href="/user/rooms">
-                    <Button variant="primary" className="w-full">Đăng ký ngay</Button>
-                  </Link>
-                </CardBody>
-              </Card>
-            )}
 
           </div>
         </div>
@@ -775,15 +712,6 @@ export default function UserDashboardPage() {
             : faceCaptureStep === 5
             ? "Chụp CCCD mặt sau"
             : "Chụp ảnh khuôn mặt"
-        }
-        overlayType={
-          faceCaptureStep === 1
-            ? "front"
-            : faceCaptureStep === 2
-            ? "left"
-            : faceCaptureStep === 3
-            ? "right"
-            : undefined
         }
       />
 
@@ -1061,10 +989,9 @@ export default function UserDashboardPage() {
         open={cancelModal.open}
         onClose={() => {
           setCancelModal({ open: false, booking: null });
-          setCancelReason("");
           setError(null);
         }}
-        title="Xóa đặt phòng"
+        title="Hủy đặt phòng"
       >
         {cancelModal.booking && (
           <div className="space-y-4">
@@ -1075,10 +1002,10 @@ export default function UserDashboardPage() {
             )}
             <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
               <p className="text-sm text-amber-800">
-                Bạn có chắc chắn muốn xóa đặt phòng <strong>{cancelModal.booking.roomCode || `Phòng #${cancelModal.booking.roomId}`}</strong> không?
+                Bạn có chắc chắn muốn hủy đặt phòng <strong>{cancelModal.booking.roomCode || `Phòng #${cancelModal.booking.roomId}`}</strong> không?
               </p>
               <p className="text-xs text-amber-700 mt-2">
-                Hành động này không thể hoàn tác.
+                Chỉ có thể hủy các booking ở trạng thái <strong>Chờ duyệt</strong>.
               </p>
             </div>
             <div className="flex gap-3 pt-4">
@@ -1087,7 +1014,6 @@ export default function UserDashboardPage() {
                 className="flex-1"
                 onClick={() => {
                   setCancelModal({ open: false, booking: null });
-                  setCancelReason("");
                   setError(null);
                 }}
                 disabled={loading}
@@ -1100,7 +1026,7 @@ export default function UserDashboardPage() {
                 onClick={handleCancel}
                 disabled={loading}
               >
-                {loading ? "Đang xóa..." : "Xác nhận xóa"}
+                {loading ? "Đang hủy..." : "Xác nhận hủy"}
               </Button>
             </div>
           </div>

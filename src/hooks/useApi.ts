@@ -1,6 +1,5 @@
 import { useMemo } from 'react'
 import useSWR from 'swr'
-import { apiClient, ApiResponse } from '@/lib/api-client'
 import { authFetch } from '@/lib/http'
 
 // SWR fetcher helpers
@@ -86,10 +85,23 @@ export function useRoomsFiltered(status?: string, roomTypeId?: number, startTime
 }
 
 export function useAvailableRooms(startTime?: string, endTime?: string) {
+  // Backend endpoint: GET /rooms/by-status/{status}
+  // Query params are ISO_DATE_TIME (LocalDateTime) - NOT plain date.
+  // Accept date-only (YYYY-MM-DD) from UI and normalize to full datetime range.
+  const toDateTime = (v?: string, mode: 'start' | 'end' = 'start') => {
+    if (!v) return undefined
+    // If it's already a full ISO datetime, keep as-is
+    if (v.includes('T')) return v
+    // Date-only: normalize to start/end of day
+    return mode === 'start' ? `${v}T00:00:00` : `${v}T23:59:59`
+  }
+
   const params = new URLSearchParams()
   params.set('status', 'AVAILABLE')
-  if (startTime) params.set('startTime', startTime)
-  if (endTime) params.set('endTime', endTime)
+  const start = toDateTime(startTime, 'start')
+  const end = toDateTime(endTime, 'end')
+  if (start) params.set('startTime', start)
+  if (end) params.set('endTime', end)
   const endpoint = `/api/system/rooms?${params.toString()}`
   return useList(endpoint)
 }

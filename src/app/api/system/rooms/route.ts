@@ -28,6 +28,7 @@ export async function GET(request: NextRequest) {
     }
 
     if (status) {
+      // Must match backend enum RoomStatus
       const validStatuses = ['AVAILABLE', 'OCCUPIED', 'MAINTENANCE', 'CLEANING', 'OUT_OF_SERVICE']
       if (!validStatuses.includes(status)) {
         return NextResponse.json({ error: 'Invalid room status' }, { status: 400 })

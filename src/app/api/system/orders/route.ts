@@ -68,13 +68,23 @@ export async function GET(req: NextRequest) {
       const auth = getAuthorizationHeader(req)
       const options: RequestInit = auth ? { headers: { Authorization: auth } } : {}
       
-      const bookingIdNum = bookingId ? Number(bookingId) : undefined
-      // Verify authentication before making request
-      if (!auth) {
-        return NextResponse.json({ error: 'Unauthenticated', items: [] }, { status: 401 })
+      // Backend requires bookingId as a required parameter
+      // If bookingId is missing, return empty list instead of calling backend
+      if (!bookingId) {
+        return NextResponse.json({ items: [], total: 0 })
       }
 
-      // `getMyServiceOrders` currently only accepts an optional bookingId parameter
+      // If no authentication, return empty list (graceful degradation)
+      if (!auth) {
+        return NextResponse.json({ items: [], total: 0 })
+      }
+
+      const bookingIdNum = Number(bookingId)
+      if (Number.isNaN(bookingIdNum)) {
+        return NextResponse.json({ error: 'Invalid bookingId', items: [] }, { status: 400 })
+      }
+
+      // `getMyServiceOrders` requires bookingId parameter
       const response = await apiClient.getMyServiceOrders(bookingIdNum)
       if (!response.success) {
         return NextResponse.json({ error: response.error || 'Request failed', items: [] }, { status: 500 })
