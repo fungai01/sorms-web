@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useCurrentRole } from "@/hooks/useCurrentRole";
 
 interface SidebarProps {
@@ -18,9 +18,8 @@ interface SidebarProps {
   isMobile?: boolean; // Add flag to identify mobile sidebar
 }
 
-export default function Sidebar({ user, isVisible = false, collapsed = true, onToggle, onToggleCollapsed, isMobile = false }: SidebarProps) {
+export default function Sidebar({ user: _user, isVisible = false, collapsed = true, onToggle, onToggleCollapsed, isMobile = false }: SidebarProps) {
   const pathname = usePathname();
-  const router = useRouter();
 
   // Use collapsed prop from parent instead of local state
   const sidebarCollapsed = collapsed;
@@ -44,8 +43,6 @@ export default function Sidebar({ user, isVisible = false, collapsed = true, onT
 
   const userRole = getUserRole();
 
-  // Use user prop only (no mock data)
-  const detectedUser = user || null;
 
   // Icon components for minimalist line art
   const Icons = {
@@ -190,12 +187,6 @@ export default function Sidebar({ user, isVisible = false, collapsed = true, onT
           href: '/admin/services',
           icon: <Icons.Services />,
           current: pathname.startsWith('/admin/services'),
-        },
-        {
-          name: 'Yêu cầu dịch vụ',
-          href: '/admin/service-orders',
-          icon: <Icons.ServiceOrders />,
-          current: pathname.startsWith('/admin/service-orders'),
         },
         {
           name: 'Quản lý công việc',

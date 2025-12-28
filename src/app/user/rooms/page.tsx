@@ -1389,8 +1389,15 @@ export default function BookRoomPage() {
         loading={faceRegistering}
         onCapture={handleCapturedFaceImage}
         enableFaceGuidance={faceCaptureStep <= 3}
+        faceCaptureStep={faceCaptureStep}
         title={
-          faceCaptureStep === 4
+          faceCaptureStep === 1
+            ? "Chụp khuôn mặt chính diện"
+            : faceCaptureStep === 2
+            ? "Chụp khuôn mặt nghiêng trái"
+            : faceCaptureStep === 3
+            ? "Chụp khuôn mặt nghiêng phải"
+            : faceCaptureStep === 4
             ? "Chụp CCCD mặt trước"
             : faceCaptureStep === 5
             ? "Chụp CCCD mặt sau"

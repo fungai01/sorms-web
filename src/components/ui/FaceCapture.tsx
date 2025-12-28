@@ -20,7 +20,7 @@ const WebcamComponent = dynamic(
   }
 ) as any;
 
-export type FaceGuidanceStatus = "no-face" | "off-center" | "too-close" | "too-far" | "good";
+export type FaceGuidanceStatus = "no-face" | "off-center" | "too-close" | "too-far" | "turn-left" | "turn-right" | "face-front" | "good";
 
 interface FaceCaptureProps {
   open: boolean;
@@ -35,6 +35,9 @@ interface FaceCaptureProps {
 
   enableFaceGuidance?: boolean;
   onFaceStatusChange?: (status: FaceGuidanceStatus) => void;
+  
+  // Bước chụp ảnh: 1=chính diện, 2=trái, 3=phải, 4=CCCD trước, 5=CCCD sau
+  faceCaptureStep?: 1 | 2 | 3 | 4 | 5;
 }
 
 export function FaceCapture({
@@ -46,6 +49,7 @@ export function FaceCapture({
   autoCapture = false,
   enableFaceGuidance = true,
   onFaceStatusChange,
+  faceCaptureStep = 1,
 }: FaceCaptureProps) {
   const webcamRef = useRef<any>(null);
   const autoCapturedRef = useRef(false);
@@ -66,7 +70,8 @@ export function FaceCapture({
 
     const loadModels = async () => {
       try {
-        if (faceapi.nets.tinyFaceDetector.isLoaded) {
+        // Kiểm tra cả 2 models đã load chưa
+        if (faceapi.nets.tinyFaceDetector.isLoaded && faceapi.nets.faceLandmark68Net.isLoaded) {
           if (!cancelled) setFaceModelLoaded(true);
           return;
         }
@@ -81,7 +86,15 @@ export function FaceCapture({
         }
 
         const MODEL_URL = "/models";
-        await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+        
+        // Load cả 2 models: detector và landmark
+        if (!faceapi.nets.tinyFaceDetector.isLoaded) {
+          await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+        }
+        
+        if (!faceapi.nets.faceLandmark68Net.isLoaded) {
+          await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+        }
 
         if (!cancelled) setFaceModelLoaded(true);
       } catch (err) {
@@ -116,6 +129,52 @@ export function FaceCapture({
     if (!video.srcObject && !video.src) return false;
 
     return true;
+  };
+
+  // Tính góc yaw (góc nghiêng trái/phải) từ landmarks
+  // Trả về: số dương = quay trái, số âm = quay phải, 0 = chính diện
+  // Giá trị tuyệt đối càng lớn = góc nghiêng càng nhiều
+  const calculateFaceYaw = (landmarks: faceapi.FaceLandmarks68): number => {
+    // Landmark indices theo face-api.js 68-point model:
+    // Mắt trái: 36-41, mắt phải: 42-47
+    // Lấy điểm giữa mỗi mắt
+    const leftEyePoints = landmarks.positions.slice(36, 42);
+    const rightEyePoints = landmarks.positions.slice(42, 48);
+    
+    const leftEyeCenter = {
+      x: leftEyePoints.reduce((sum, p) => sum + p.x, 0) / leftEyePoints.length,
+      y: leftEyePoints.reduce((sum, p) => sum + p.y, 0) / leftEyePoints.length,
+    };
+    
+    const rightEyeCenter = {
+      x: rightEyePoints.reduce((sum, p) => sum + p.x, 0) / rightEyePoints.length,
+      y: rightEyePoints.reduce((sum, p) => sum + p.y, 0) / rightEyePoints.length,
+    };
+    
+    // Tính khoảng cách giữa 2 mắt (baseline)
+    const eyeDistance = Math.sqrt(
+      Math.pow(rightEyeCenter.x - leftEyeCenter.x, 2) + 
+      Math.pow(rightEyeCenter.y - leftEyeCenter.y, 2)
+    );
+    
+    if (eyeDistance === 0) return 0;
+    
+    // Tính độ lệch của điểm giữa 2 mắt so với trung tâm khuôn mặt
+    // Sử dụng điểm mũi (30) làm tham chiếu
+    const noseTip = landmarks.positions[30];
+    const eyeMidpoint = {
+      x: (leftEyeCenter.x + rightEyeCenter.x) / 2,
+      y: (leftEyeCenter.y + rightEyeCenter.y) / 2,
+    };
+    
+    // Tính góc yaw: nếu mắt trái xa hơn mũi thì quay trái (dương), ngược lại quay phải (âm)
+    const horizontalOffset = (leftEyeCenter.x - rightEyeCenter.x) / eyeDistance;
+    
+    // Chuyển đổi sang góc (ước tính, không chính xác 100% nhưng đủ để hướng dẫn)
+    // Giá trị từ -1 đến 1, nhân với 45 độ để có góc ước tính
+    const yawAngle = Math.asin(Math.max(-1, Math.min(1, horizontalOffset))) * (180 / Math.PI);
+    
+    return yawAngle;
   };
 
   // Detect khuôn mặt liên tục để canh (no-face / lệch / gần / xa / good)
@@ -160,10 +219,17 @@ export function FaceCapture({
 
         isDetecting = true;
         try {
-          const detection = await faceapi.detectSingleFace(
-            video,
-            new faceapi.TinyFaceDetectorOptions()
-          );
+          // Detect với landmarks để có thể tính góc nghiêng
+          // Tăng inputSize để phát hiện khuôn mặt tốt hơn ở khoảng cách xa hơn
+          const detection = await faceapi
+            .detectSingleFace(
+              video,
+              new faceapi.TinyFaceDetectorOptions({
+                inputSize: 512, // Tăng từ mặc định 320 lên 512 để nhận diện tốt hơn
+                scoreThreshold: 0.5, // Ngưỡng điểm số (0-1), thấp hơn = nhạy cảm hơn
+              })
+            )
+            .withFaceLandmarks();
 
           if (!detection) {
             setFaceStatus("no-face");
@@ -171,33 +237,108 @@ export function FaceCapture({
             return;
           }
 
-          const { box } = detection;
+          const box = detection.detection.box;
+          const landmarks = detection.landmarks;
           const frameW = video.videoWidth || 1;
           const frameH = video.videoHeight || 1;
 
-          // lưu box dạng tỉ lệ (0-1)
-          setFaceBox({
-            x: box.x / frameW,
-            y: box.y / frameH,
-            width: box.width / frameW,
-            height: box.height / frameH,
-          });
-
+          // Tính toán các giá trị kiểm tra từ box gốc
           const centerX = (box.x + box.width / 2) / frameW;
           const centerY = (box.y + box.height / 2) / frameH;
           const faceAreaRatio = (box.width * box.height) / (frameW * frameH);
 
+          // Mở rộng vùng box để hiển thị dễ nhìn hơn
+          // Padding không đều: phần trên cần nhiều hơn để bao phủ trán/tóc
+          const paddingTopRatio = 0.6; // 60% phía trên (để bao phủ trán/tóc đầy đủ)
+          const paddingBottomRatio = 0.1; // 10% phía dưới (giảm để tập trung vào phần trên)
+          const paddingSideRatio = 0.2; // 20% hai bên
+          
+          const paddingTop = box.height * paddingTopRatio;
+          const paddingBottom = box.height * paddingBottomRatio;
+          const paddingX = box.width * paddingSideRatio;
+          
+          // Tính y mới - cố gắng mở rộng phần trên tối đa
+          const desiredY = box.y - paddingTop;
+          const expandedY = Math.max(0, desiredY);
+          
+          // Tính padding thực tế có thể áp dụng (có thể nhỏ hơn nếu box ở gần đầu màn hình)
+          const actualPaddingTop = box.y - expandedY;
+          
+          // Tính height: box gốc + padding trên thực tế + padding dưới
+          // Đảm bảo tổng height bao phủ đủ phần trên
+          const expandedHeight = box.height + actualPaddingTop + paddingBottom;
+          
+          // Đảm bảo box không vượt quá giới hạn màn hình
+          const expandedBox = {
+            x: Math.max(0, box.x - paddingX),
+            y: expandedY,
+            width: Math.min(frameW, box.width + paddingX * 2),
+            height: Math.min(frameH - expandedY, expandedHeight),
+          };
+
+          // lưu box mở rộng dạng tỉ lệ (0-1) để hiển thị
+          setFaceBox({
+            x: expandedBox.x / frameW,
+            y: expandedBox.y / frameH,
+            width: expandedBox.width / frameW,
+            height: expandedBox.height / frameH,
+          });
+
           const isOffCenter = Math.abs(centerX - 0.5) > 0.15 || Math.abs(centerY - 0.5) > 0.15;
 
+          // Kiểm tra khoảng cách trước
           if (isOffCenter) {
             setFaceStatus("off-center");
+            return;
           } else if (faceAreaRatio > 0.35) {
             setFaceStatus("too-close");
+            return;
           } else if (faceAreaRatio < 0.08) {
             setFaceStatus("too-far");
-          } else {
-            setFaceStatus("good");
+            return;
           }
+
+          // Kiểm tra góc nghiêng nếu có landmarks và đang chụp khuôn mặt (bước 1, 2, 3)
+          if (landmarks && faceCaptureStep <= 3) {
+            const yaw = calculateFaceYaw(landmarks);
+            const YAW_THRESHOLD = 25; // Ngưỡng góc nghiêng (độ) cho bước 2 và 3
+            
+            if (faceCaptureStep === 1) {
+              // Bước 1: Chụp chính diện
+              // Tạm thời bỏ qua kiểm tra góc nghiêng nghiêm ngặt ở bước 1
+              // Chỉ kiểm tra các điều kiện cơ bản (vị trí, khoảng cách) đã đủ
+              // Cho phép chụp nếu các điều kiện khác đã đạt
+              setFaceStatus("good");
+              return;
+            } else if (faceCaptureStep === 2) {
+              // Bước 2: Chụp mặt trái - yaw phải dương (quay trái)
+              if (yaw < YAW_THRESHOLD) {
+                if (yaw < -YAW_THRESHOLD) {
+                  setFaceStatus("turn-left"); // Đang quay phải, cần quay trái
+                } else {
+                  setFaceStatus("turn-left"); // Chưa đủ góc, cần quay trái thêm
+                }
+                return;
+              } else {
+                setFaceStatus("good");
+              }
+            } else if (faceCaptureStep === 3) {
+              // Bước 3: Chụp mặt phải - yaw phải âm (quay phải)
+              if (yaw > -YAW_THRESHOLD) {
+                if (yaw > YAW_THRESHOLD) {
+                  setFaceStatus("turn-right"); // Đang quay trái, cần quay phải
+                } else {
+                  setFaceStatus("turn-right"); // Chưa đủ góc, cần quay phải thêm
+                }
+                return;
+              } else {
+                setFaceStatus("good");
+              }
+            }
+          }
+
+          // Nếu không cần kiểm tra góc hoặc góc đã đúng
+          setFaceStatus("good");
         } catch (err) {
           console.error("Lỗi khi detect khuôn mặt:", err);
           setFaceStatus("no-face");
@@ -243,22 +384,47 @@ export function FaceCapture({
 
   const guidanceText = (() => {
     if (!enableFaceGuidance) return "";
+    
+    // Hướng dẫn theo từng bước chụp
+    const stepInstructions: { [key: number]: string } = {
+      1: "Chụp khuôn mặt chính diện",
+      2: "Chụp khuôn mặt nghiêng trái",
+      3: "Chụp khuôn mặt nghiêng phải",
+      4: "Chụp CCCD mặt trước",
+      5: "Chụp CCCD mặt sau",
+    };
+    
+    const stepInstruction = stepInstructions[faceCaptureStep] || "";
+    
     switch (faceStatus) {
       case "no-face":
-        return "Không thấy khuôn mặt, vui lòng đưa mặt vào khung.";
+        return `${stepInstruction}. Không thấy khuôn mặt, vui lòng đưa mặt vào khung.`;
       case "off-center":
-        return "Khuôn mặt đang lệch, hãy canh vào giữa.";
+        return `${stepInstruction}. Khuôn mặt đang lệch, hãy canh vào giữa.`;
       case "too-close":
-        return "Bạn đang quá gần, hãy lùi ra một chút.";
+        return `${stepInstruction}. Bạn đang quá gần, hãy lùi ra một chút.`;
       case "too-far":
-        return "Bạn đang quá xa, hãy lại gần camera hơn.";
+        return `${stepInstruction}. Bạn đang quá xa, hãy lại gần camera hơn.`;
+      case "turn-left":
+        return `${stepInstruction}. Vui lòng quay mặt sang trái.`;
+      case "turn-right":
+        return `${stepInstruction}. Vui lòng quay mặt sang phải.`;
+      case "face-front":
+        if (faceCaptureStep === 1) {
+          return `${stepInstruction}. Vui lòng quay mặt về chính diện (nhìn thẳng vào camera).`;
+        }
+        return `${stepInstruction}. Vui lòng quay mặt về chính diện.`;
       case "good":
-        return "Vị trí tốt, bạn có thể chụp ảnh.";
+        return `${stepInstruction}. Vị trí tốt, bạn có thể chụp ảnh.`;
       default:
-        return "";
+        return stepInstruction;
     }
   })();
 
+  // Chỉ cho phép chụp khi:
+  // - Không loading
+  // - Nếu enableFaceGuidance: status phải là "good"
+  // - Nếu không enableFaceGuidance: luôn cho phép
   const canCapture = !loading && (!enableFaceGuidance || faceStatus === "good");
 
   return (

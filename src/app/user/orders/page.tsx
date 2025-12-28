@@ -1,6 +1,6 @@
 "use client";
 
-import { useUserBookings, useServices } from "@/hooks/useApi";
+import { useUserBookings, useServices, useStaffProfilesFiltered } from "@/hooks/useApi";
 import { useMemo, useState, useEffect } from "react";
 import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
@@ -188,10 +188,36 @@ export default function OrdersPage() {
   const [addingService, setAddingService] = useState(false);
   
   const { data: servicesData } = useServices({ isActive: true });
+  const { data: staffProfilesData } = useStaffProfilesFiltered("ACTIVE");
   const services = useMemo(() => {
     if (!servicesData) return [];
     return Array.isArray(servicesData) ? servicesData : (servicesData as any).items || [];
   }, [servicesData]);
+
+  const staffNameById = useMemo(() => {
+    const list = !staffProfilesData
+      ? []
+      : Array.isArray(staffProfilesData)
+        ? staffProfilesData
+        : (staffProfilesData as any).items || [];
+
+    const map = new Map<number, string>();
+    for (const sp of list as any[]) {
+      const id = Number(sp?.id);
+      if (!Number.isFinite(id)) continue;
+      const name = sp?.fullName || sp?.name || sp?.accountName || sp?.workEmail || `Nhân viên #${id}`;
+      map.set(id, String(name));
+    }
+    return map;
+  }, [staffProfilesData]);
+
+  const getAssignedStaffLabel = (order: any) => {
+    const raw = order?.assignedStaffId ?? order?.assigned_staff_id ?? null;
+    const id = raw != null ? Number(raw) : NaN;
+    if (!Number.isFinite(id)) return null;
+    const name = staffNameById.get(id);
+    return name ? `${name} (#${id})` : `#${id}`;
+  };
 
   const bookings = useMemo(() => {
     if (!bookingsData) return [];
@@ -489,29 +515,6 @@ export default function OrdersPage() {
     { value: "cancelled", label: "Đã hủy", statuses: ["CANCELLED", "REJECTED", "FAILED"] },
   ];
 
-  // Build filter counts
-  const filterCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    filters.forEach(f => {
-      if (f.value === "all") {
-        counts[f.value] = orders.length;
-      } else if ((f as any).statuses) {
-        const normalizedStatuses = (f as any).statuses.map((s: string) => normalizeStatus(s));
-        counts[f.value] = orders.filter(o => {
-          if (!o?.status) return false;
-          const orderStatusNormalized = normalizeStatus(o.status);
-          return normalizedStatuses.includes(orderStatusNormalized);
-        }).length;
-      } else {
-        const normalized = normalizeStatus(f.value);
-        counts[f.value] = orders.filter(o => {
-          if (!o?.status) return false;
-          return normalizeStatus(o.status) === normalized;
-        }).length;
-      }
-    });
-    return counts;
-  }, [orders, filters]);
 
   const totalPending = useMemo(() => {
     return orders
@@ -570,7 +573,6 @@ export default function OrdersPage() {
               {filters.map((f) => {
                 const isActive =
                   filter === f.value || (filter && filter !== "all" && normalizeStatus(filter) === normalizeStatus(f.value));
-                const count = filterCounts[f.value] || 0;
 
                 return (
                   <button
@@ -624,7 +626,6 @@ export default function OrdersPage() {
               <div className="space-y-3">
                 {filteredOrders.map((order: any, index: number) => {
                   const amount = order.totalAmount || order.total_amount || 0;
-                  const primaryAction = canPay(order.status) ? "pay" : canEdit(order.status) ? "edit" : null;
 
                   return (
                     <div
@@ -645,6 +646,9 @@ export default function OrdersPage() {
                           <div className="text-xs text-gray-500">
                             {formatDate(order.createdDate || order.created_at)}
                             {order.items && order.items.length > 0 && <span className="ml-2">• {order.items.length} dịch vụ</span>}
+                            {getAssignedStaffLabel(order) && (
+                              <span className="ml-2">• NV: {getAssignedStaffLabel(order)}</span>
+                            )}
                           </div>
                         </div>
                         <div className="text-right flex-shrink-0">
@@ -764,6 +768,15 @@ export default function OrdersPage() {
                 <span className="text-[hsl(var(--primary))]">{formatMoney(detailModal.order.totalAmount || detailModal.order.total_amount)}</span>
               </div>
             </div>
+
+            {getAssignedStaffLabel(detailModal.order) && (
+              <div className="text-sm">
+                <span className="text-gray-500">Nhân viên thực hiện: </span>
+                <span className="font-semibold text-gray-900">
+                  {getAssignedStaffLabel(detailModal.order)}
+                </span>
+              </div>
+            )}
 
             {detailModal.order.note && (
               <div className="text-sm">

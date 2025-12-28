@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { useServices, useUserBookings } from "@/hooks/useApi";
+import { useServices, useUserBookings, useStaffProfilesFiltered } from "@/hooks/useApi";
 import { useAuth } from "@/hooks/useAuth";
 import { apiClient } from "@/lib/api-client";
 import type { Service, Booking } from "@/lib/types";
@@ -18,6 +18,7 @@ export default function RequestServicePage() {
   const [serviceId, setServiceId] = useState<number | "">("");
   const [bookingId, setBookingId] = useState<number | "">("");
   const [quantity, setQuantity] = useState<number>(1);
+  const [assignedStaffId, setAssignedStaffId] = useState<number | "">("");
   const today = new Date().toISOString().split("T")[0];
   const [date, setDate] = useState(today);
   const [note, setNote] = useState("");
@@ -45,6 +46,7 @@ export default function RequestServicePage() {
     q: searchQuery || undefined,
   });
   const { data: bookingsData, loading: bookingsLoading } = useUserBookings();
+  const { data: staffProfilesData, loading: staffLoading } = useStaffProfilesFiltered("ACTIVE");
 
   const services = useMemo(() => {
     if (!servicesData) return [];
@@ -65,6 +67,16 @@ export default function RequestServicePage() {
 
     return bookingList.filter((b: Booking) => b.status === "CHECKED_IN" && b.isActive !== false);
   }, [bookingsData]);
+
+  const staffOptions = useMemo(() => {
+    if (!staffProfilesData) return [];
+    const list = Array.isArray(staffProfilesData)
+      ? staffProfilesData
+      : (staffProfilesData as any).items || [];
+
+    // Keep only ACTIVE staff profiles (route already filters by isActive=true)
+    return list;
+  }, [staffProfilesData]);
 
   const getBookingStatus = (status?: Booking["status"]) => {
     switch (status) {
@@ -176,7 +188,7 @@ export default function RequestServicePage() {
     e.preventDefault();
     setError(null);
 
-    if (!serviceId || !bookingId || !date) {
+    if (!serviceId || !bookingId || !date || !assignedStaffId) {
       setError("Vui lòng điền đầy đủ thông tin");
       return;
     }
@@ -200,29 +212,36 @@ export default function RequestServicePage() {
       return;
     }
 
-    const cartCreated = await createCart(Number(bookingId));
-    if (!cartCreated || !cartId) {
-      return;
-    }
-
+    // NOTE: Use staff-confirmed workflow (/orders/service) so staff can see and confirm/reject the task.
+    // This endpoint requires assignedStaffId.
     try {
       setSubmitting(true);
-      const serviceTime = date ? `${date}T12:00:00` : undefined;
-      const addItemResponse = await apiClient.addOrderItem(
-        cartId,
-        Number(serviceId),
-        quantity,
-        undefined,
-        serviceTime,
-        undefined
-      );
 
-      if (!addItemResponse.success) {
-        setError(addItemResponse.error || "Không thể thêm dịch vụ");
+      // Step 1: create an order cart to obtain orderId (backend requires orderId must exist)
+      const cartCreated = await createCart(Number(bookingId));
+      if (!cartCreated || !cartId) {
+        setError("Không thể tạo đơn hàng");
         return;
       }
 
-      await apiClient.confirmOrder(cartId);
+      const serviceTime = date ? `${date}T12:00:00` : undefined;
+
+      const createRes = await apiClient.createServiceOrder({
+        bookingId: Number(bookingId),
+        orderId: cartId,
+        serviceId: Number(serviceId),
+        quantity,
+        assignedStaffId: Number(assignedStaffId),
+        requestedBy: String(user.id),
+        serviceTime,
+        note,
+      });
+
+      if (!createRes.success) {
+        setError(createRes.error || "Không thể tạo đơn đặt dịch vụ");
+        return;
+      }
+
       setSuccess(true);
       setCartId(null);
       setTimeout(() => router.push("/user/orders"), 2000);
@@ -650,6 +669,39 @@ export default function RequestServicePage() {
                   )}
                 </div>
 
+                {/* Staff */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Nhân viên thực hiện</label>
+                  {staffLoading ? (
+                    <div className="text-sm text-gray-500">Đang tải danh sách nhân viên...</div>
+                  ) : staffOptions.length === 0 ? (
+                    <div className="rounded-2xl border border-orange-200 bg-orange-50 p-4">
+                      <div className="text-sm font-semibold text-orange-900">Chưa có nhân viên hoạt động</div>
+                      <div className="text-xs text-orange-700 mt-1">Vui lòng liên hệ lễ tân để được hỗ trợ</div>
+                    </div>
+                  ) : (
+                    <div className="relative">
+                      <select
+                        value={assignedStaffId || ""}
+                        onChange={(e) => setAssignedStaffId(e.target.value ? Number(e.target.value) : "")}
+                        className="w-full px-3 py-2.5 pr-10 border border-gray-300 rounded-xl text-sm focus:outline-none appearance-none bg-white"
+                      >
+                        <option value="">-- Chọn nhân viên --</option>
+                        {staffOptions.map((sp: any) => (
+                          <option key={sp.id} value={sp.id}>
+                            {sp.fullName || sp.name || sp.accountName || `Nhân viên #${sp.id}`}
+                          </option>
+                        ))}
+                      </select>
+                      <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                        <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 {/* Quantity + date */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
@@ -710,7 +762,7 @@ export default function RequestServicePage() {
               </Button>
               <Button
                 type="submit"
-                disabled={submitting || !serviceId || !bookingId || !date || bookings.length === 0}
+                disabled={submitting || !serviceId || !bookingId || !date || !assignedStaffId || bookings.length === 0 || staffOptions.length === 0}
                 variant="primary"
                 className="flex-1"
               >

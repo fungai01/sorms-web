@@ -93,9 +93,139 @@ export async function GET(req: NextRequest) {
     }
 
     // Default: list orders - Backend doesn't have GET /orders endpoint
-    // Return empty array for now, or implement aggregation from multiple sources
-    // TODO: Backend needs to implement GET /orders endpoint for admin to list all orders
-    return NextResponse.json({ items: [], total: 0 })
+    // Workaround: Try direct backend call first, then aggregate from all bookings
+    const auth = getAuthorizationHeader(req)
+    const options: RequestInit = auth ? { headers: { Authorization: auth } } : {}
+    
+    try {
+      // First, try direct backend call (might work for admin)
+      const directResponse = await apiClient.get('/orders', options)
+      if (directResponse.success && directResponse.data) {
+        const directOrders = Array.isArray(directResponse.data)
+          ? directResponse.data
+          : Array.isArray((directResponse.data as any)?.items)
+            ? (directResponse.data as any).items
+            : Array.isArray((directResponse.data as any)?.data?.content)
+              ? (directResponse.data as any).data.content
+              : []
+        
+        if (directOrders.length > 0) {
+          console.log('[API] Got orders from direct backend call:', directOrders.length)
+          const statusFilter = searchParams.get('status')
+          if (statusFilter) {
+            const filterStatusUpper = statusFilter.toUpperCase().replace(/\s+/g, '_')
+            const filtered = directOrders.filter((o: any) => {
+              const orderStatus = (o.status || '').toUpperCase().replace(/\s+/g, '_')
+              if (orderStatus === filterStatusUpper) return true
+              if (orderStatus.replace(/_/g, '') === filterStatusUpper.replace(/_/g, '')) return true
+              if (filterStatusUpper === 'PENDING' && orderStatus.startsWith('PENDING')) return true
+              return false
+            })
+            return NextResponse.json({ items: filtered, total: filtered.length })
+          }
+          return NextResponse.json({ items: directOrders, total: directOrders.length })
+        }
+      }
+      
+      // Fallback: Aggregate orders from all bookings
+      console.log('[API] Direct call failed or empty, aggregating from bookings...')
+      const bookingsResponse = await apiClient.getBookings(options)
+      console.log('[API] getBookings response:', { 
+        success: bookingsResponse.success, 
+        hasData: !!bookingsResponse.data,
+        dataType: typeof bookingsResponse.data 
+      })
+      
+      if (!bookingsResponse.success || !bookingsResponse.data) {
+        console.warn('[API] No bookings found or request failed')
+        return NextResponse.json({ items: [], total: 0 })
+      }
+      
+      const bookings = Array.isArray(bookingsResponse.data)
+        ? bookingsResponse.data
+        : Array.isArray((bookingsResponse.data as any)?.items)
+          ? (bookingsResponse.data as any).items
+          : Array.isArray((bookingsResponse.data as any)?.data?.content)
+            ? (bookingsResponse.data as any).data.content
+            : []
+      
+      console.log('[API] Found bookings:', bookings.length)
+      
+      if (bookings.length === 0) {
+        console.warn('[API] No bookings available')
+        return NextResponse.json({ items: [], total: 0 })
+      }
+      
+      // Get orders from each booking
+      const allOrders: any[] = []
+      const statusFilter = searchParams.get('status')
+      
+      for (const booking of bookings) {
+        const bookingId = booking.id || booking.bookingId
+        if (!bookingId) {
+          console.warn('[API] Booking missing id:', booking)
+          continue
+        }
+        
+        try {
+          // Use get() directly with auth header instead of getMyOrders
+          // getMyOrders doesn't accept options parameter
+          const ordersResponse = await apiClient.get(`/orders/my-orders?bookingId=${bookingId}`, options)
+          console.log(`[API] getMyOrders for booking ${bookingId}:`, { 
+            success: ordersResponse.success, 
+            hasData: !!ordersResponse.data,
+            error: ordersResponse.error 
+          })
+          
+          if (ordersResponse.success && ordersResponse.data) {
+            const orders = Array.isArray(ordersResponse.data)
+              ? ordersResponse.data
+              : Array.isArray((ordersResponse.data as any)?.items)
+                ? (ordersResponse.data as any).items
+                : Array.isArray((ordersResponse.data as any)?.data)
+                  ? (ordersResponse.data as any).data
+                  : []
+            
+            console.log(`[API] Found ${orders.length} orders for booking ${bookingId}`)
+            
+            // Filter by status if provided (normalize status for comparison)
+            if (statusFilter) {
+              const filterStatusUpper = statusFilter.toUpperCase().replace(/\s+/g, '_')
+              const filtered = orders.filter((o: any) => {
+                const orderStatus = (o.status || '').toUpperCase().replace(/\s+/g, '_')
+                // Exact match
+                if (orderStatus === filterStatusUpper) return true
+                // Handle variations (PENDING_STAFF_CONFIRMATION vs PENDINGSTAFFCONFIRMATION)
+                if (orderStatus.replace(/_/g, '') === filterStatusUpper.replace(/_/g, '')) return true
+                // Handle PENDING filter to include PENDING_STAFF_CONFIRMATION
+                if (filterStatusUpper === 'PENDING' && orderStatus.startsWith('PENDING')) return true
+                return false
+              })
+              allOrders.push(...filtered)
+            } else {
+              allOrders.push(...orders)
+            }
+          }
+        } catch (err) {
+          // Skip bookings that fail to load orders
+          console.warn(`[API] Failed to load orders for booking ${bookingId}:`, err)
+        }
+      }
+      
+      console.log('[API] Total orders collected:', allOrders.length)
+      
+      // Remove duplicates by order id
+      const uniqueOrders = Array.from(
+        new Map(allOrders.map((o: any) => [o.id, o])).values()
+      )
+      
+      console.log('[API] Unique orders after deduplication:', uniqueOrders.length)
+      
+      return NextResponse.json({ items: uniqueOrders, total: uniqueOrders.length })
+    } catch (error: any) {
+      console.error('[API] Error aggregating orders:', error)
+      return NextResponse.json({ items: [], total: 0 })
+    }
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || 'Internal server error' }, { status: 500 })
   }

@@ -6,6 +6,7 @@ import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
 import dynamic from "next/dynamic";
 import { Html5Qrcode } from "html5-qrcode";
+import * as faceapi from "face-api.js";
 
 const WebcamComponent = dynamic(() => import("react-webcam") as any, { 
   ssr: false,
@@ -46,6 +47,9 @@ export default function CheckInPage() {
   
   const webcamRef = useRef<any>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [faceModelLoaded, setFaceModelLoaded] = useState(false);
+  const [faceBox, setFaceBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  const [cameraReady, setCameraReady] = useState(false);
 
   useEffect(() => {
     if (flash) {
@@ -53,6 +57,138 @@ export default function CheckInPage() {
       return () => clearTimeout(timer);
     }
   }, [flash]);
+
+  // Load face-api.js models
+  useEffect(() => {
+    if (step !== 'face') {
+      setFaceModelLoaded(false);
+      setFaceBox(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadModels = async () => {
+      try {
+        if (faceapi.nets.tinyFaceDetector.isLoaded && faceapi.nets.faceLandmark68Net.isLoaded) {
+          if (!cancelled) setFaceModelLoaded(true);
+          return;
+        }
+
+        if (faceapi?.tf) {
+          const currentBackend = faceapi.tf.getBackend?.();
+          if (!currentBackend) {
+            await import("@tensorflow/tfjs-backend-webgl");
+            await faceapi.tf.setBackend("webgl");
+          }
+          await faceapi.tf.ready();
+        }
+
+        const MODEL_URL = "/models";
+        
+        if (!faceapi.nets.tinyFaceDetector.isLoaded) {
+          await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+        }
+        
+        if (!faceapi.nets.faceLandmark68Net.isLoaded) {
+          await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+        }
+
+        if (!cancelled) setFaceModelLoaded(true);
+      } catch (err) {
+        console.error("Không thể load model face-api:", err);
+        if (!cancelled) setFaceModelLoaded(false);
+      }
+    };
+
+    loadModels();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [step]);
+
+  // Detect face continuously
+  useEffect(() => {
+    if (step !== 'face' || !faceModelLoaded || !cameraReady) {
+      setFaceBox(null);
+      return;
+    }
+
+    let interval: any;
+    let timeoutId: any;
+    let isDetecting = false;
+
+    timeoutId = setTimeout(() => {
+      interval = setInterval(async () => {
+        if (isDetecting) return;
+
+        const video = webcamRef.current?.video as HTMLVideoElement | null;
+        if (!video || video.readyState < 4 || video.paused || video.ended) return;
+        if (video.videoWidth === 0 || video.videoHeight === 0) return;
+
+        isDetecting = true;
+        try {
+          const detection = await faceapi
+            .detectSingleFace(
+              video,
+              new faceapi.TinyFaceDetectorOptions({
+                inputSize: 512,
+                scoreThreshold: 0.5,
+              })
+            )
+            .withFaceLandmarks();
+
+          if (!detection) {
+            setFaceBox(null);
+            return;
+          }
+
+          const box = detection.detection.box;
+          const frameW = video.videoWidth || 1;
+          const frameH = video.videoHeight || 1;
+
+          // Mở rộng vùng box tương tự FaceCapture
+          const paddingTopRatio = 0.6;
+          const paddingBottomRatio = 0.1;
+          const paddingSideRatio = 0.2;
+          
+          const paddingTop = box.height * paddingTopRatio;
+          const paddingBottom = box.height * paddingBottomRatio;
+          const paddingX = box.width * paddingSideRatio;
+          
+          const desiredY = box.y - paddingTop;
+          const expandedY = Math.max(0, desiredY);
+          const actualPaddingTop = box.y - expandedY;
+          const expandedHeight = box.height + actualPaddingTop + paddingBottom;
+          
+          const expandedBox = {
+            x: Math.max(0, box.x - paddingX),
+            y: expandedY,
+            width: Math.min(frameW, box.width + paddingX * 2),
+            height: Math.min(frameH - expandedY, expandedHeight),
+          };
+
+          setFaceBox({
+            x: expandedBox.x / frameW,
+            y: expandedBox.y / frameH,
+            width: expandedBox.width / frameW,
+            height: expandedBox.height / frameH,
+          });
+        } catch (err) {
+          console.error("Lỗi khi detect khuôn mặt:", err);
+          setFaceBox(null);
+        } finally {
+          isDetecting = false;
+        }
+      }, 700);
+    }, 1000);
+
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      if (interval) clearInterval(interval);
+    };
+  }, [step, faceModelLoaded, cameraReady]);
 
   useEffect(() => {
     if (step !== 'scan') return;
@@ -543,13 +679,41 @@ export default function CheckInPage() {
                   screenshotFormat="image/jpeg"
                   screenshotQuality={0.9}
                   videoConstraints={{ facingMode: "user", width: 640, height: 480 }}
-                  onUserMedia={() => setCameraError(null)}
-                  onUserMediaError={() => setCameraError("Không thể truy cập camera")}
+                  onUserMedia={() => {
+                    setCameraError(null);
+                    setTimeout(() => {
+                      const video = webcamRef.current?.video;
+                      if (video && video instanceof HTMLVideoElement) {
+                        setCameraReady(true);
+                      } else {
+                        setTimeout(() => {
+                          const retryVideo = webcamRef.current?.video;
+                          if (retryVideo && retryVideo instanceof HTMLVideoElement) {
+                            setCameraReady(true);
+                          }
+                        }, 200);
+                      }
+                    }, 100);
+                  }}
+                  onUserMediaError={() => {
+                    setCameraError("Không thể truy cập camera");
+                    setCameraReady(false);
+                  }}
                 />
                 
-                <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-                  <div className="w-48 h-60 border-4 border-[hsl(var(--primary))]/60 rounded-[50%] shadow-lg"></div>
-                </div>
+                {/* Vẽ khung khuôn mặt khi detect được */}
+                {faceBox && (
+                  <div
+                    className="absolute border-4 rounded-xl pointer-events-none shadow-lg border-green-400"
+                    style={{
+                      left: `${faceBox.x * 100}%`,
+                      top: `${faceBox.y * 100}%`,
+                      width: `${faceBox.width * 100}%`,
+                      height: `${faceBox.height * 100}%`,
+                      boxSizing: "border-box",
+                    }}
+                  />
+                )}
 
                 {cameraError && (
                   <div className="absolute inset-0 bg-gray-900/90 flex items-center justify-center">
