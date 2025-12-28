@@ -210,11 +210,9 @@ export default function StaffProfilesPage() {
         setFlash({ type: "error", text: "Không lấy được accountId. Vui lòng kiểm tra email." });
         return;
       }
-
       const payload = {
         ...edit,
-        // StaffProfile type uses number, backend accepts string as well; keep number here to satisfy TS.
-        accountId: Number(accountId),
+        accountId: edit.id ? Number(accountId) : String(accountId), 
         role,
       };
 

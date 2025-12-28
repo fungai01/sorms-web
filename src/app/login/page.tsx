@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import Image from "next/image";
 import Logo from "@/img/Logo.png";
 import Bg from "@/img/bg.jpg";
@@ -227,9 +228,26 @@ export default function LoginPage() {
         </div>
 
         {/* Footer */}
-        <p className="mt-8 text-sm text-gray-300">
-          © 2025 SORMS – Smart Office Residence Management System
-        </p>
+        <div className="mt-8 text-sm text-gray-300">
+          <p className="mb-2">
+            © 2025 SORMS – Smart Office Residence Management System
+          </p>
+          <div className="flex flex-wrap items-center justify-center gap-4 mt-4">
+            <Link 
+              href="/policy" 
+              className="text-gray-300 hover:text-white underline underline-offset-2 transition-colors duration-200"
+            >
+              Chính sách bảo mật
+            </Link>
+            <span className="text-gray-400">|</span>
+            <Link 
+              href="/terms" 
+              className="text-gray-300 hover:text-white underline underline-offset-2 transition-colors duration-200"
+            >
+              Điều khoản sử dụng
+            </Link>
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -106,9 +106,26 @@ const HomePage = memo(function HomePage() {
           </div>
 
           {/* Footer */}
-          <p className="mt-8 text-sm text-gray-300 italic">
-            © 2025 SORMS – Hệ thống quản lý nhà công vụ thông minh
-          </p>
+          <div className="mt-8 text-sm text-gray-300">
+            <p className="italic mb-2">
+              © 2025 SORMS – Hệ thống quản lý nhà công vụ thông minh
+            </p>
+            <div className="flex flex-wrap items-center justify-center gap-4 mt-4">
+              <Link 
+                href="/policy" 
+                className="text-gray-300 hover:text-white underline underline-offset-2 transition-colors duration-200"
+              >
+                Chính sách bảo mật
+              </Link>
+              <span className="text-gray-400">|</span>
+              <Link 
+                href="/terms" 
+                className="text-gray-300 hover:text-white underline underline-offset-2 transition-colors duration-200"
+              >
+                Điều khoản sử dụng
+              </Link>
+            </div>
+          </div>
         </div>
       </div>
     </>
