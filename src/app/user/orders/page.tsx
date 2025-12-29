@@ -118,7 +118,7 @@ function EditOrderItemRow({
       <div className="flex items-start justify-between mb-2">
         <div className="flex-1 min-w-0">
           <p className="font-medium text-gray-900 text-sm truncate">
-            {item.serviceName || item.service_name || `Dịch vụ #${item.serviceId}`}
+            {item.serviceName || item.service_name || `Dịch vụ ${item.serviceId}`}
           </p>
           <p className="text-xs text-gray-500 mt-0.5">
             {formatMoney(item.unitPrice || item.unit_price || 0)} / đơn vị
@@ -177,7 +177,9 @@ export default function OrdersPage() {
   const [payingId, setPayingId] = useState<number | null>(null);
   const [cancellingId, setCancellingId] = useState<number | null>(null);
   const [detailModal, setDetailModal] = useState<{ open: boolean; order: any | null }>({ open: false, order: null });
+  const [payConfirmModal, setPayConfirmModal] = useState<{ open: boolean; order: any | null }>({ open: false, order: null });
   const [editModal, setEditModal] = useState<{ open: boolean; order: any | null }>({ open: false, order: null });
+  const [cancelConfirmModal, setCancelConfirmModal] = useState<{ open: boolean; order: any | null }>({ open: false, order: null });
   const [editingItemId, setEditingItemId] = useState<number | null>(null);
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -205,7 +207,7 @@ export default function OrdersPage() {
     for (const sp of list as any[]) {
       const id = Number(sp?.id);
       if (!Number.isFinite(id)) continue;
-      const name = sp?.fullName || sp?.name || sp?.accountName || sp?.workEmail || `Nhân viên #${id}`;
+      const name = sp?.fullName || sp?.name || sp?.accountName || sp?.workEmail
       map.set(id, String(name));
     }
     return map;
@@ -216,7 +218,7 @@ export default function OrdersPage() {
     const id = raw != null ? Number(raw) : NaN;
     if (!Number.isFinite(id)) return null;
     const name = staffNameById.get(id);
-    return name ? `${name} (#${id})` : `#${id}`;
+    return name ? `${name}` : null;
   };
 
   const bookings = useMemo(() => {
@@ -303,10 +305,6 @@ export default function OrdersPage() {
 
   const handlePay = async (order: any) => {
     const amount = order.totalAmount || order.total_amount || 0;
-    if (!confirm(`Thanh toán đơn hàng #${order.code || order.id} với số tiền ${formatMoney(amount)}?`)) {
-      return;
-    }
-
     try {
       setPayingId(order.id);
       const response = await apiClient.createPayment({
@@ -335,15 +333,18 @@ export default function OrdersPage() {
   };
 
   const handleCancel = async (order: any) => {
-    if (!confirm(`Bạn có chắc muốn hủy đơn hàng #${order.code || order.id}?`)) {
-      return;
-    }
+    setCancelConfirmModal({ open: true, order });
+  };
+
+  const handleConfirmCancel = async () => {
+    const order = cancelConfirmModal.order;
+    if (!order) return;
 
     try {
       setCancellingId(order.id);
       const response = await apiClient.cancelOrder(order.id);
       if (response.success) {
-        alert("Đã hủy đơn hàng");
+        setCancelConfirmModal({ open: false, order: null });
         window.location.reload();
       } else {
         alert(response.error || "Không thể hủy đơn hàng");
@@ -534,13 +535,7 @@ export default function OrdersPage() {
                 <h1 className="text-3xl font-bold text-gray-900 leading-tight">Đơn hàng của tôi</h1>
               </div>
 
-              {/* Summary badge (compact like admin count chip) */}
-              {totalPending > 0 && (
-                <div className="text-right">
-                  <div className="text-xs font-semibold text-orange-700">Cần thanh toán</div>
-                  <div className="text-lg font-bold text-orange-800">{formatMoney(totalPending)}</div>
-                </div>
-              )}
+              
             </div>
           </div>
 
@@ -625,8 +620,6 @@ export default function OrdersPage() {
             ) : (
               <div className="space-y-3">
                 {filteredOrders.map((order: any, index: number) => {
-                  const amount = order.totalAmount || order.total_amount || 0;
-
                   return (
                     <div
                       key={order.id}
@@ -634,57 +627,21 @@ export default function OrdersPage() {
                         index % 2 === 0 ? "bg-white" : "bg-gray-50"
                       }`}
                     >
-                      {/* Header row */}
-                      <div className="flex items-start justify-between gap-3 mb-3">
+                      <div className="flex items-center justify-between gap-4">
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="font-bold text-gray-900 truncate">#{order.code || order.id}</span>
-                            <Badge tone={getStatusBadgeTone(order.status)} className="text-xs rounded-full">
-                              {getStatusText(order.status)}
-                            </Badge>
+                          <div className="flex items-center gap-3 mb-2">
+                            <span className="font-bold text-lg text-gray-900">{order.code || order.id}</span>
+                            <span className="text-sm text-gray-600">
+                              {formatDate(order.createdDate || order.created_at)}
+                            </span>
                           </div>
-                          <div className="text-xs text-gray-500">
-                            {formatDate(order.createdDate || order.created_at)}
-                            {order.items && order.items.length > 0 && <span className="ml-2">• {order.items.length} dịch vụ</span>}
-                            {getAssignedStaffLabel(order) && (
-                              <span className="ml-2">• NV: {getAssignedStaffLabel(order)}</span>
-                            )}
-                          </div>
+                          
+                          {getAssignedStaffLabel(order) && (
+                            <div className="text-sm text-gray-600">
+                              Nhân viên: {getAssignedStaffLabel(order)}
+                            </div>
+                          )}
                         </div>
-                        <div className="text-right flex-shrink-0">
-                          <div className="text-lg font-bold text-[hsl(var(--primary))]">{formatMoney(amount)}</div>
-                        </div>
-                      </div>
-
-                      {/* Rejection reason */}
-                      {order.rejectionReason && (
-                        <div className="mb-3 p-2 bg-red-50 border border-red-100 rounded-xl text-xs text-red-600">
-                          Lý do từ chối: {order.rejectionReason}
-                        </div>
-                      )}
-
-                      {/* Actions (Option 1): Primary + Detail, Cancel only when allowed */}
-                      <div className="flex flex-wrap gap-2 pt-3 border-t border-gray-200/60 justify-end">
-                        {canPay(order.status) && (
-                          <Button
-                            variant="primary"
-                            className="h-9 font-medium text-sm whitespace-nowrap"
-                            onClick={() => handlePay(order)}
-                            disabled={payingId === order.id}
-                          >
-                            {payingId === order.id ? "Đang xử lý..." : "Thanh toán"}
-                          </Button>
-                        )}
-
-                        {!canPay(order.status) && canEdit(order.status) && (
-                          <Button
-                            variant="primary"
-                            className="h-9 font-medium text-sm whitespace-nowrap"
-                            onClick={() => setEditModal({ open: true, order })}
-                          >
-                            Chỉnh sửa
-                          </Button>
-                        )}
 
                         <Button
                           variant="secondary"
@@ -693,17 +650,6 @@ export default function OrdersPage() {
                         >
                           Chi tiết
                         </Button>
-
-                        {canCancel(order.status) && (
-                          <Button
-                            variant="danger"
-                            className="h-9 text-sm whitespace-nowrap"
-                            onClick={() => handleCancel(order)}
-                            disabled={cancellingId === order.id}
-                          >
-                            {cancellingId === order.id ? "Đang hủy..." : "Hủy"}
-                          </Button>
-                        )}
                       </div>
                     </div>
                   );
@@ -718,61 +664,60 @@ export default function OrdersPage() {
       <Modal
         open={detailModal.open}
         onClose={() => setDetailModal({ open: false, order: null })}
-        title={`Chi tiết đơn hàng #${detailModal.order?.code || detailModal.order?.id || ''}`}
+        title={`Chi tiết đơn hàng ${detailModal.order?.code || detailModal.order?.id || ''}`}
       >
         {detailModal.order && (
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <Badge tone={getStatusBadgeTone(detailModal.order.status)}>
-                {getStatusText(detailModal.order.status)}
-              </Badge>
-              <span className="text-sm text-gray-500">
-                {formatDate(detailModal.order.createdDate || detailModal.order.created_at)}
-              </span>
+            {/* Header row: left title, right status */}
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h3 className="text-sm font-semibold text-gray-700">Danh sách dịch vụ</h3>
+              </div>
+              <div className="shrink-0">
+                <Badge tone={getStatusBadgeTone(detailModal.order.status)}>
+                  {getStatusText(detailModal.order.status)}
+                </Badge>
+              </div>
             </div>
 
+            {/* Services */}
             {detailModal.order.items && detailModal.order.items.length > 0 && (
-              <div className="border border-gray-200 rounded-xl overflow-hidden">
-                <div className="bg-[hsl(var(--page-bg))]/40 px-4 py-2 text-sm font-medium text-gray-700">
-                  Danh sách dịch vụ
-                </div>
-                <div className="divide-y divide-gray-100">
+              <div>
+                <div className="space-y-2">
                   {detailModal.order.items.map((item: any, idx: number) => (
-                    <div key={idx} className="px-4 py-3 flex items-center justify-between">
-                      <div>
-                        <p className="font-medium text-gray-900">{item.serviceName || item.service_name || `Dịch vụ #${item.serviceId}`}</p>
-                        <p className="text-xs text-gray-500">SL: {item.quantity}</p>
+                    <div key={idx} className="grid grid-cols-2 gap-3 text-sm">
+                      <div className="text-gray-500">Dịch vụ:</div>
+                      <div className="font-medium text-gray-900 text-right">
+                        {item.serviceName || item.service_name || `Dịch vụ ${item.serviceId}`}
                       </div>
-                      <p className="font-semibold text-gray-900">{formatMoney(item.totalPrice || item.total_price)}</p>
+                      <div className="text-gray-500">Số lượng:</div>
+                      <div className="font-medium text-gray-900 text-right">{item.quantity}</div>
                     </div>
                   ))}
                 </div>
               </div>
             )}
 
-            <div className="bg-[hsl(var(--page-bg))]/40 rounded-xl p-4 space-y-2">
-              {detailModal.order.subtotalAmount && (
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-500">Tạm tính</span>
-                  <span>{formatMoney(detailModal.order.subtotalAmount)}</span>
-                </div>
-              )}
-              {detailModal.order.discountAmount > 0 && (
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-500">Giảm giá</span>
-                  <span className="text-green-600">-{formatMoney(detailModal.order.discountAmount)}</span>
-                </div>
-              )}
-              <div className="flex justify-between font-semibold text-lg border-t border-gray-200 pt-2">
-                <span>Tổng cộng</span>
-                <span className="text-[hsl(var(--primary))]">{formatMoney(detailModal.order.totalAmount || detailModal.order.total_amount)}</span>
+            {/* Created date */}
+            <div className="text-sm text-gray-500">
+              Ngày tạo: {formatDate(detailModal.order.createdDate || detailModal.order.created_at)}
+            </div>
+
+            {/* Total */}
+            <div className="pt-3 border-t border-gray-200">
+              <div className="flex justify-between font-semibold text-base">
+                <span>Tổng cộng:</span>
+                <span className="text-[hsl(var(--primary))]">
+                  {formatMoney(detailModal.order.totalAmount || detailModal.order.total_amount)}
+                </span>
               </div>
             </div>
 
+            {/* Staff */}
             {getAssignedStaffLabel(detailModal.order) && (
-              <div className="text-sm">
-                <span className="text-gray-500">Nhân viên thực hiện: </span>
-                <span className="font-semibold text-gray-900">
+              <div className="text-sm flex justify-between gap-3">
+                <span className="text-gray-500">Nhân viên thực hiện:</span>
+                <span className="font-semibold text-gray-900 text-right break-all">
                   {getAssignedStaffLabel(detailModal.order)}
                 </span>
               </div>
@@ -785,7 +730,79 @@ export default function OrdersPage() {
               </div>
             )}
 
-            
+            {/* Action Buttons */}
+            <div className="flex gap-3 pt-4 border-t border-gray-200">
+              <Button
+                variant="primary"
+                className="flex-1"
+                onClick={() => setPayConfirmModal({ open: true, order: detailModal.order })}
+                disabled={payingId === detailModal.order.id}
+              >
+                {payingId === detailModal.order.id ? (
+                  <span className="flex items-center gap-2">
+                    <span className="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-white"></span>
+                    Đang xử lý...
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-2">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                    </svg>
+                    Thanh toán
+                  </span>
+                )}
+              </Button>
+              <Button
+                variant="secondary"
+                className="flex-1 bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]"
+                onClick={() => setDetailModal({ open: false, order: null })}
+              >
+                Đóng
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Pay Confirmation Modal */}
+      <Modal
+        open={payConfirmModal.open}
+        onClose={() => setPayConfirmModal({ open: false, order: null })}
+        title="Xác nhận thanh toán"
+      >
+        {payConfirmModal.order && (
+          <div className="space-y-4 text-sm">
+            <p>
+              Bạn có chắc muốn thanh toán đơn hàng{" "}
+              <span className="font-semibold">
+                {payConfirmModal.order.code || payConfirmModal.order.id}
+              </span>{" "}
+              với số tiền{" "}
+              <span className="font-semibold">
+                {formatMoney(payConfirmModal.order.totalAmount || payConfirmModal.order.total_amount)}
+              </span>
+              ?
+            </p>
+
+            <div className="flex justify-end gap-3 pt-2">
+              <Button
+                variant="secondary"
+                onClick={() => setPayConfirmModal({ open: false, order: null })}
+              >
+                Hủy
+              </Button>
+              <Button
+                variant="primary"
+                onClick={async () => {
+                  if (!payConfirmModal.order) return;
+                  await handlePay(payConfirmModal.order);
+                  setPayConfirmModal({ open: false, order: null });
+                }}
+                disabled={payingId === payConfirmModal.order.id}
+              >
+                {payingId === payConfirmModal.order.id ? "Đang xử lý..." : "Xác nhận thanh toán"}
+              </Button>
+            </div>
           </div>
         )}
       </Modal>
@@ -800,7 +817,7 @@ export default function OrdersPage() {
           setNewServiceQuantity(1);
           setNewServiceTime("");
         }}
-        title={`Chỉnh sửa #${editModal.order?.code || editModal.order?.id || ''}`}
+        title={`Chỉnh sửa ${editModal.order?.code || editModal.order?.id || ''}`}
       >
         {editModal.order && (
           <div className="space-y-4">
@@ -821,7 +838,7 @@ export default function OrdersPage() {
                 className="h-9 px-4 text-sm font-medium whitespace-nowrap"
                 onClick={() => setShowAddService(true)}
               >
-                + Thêm dịch vụ
+                Thêm dịch vụ
               </Button>
             ) : (
               <div className="border border-gray-200 rounded-lg p-3 bg-gray-50 space-y-2.5">
@@ -966,6 +983,28 @@ export default function OrdersPage() {
             </Button>
           </div>
         )}
+      </Modal>
+
+      {/* Cancel Confirmation Modal */}
+      <Modal
+        open={cancelConfirmModal.open}
+        onClose={() => setCancelConfirmModal({ open: false, order: null })}
+        title="Xác nhận hủy đơn hàng"
+      >
+        <div className="space-y-4">
+          <p className="text-gray-700">
+            Bạn có chắc muốn hủy đơn hàng <span className="font-semibold">{cancelConfirmModal.order?.code || cancelConfirmModal.order?.id}</span>?
+          </p>
+          <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
+            <Button
+              variant="danger"
+              onClick={handleConfirmCancel}
+              disabled={cancellingId === cancelConfirmModal.order?.id}
+            >
+              {cancellingId === cancelConfirmModal.order?.id ? "Đang hủy..." : "Xác nhận"}
+            </Button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

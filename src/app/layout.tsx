@@ -19,6 +19,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link rel="dns-prefetch" href="//accounts.google.com" />
         <meta name="theme-color" content="#3B82F6" />
         <meta name="robots" content="index, follow" />
+        {/* Google Site Verification - Thêm verification code từ Google OAuth Console */}
+        {process.env.NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION && (
+          <meta
+            name="google-site-verification"
+            content={process.env.NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION}
+          />
+        )}
       </head>
       <body className="antialiased">
         <SWRConfig

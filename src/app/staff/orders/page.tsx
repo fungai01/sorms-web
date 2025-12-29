@@ -65,22 +65,41 @@ export default function StaffOrdersPage() {
     return () => clearTimeout(timer);
   }, [flash]);
 
+  // Helper function to get staff profile ID from account ID
+  const getStaffProfileId = async (): Promise<number | null> => {
+    if (!user?.id) return null;
+    
+    const accountId = String(user.id);
+    const allStaffProfiles = await apiClient.getStaffProfiles();
+    
+    if (allStaffProfiles.success && allStaffProfiles.data) {
+      const profiles = Array.isArray(allStaffProfiles.data) 
+        ? allStaffProfiles.data 
+        : (Array.isArray((allStaffProfiles.data as any)?.items) ? (allStaffProfiles.data as any).items : []);
+      
+      const staffProfile = profiles.find((p: any) => 
+        String(p.accountId || p.account_id || p.accountID) === accountId
+      );
+      
+      return staffProfile?.id || null;
+    }
+    
+    return null;
+  };
+
   // Load orders assigned to current staff
   const loadOrders = async () => {
     if (!user?.id) return;
     
     setLoading(true);
     try {
-      // Get staffId from user info (assuming user.id is staff profile id or account id)
-      // You may need to adjust this based on your user structure
-      const staffId = parseInt(String(user.id)) || 0;
+      const staffId = await getStaffProfileId();
       
-      if (staffId === 0) {
+      if (!staffId) {
         setFlash({ type: 'error', text: 'Không tìm thấy thông tin nhân viên' });
         setLoading(false);
         return;
       }
-
       const status = filterStatus !== 'ALL' ? filterStatus : undefined;
       const response = await apiClient.getStaffTasksForOrder(staffId, status);
       
@@ -110,7 +129,12 @@ export default function StaffOrdersPage() {
     if (!user?.id) return;
     
     try {
-      const staffId = parseInt(String(user.id)) || 0;
+      const staffId = await getStaffProfileId();
+      
+      if (!staffId) {
+        setFlash({ type: 'error', text: 'Không tìm thấy thông tin nhân viên' });
+        return;
+      }
       const response = await apiClient.getStaffTaskDetailForOrder(staffId, orderId);
       
       if (response.success) {
@@ -135,7 +159,13 @@ export default function StaffOrdersPage() {
     }
 
     try {
-      const staffId = parseInt(String(user.id)) || 0;
+      const staffId = await getStaffProfileId();
+      
+      if (!staffId) {
+        setFlash({ type: 'error', text: 'Không tìm thấy thông tin nhân viên' });
+        return;
+      }
+
       const response = await apiClient.staffConfirmOrder(selectedOrder.id, staffId, confirmNote);
       
       if (response.success) {
@@ -162,7 +192,13 @@ export default function StaffOrdersPage() {
     }
 
     try {
-      const staffId = parseInt(String(user.id)) || 0;
+      const staffId = await getStaffProfileId();
+      
+      if (!staffId) {
+        setFlash({ type: 'error', text: 'Không tìm thấy thông tin nhân viên' });
+        return;
+      }
+
       const response = await apiClient.staffRejectOrder(selectedOrder.id, staffId, rejectReason);
       
       if (response.success) {
@@ -189,7 +225,13 @@ export default function StaffOrdersPage() {
     }
 
     try {
-      const staffId = parseInt(String(user.id)) || 0;
+      const staffId = await getStaffProfileId();
+      
+      if (!staffId) {
+        setFlash({ type: 'error', text: 'Không tìm thấy thông tin nhân viên' });
+        return;
+      }
+
       const newDateTime = new Date(`${adjustedDate}T${adjustedTime}`).toISOString();
       
       // Call API to update schedule (assuming backend supports this)
@@ -226,7 +268,12 @@ export default function StaffOrdersPage() {
     if (!selectedOrder || !user?.id) return;
 
     try {
-      const staffId = parseInt(String(user.id)) || 0;
+      const staffId = await getStaffProfileId();
+      
+      if (!staffId) {
+        setFlash({ type: 'error', text: 'Không tìm thấy thông tin nhân viên' });
+        return;
+      }
       
       // Call API to complete service
       const response = await fetch(`/api/system/orders?action=complete&orderId=${selectedOrder.id}`, {

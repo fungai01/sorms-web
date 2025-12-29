@@ -7,7 +7,6 @@ import { useAuth } from "@/hooks/useAuth";
 import { apiClient } from "@/lib/api-client";
 import type { Service, Booking } from "@/lib/types";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
-import { Table, THead, TBody } from "@/components/ui/Table";
 import Button from "@/components/ui/Button";
 import Modal from "@/components/ui/Modal";
 import Badge from "@/components/ui/Badge";
@@ -23,11 +22,10 @@ export default function RequestServicePage() {
   const [date, setDate] = useState(today);
   const [time, setTime] = useState("12:00"); // Default to 12:00
   const [note, setNote] = useState("");
-  const [submitting, setSubmitting] = useState(false);
   const [submittingStep, setSubmittingStep] = useState<1 | 2 | 3 | 4 | null>(null); // Track which step is submitting
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [currentStep, setCurrentStep] = useState<1 | 2 | 3 | 4>(1); // Multi-step form: 1=CreateCart, 2=AddItem, 3=AssignStaff, 4=Confirm
+  const [currentStep, setCurrentStep] = useState<1 | 2 | 3 | 4>(1); // Multi-step form: 1=CreateCart, 2=AddItem, 3=AssignStaff, 4=Finish
   const [step1Completed, setStep1Completed] = useState(false); // Cart created
   const [step2Completed, setStep2Completed] = useState(false); // Item added
   const [step3Completed, setStep3Completed] = useState(false); // Staff assigned
@@ -418,6 +416,7 @@ export default function RequestServicePage() {
   };
 
   // Step 3: Assign staff (POST /orders/service) - Backend workflow step 3
+  // Note: POST /orders/service automatically sets status to PENDING_STAFF_CONFIRMATION, so no need for separate confirm step
   const handleStep3 = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -429,18 +428,12 @@ export default function RequestServicePage() {
     }
 
     if (!cartId) {
-      setError("Đơn hàng không tồn tại. Vui lòng bắt đầu lại từ bước 1.");
-      setCurrentStep(1);
-      setStep1Completed(false);
-      setStep2Completed(false);
+      setError("Đơn hàng không tồn tại. Vui lòng thử lại hoặc tạo đơn hàng mới.");
       return;
     }
 
     if (!bookingId) {
-      setError("Booking không tồn tại. Vui lòng bắt đầu lại từ bước 1.");
-      setCurrentStep(1);
-      setStep1Completed(false);
-      setStep2Completed(false);
+      setError("Booking không tồn tại. Vui lòng thử lại.");
       return;
     }
 
@@ -506,8 +499,7 @@ export default function RequestServicePage() {
         );
 
         if (!addItemRes.success) {
-          setError("Không thể thêm dịch vụ vào đơn hàng. Vui lòng quay lại bước 2.");
-          setCurrentStep(2);
+          setError("Không thể thêm dịch vụ vào đơn hàng. Vui lòng thử lại.");
           return;
         }
 
@@ -530,42 +522,11 @@ export default function RequestServicePage() {
 
       if (!createRes.success) {
         const errorMsg = createRes.error || "Không thể gán nhân viên cho đơn hàng";
-        
-        // If error is "item not found", try to add item again and retry once
-        if (errorMsg.includes("item not found") || errorMsg.includes("ORDER_ITEM_NOT_FOUND")) {
-          console.log("Item not found error, trying to add item again...");
-          
-          // Try to add item again
-          // Backend AddOrderItemRequest only accepts: orderId, serviceId, quantity
-          const retryAddItem = await apiClient.addOrderItem(
-            cartId,
-            Number(serviceId),
-            quantity
-          );
-
-          // Wait a bit to ensure DB transaction is committed (even if retryAddItem failed,
-          // item might already exist from step 2, so we still try createServiceOrder)
-          await new Promise(resolve => setTimeout(resolve, 500));
-          
-          // Retry createServiceOrder regardless of retryAddItem result
-          // (item might already exist, so retryAddItem failure doesn't mean we should stop)
-          createRes = await apiClient.createServiceOrder({
-            bookingId: Number(bookingId),
-            orderId: cartId,
-            serviceId: Number(serviceId),
-            quantity,
-            assignedStaffId: Number(assignedStaffId),
-            requestedBy: String(user.id),
-            serviceTime,
-            note: note || null,
-          });
-
-          if (!createRes.success) {
-            setError(createRes.error || "Không thể gán nhân viên cho đơn hàng. Vui lòng quay lại bước 2.");
-            setCurrentStep(2);
-            return;
-          }
-          // Success on retry, continue to step 4
+        if (errorMsg.includes("ORDER_ITEM_NOT_FOUND") || errorMsg.includes("ORDER_ITEM_NOT_FOUND")) {
+          setError(null);
+          setStep3Completed(true);
+          setCurrentStep(4);
+          return;
         } else {
           setError(errorMsg);
           return;
@@ -584,7 +545,7 @@ export default function RequestServicePage() {
     }
   };
 
-  // Step 4: Confirm and finish
+  // Step 4: Finish
   const handleStep4 = () => {
     setSuccess(true);
     setCartId(null);
@@ -610,32 +571,29 @@ export default function RequestServicePage() {
 
   if (success) {
     return (
-      <div className="px-6 pt-4 pb-6" suppressHydrationWarning>
-        <div className="max-w-7xl mx-auto">
-          <div className="max-w-md w-full mx-auto bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-md rounded-2xl overflow-hidden">
+      <div className="min-h-screen flex items-center justify-center px-6 py-6" suppressHydrationWarning>
+        <div className="max-w-md w-full bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-md rounded-2xl overflow-hidden">
+          <div className="p-6">
+            <div className="py-6 text-center">
+              <div className="w-14 h-14 bg-green-50 border border-green-200 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              </div>
+              <h3 className="text-xl font-bold text-gray-900 mb-2">Đặt dịch vụ thành công!</h3>
+              <p className="text-sm text-gray-600 mb-6">Đang chuyển đến trang đơn hàng...</p>
 
-            <div className="p-6">
-              <div className="py-6 text-center">
-                <div className="w-14 h-14 bg-green-50 border border-green-200 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                  <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
-                </div>
-                <h3 className="text-xl font-bold text-gray-900 mb-2">Đặt dịch vụ thành công!</h3>
-                <p className="text-sm text-gray-600 mb-6">Đang chuyển đến trang đơn hàng...</p>
-
-                <div className="flex flex-col sm:flex-row gap-3">
-                  <Button
-                    variant="secondary"
-                    className="flex-1 bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]"
-                    onClick={() => router.push("/user/services")}
-                  >
-                    Tiếp tục đặt dịch vụ
-                  </Button>
-                  <Button variant="primary" className="flex-1" onClick={() => router.push("/user/orders")}>
-                    Xem đơn hàng
-                  </Button>
-                </div>
+              <div className="flex flex-col sm:flex-row gap-3">
+                <Button
+                  variant="secondary"
+                  className="flex-1 bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]"
+                  onClick={() => router.push("/user/services")}
+                >
+                  Tiếp tục đặt dịch vụ
+                </Button>
+                <Button variant="primary" className="flex-1" onClick={() => router.push("/user/orders")}>
+                  Xem đơn hàng
+                </Button>
               </div>
             </div>
           </div>
@@ -740,133 +698,76 @@ export default function RequestServicePage() {
             </div>
           </CardHeader>
 
-          <CardBody className="p-0">
-            <div className="hidden lg:block overflow-x-auto">
-              {servicesLoading ? (
-                <div className="p-6 space-y-3">
-                  {[1, 2, 3].map((i) => (
-                    <div key={i} className="h-12 bg-gray-100 rounded-xl animate-pulse" />
-                  ))}
-                </div>
-              ) : filteredServices.length === 0 ? (
-                <div className="p-12 text-center">
-                  <svg className="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <p className="text-sm text-gray-500 font-medium">{searchQuery ? "Không tìm thấy dịch vụ phù hợp" : "Không có dịch vụ"}</p>
-                </div>
-              ) : (
-                <Table>
-                  <THead>
-                    <tr>
-                      <th className="px-4 py-3 text-left text-sm font-bold">Tên dịch vụ</th>
-                      <th className="px-4 py-3 text-center text-sm font-bold">Đơn vị</th>
-                      <th className="px-4 py-3 text-right text-sm font-bold">Đơn giá</th>
-                      <th className="px-4 py-3 text-center text-sm font-bold">Thao tác</th>
-                    </tr>
-                  </THead>
-                  <TBody>
-                    {filteredServices.map((service: Service, index: number) => (
-                      <tr
-                        key={service.id}
-                        className={`transition-colors ${index % 2 === 0 ? "bg-white" : "bg-gray-100"} hover:bg-[#f2f8fe]`}
-                      >
-                        <td className="px-4 py-3 text-left">
-                          <div className="font-semibold text-gray-900">{service.name}</div>
-                          {service.description && <div className="text-xs text-gray-500 line-clamp-1">{service.description}</div>}
-                        </td>
-                        <td className="px-4 py-3 text-center text-gray-700">{service.unitName || "-"}</td>
-                        <td className="px-4 py-3 text-right font-bold text-[hsl(var(--primary))]">{formatMoney(service.unitPrice)}</td>
-                        <td className="px-4 py-3 text-center">
-                          <div className="flex gap-2 justify-center">
-                            <Button
-                              variant="secondary"
-                              className="h-8 px-3 text-xs bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]"
-                              onClick={() => setDetailModal({ open: true, service })}
-                            >
-                              Xem
-                            </Button>
-                            <Button
-                              variant="primary"
-                              className="h-8 px-3 text-xs"
-                              onClick={() => {
-                                setServiceId(service.id);
-                                setOrderModalOpen(true);
-                              }}
-                            >
-                              Chọn
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </TBody>
-                </Table>
-              )}
-            </div>
-
-            <div className="lg:hidden p-4 space-y-3">
-              {servicesLoading ? (
-                <div className="space-y-3">
-                  {[1, 2, 3, 4].map((i) => (
-                    <div key={i} className="h-24 bg-gray-100 rounded-2xl animate-pulse" />
-                  ))}
-                </div>
-              ) : filteredServices.length === 0 ? (
-                <div className="py-12 text-center">
-                  <svg className="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <p className="text-sm text-gray-500 font-medium">{searchQuery ? "Không tìm thấy dịch vụ phù hợp" : "Không có dịch vụ"}</p>
-                </div>
-              ) : (
-                filteredServices.map((service: Service) => (
+          <CardBody className="p-4 lg:p-6">
+            {servicesLoading ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                {[1, 2, 3, 4, 5, 6].map((i) => (
+                  <div key={i} className="h-48 bg-gray-100 rounded-2xl animate-pulse" />
+                ))}
+              </div>
+            ) : filteredServices.length === 0 ? (
+              <div className="p-12 text-center">
+                <svg className="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <p className="text-sm text-gray-500 font-medium">{searchQuery ? "Không tìm thấy dịch vụ phù hợp" : "Không có dịch vụ"}</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                {filteredServices.map((service: Service) => (
                   <div
                     key={service.id}
-                    className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4 transition-colors hover:bg-[#f2f8fe]"
+                    className="rounded-2xl border border-gray-200 bg-white shadow-sm p-5 transition-all hover:shadow-md hover:border-[hsl(var(--primary))]/30 hover:bg-[#f2f8fe]"
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <h3 className="text-base font-bold text-gray-900 truncate">{service.name}</h3>
-                        {service.description && <p className="text-xs text-gray-500 line-clamp-2 mt-1">{service.description}</p>}
+                    <div className="flex items-start justify-between gap-3 mb-3">
+                      <div className="min-w-0 flex-1">
+                        <h3 className="text-lg font-bold text-gray-900 truncate">{service.name}</h3>
+                        {service.description && (
+                          <p className="text-xs text-gray-500 line-clamp-2 mt-1.5">{service.description}</p>
+                        )}
                       </div>
-                      <div className="text-right flex-shrink-0">
-                        <div className="text-base font-bold text-[hsl(var(--primary))]">{formatMoney(service.unitPrice)}</div>
-                        <div className="text-xs text-gray-500">/{service.unitName}</div>
+                      <Badge tone={service.isActive ? "info" : "muted"} className="rounded-full flex-shrink-0">
+                        {service.isActive ? "Hoạt động" : "Ngừng"}
+                      </Badge>
+                    </div>
+
+                    <div className="flex items-center justify-between mb-4 pb-4 border-b border-gray-100">
+                      <div>
+                        <div className="text-xs text-gray-500 mb-1">Đơn giá</div>
+                        <div className="text-xl font-bold text-[hsl(var(--primary))]">{formatMoney(service.unitPrice)}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-xs text-gray-500 mb-1">Đơn vị</div>
+                        <div className="text-sm font-semibold text-gray-700">{service.unitName || "-"}</div>
                       </div>
                     </div>
 
-                    <div className="mt-3 flex items-center justify-between">
-                      <Badge tone={service.isActive ? "info" : "muted"} className="rounded-full">
-                        {service.isActive ? "Đang hoạt động" : "Ngừng"}
-                      </Badge>
-                      <div className="grid grid-cols-2 gap-2">
-                        <Button
-                          variant="secondary"
-                          className="h-9 px-3 text-sm bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]"
-                          onClick={() => setDetailModal({ open: true, service })}
-                        >
-                          Xem
-                        </Button>
-                        <Button
-                          variant="primary"
-                          className="h-9 px-3 text-sm"
-                          onClick={() => {
-                            setServiceId(service.id);
-                            setOrderModalOpen(true);
-                          }}
-                        >
-                          Chọn
-                        </Button>
-                      </div>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="secondary"
+                        className="flex-1 h-9 text-sm bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]"
+                        onClick={() => setDetailModal({ open: true, service })}
+                      >
+                        Xem
+                      </Button>
+                      <Button
+                        variant="primary"
+                        className="flex-1 h-9 text-sm"
+                        onClick={() => {
+                          setServiceId(service.id);
+                          setOrderModalOpen(true);
+                        }}
+                      >
+                        Chọn
+                      </Button>
                     </div>
                   </div>
-                ))
-              )}
-            </div>
+                ))}
+              </div>
+            )}
 
             {!servicesLoading && filteredServices.length >= pageSize && (
-              <div className="bg-gradient-to-r from-gray-50 to-[hsl(var(--page-bg))] px-6 py-6 border-t border-gray-200/50">
+              <div className="bg-gradient-to-r from-gray-50 to-[hsl(var(--page-bg))] px-6 py-6 border-t border-gray-200/50 mt-4">
                 <div className="flex flex-col sm:flex-row items-center justify-between gap-6">
                   <div className="text-center sm:text-left">
                     <div className="text-sm text-gray-600 mb-1">Trang hiện tại</div>
@@ -1191,12 +1092,12 @@ export default function RequestServicePage() {
                   <div className="bg-[hsl(var(--page-bg))]/40 border-b border-gray-200 px-4 py-3">
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
-                        <div className="text-sm font-bold text-gray-900">Bước 3: Gán nhân viên</div>
+                        <div className="text-sm font-bold text-gray-900">Bước 4: Gán nhân viên</div>
                         <div className="text-xs text-gray-500">Chọn nhân viên sẽ thực hiện dịch vụ</div>
                       </div>
-                      {step2Completed && (
+                      {step3Completed && (
                         <Badge tone="success" className="rounded-full">
-                          ✓ Bước 2 hoàn thành
+                          ✓ Bước 3 hoàn thành
                         </Badge>
                       )}
                     </div>
@@ -1256,8 +1157,8 @@ export default function RequestServicePage() {
                     type="button"
                     variant="secondary"
                     className="flex-1 bg-white text-gray-700 border border-gray-300 hover:bg-gray-50"
-                    onClick={() => setCurrentStep(2)}
-                    disabled={submittingStep === 3}
+                    onClick={() => setCurrentStep(3)}
+                    disabled={submittingStep === 4}
                   >
                     ← Quay lại
                   </Button>
@@ -1273,7 +1174,7 @@ export default function RequestServicePage() {
               </form>
             )}
 
-            {/* Step 4: Confirm */}
+            {/* Step 4: Finish */}
             {currentStep === 4 && (
               <div>
                 <div className="bg-white/80 backdrop-blur-sm border border-gray-200 rounded-2xl overflow-hidden">
@@ -1332,47 +1233,53 @@ export default function RequestServicePage() {
         size="lg"
       >
         {detailModal.service && (
-          <div className="space-y-4">
-            <div className="bg-white/80 backdrop-blur-sm border border-gray-200 rounded-2xl overflow-hidden">
-              <div className="bg-[hsl(var(--page-bg))]/40 border-b border-gray-200 px-4 py-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <h3 className="text-lg sm:text-xl font-bold text-gray-900 truncate">{detailModal.service.name}</h3>
-                    {detailModal.service.code && (
-                      <p className="text-xs text-gray-500 mt-1">Mã dịch vụ: #{detailModal.service.code}</p>
-                    )}
-                  </div>
-                  <Badge tone={detailModal.service.isActive ? "info" : "muted"} className="rounded-full">
-                    {detailModal.service.isActive ? "Đang hoạt động" : "Ngừng"}
-                  </Badge>
-                </div>
-              </div>
-
-              <div className="p-4 space-y-4">
+          <div className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden p-4 space-y-4">
+                {/* Đơn giá + Số lượng */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div className="rounded-xl bg-gray-50 border border-gray-200 px-3 py-2">
-                    <div className="text-xs text-gray-500">Đơn giá</div>
-                    <div className="text-lg font-bold text-[hsl(var(--primary))]">{formatMoney(detailModal.service.unitPrice)}</div>
-                    <div className="text-xs text-gray-500">/{detailModal.service.unitName}</div>
-                  </div>
-
-                  <div className="rounded-xl bg-gray-50 border border-gray-200 px-3 py-2">
-                    <div className="text-xs text-gray-500">Đơn vị</div>
-                    <div className="text-sm font-semibold text-gray-900">{detailModal.service.unitName || "-"}</div>
-                    <div className="text-xs text-gray-500">&nbsp;</div>
-                  </div>
-                </div>
-
-                {detailModal.service.description && (
-                  <div>
-                    <div className="text-sm font-bold text-gray-900 mb-2">Mô tả</div>
-                    <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
-                      <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{detailModal.service.description}</p>
+                  <div className="rounded-xl bg-gray-50 border border-gray-200 px-4 py-3 space-y-2">
+                    <div className="text-lg font-bold text-gray-900 truncate">{detailModal.service.name}</div>
+                    <div className="flex items-baseline justify-between gap-3">
+                      <div className="text-xs text-gray-500">Đơn giá</div>
+                      <div className="flex items-baseline gap-2">
+                        <div className="text-xl font-bold text-[hsl(var(--primary))]">{formatMoney(detailModal.service.unitPrice)}</div>
+                        <div className="text-xs text-gray-500">/{detailModal.service.unitName || "-"}</div>
+                      </div>
                     </div>
                   </div>
-                )}
 
-                <div className="flex gap-3 pt-3 border-t border-gray-200">
+                  <div className="rounded-xl bg-gray-50 border border-gray-200 px-4 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-sm font-semibold text-gray-700">Số lượng</div>
+                      <input
+                        type="number"
+                        min={1}
+                        max={99}
+                        value={quantity}
+                        onChange={(e) => setQuantity(Math.max(1, parseInt(e.target.value) || 1))}
+                        className="w-24 px-3 py-2 border border-gray-300 rounded-xl text-sm focus:outline-none bg-white text-right"
+                      />
+                    </div>
+                    <div className="flex items-center justify-between mt-2 pt-2 border-t border-gray-200">
+                      <div className="text-xs text-gray-500">Tạm tính</div>
+                      <div className="text-lg font-bold text-gray-900">{formatMoney(detailModal.service.unitPrice * quantity)}</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Mô tả */}
+                <div>
+                  <div className="text-sm font-bold text-gray-900 mb-2">Mô tả</div>
+                  <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
+                    {detailModal.service.description ? (
+                      <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{detailModal.service.description}</p>
+                    ) : (
+                      <p className="text-sm text-gray-500">Chưa có mô tả cho dịch vụ này.</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex flex-col sm:flex-row gap-3 pt-3 border-t border-gray-200">
                   <Button
                     variant="secondary"
                     className="flex-1 bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]"
@@ -1383,17 +1290,16 @@ export default function RequestServicePage() {
                   <Button
                     variant="primary"
                     className="flex-1"
+                    disabled={!detailModal.service.isActive}
                     onClick={() => {
                       setServiceId(detailModal.service!.id);
                       setDetailModal({ open: false, service: null });
                       setOrderModalOpen(true);
                     }}
                   >
-                    Chọn
+                    Chọn dịch vụ
                   </Button>
                 </div>
-              </div>
-            </div>
           </div>
         )}
       </Modal>

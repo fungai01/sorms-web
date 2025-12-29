@@ -2,10 +2,10 @@
 
 import Link from "next/link";
 import { useAuth } from "@/hooks/useAuth";
-import { useUserBookings, useMyServiceOrders } from "@/hooks/useApi";
+import { useUserBookings, useRoomsByIds } from "@/hooks/useApi";
 import { useEffect, useMemo, useState } from "react";
 import { apiClient } from "@/lib/api-client";
-import type { Booking, ServiceOrder } from "@/lib/types";
+import type { Booking, ServiceOrder, PaymentTransaction } from "@/lib/types";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
@@ -23,7 +23,8 @@ function Skeleton({ className = "h-24" }: { className?: string }) {
 export default function UserDashboardPage() {
   const { user, isLoading: authLoading } = useAuth();
   const { data: bookings, loading: bookingsLoading, refetch: refetchBookings } = useUserBookings();
-  const { data: orders, loading: ordersLoading } = useMyServiceOrders();
+  const [orders, setOrders] = useState<any[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
 
   const [faceRegistered, setFaceRegistered] = useState<boolean | null>(null);
   const [faceLoading, setFaceLoading] = useState(false);
@@ -44,6 +45,8 @@ export default function UserDashboardPage() {
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [payments, setPayments] = useState<PaymentTransaction[]>([]);
+  const [paymentsLoading, setPaymentsLoading] = useState(false);
   const [editForm, setEditForm] = useState({
     checkinDate: "",
     checkinTime: "14:00",
@@ -80,30 +83,74 @@ export default function UserDashboardPage() {
       : (bookings as any).items || (bookings as any).data?.items || (bookings as any).data?.content || [];
   }, [bookings]);
 
+  // Collect unique roomIds from bookings to lookup roomName
+  const roomIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const b of bookingList as any[]) {
+      const rid = Number((b as any).roomId ?? (b as any).room_id);
+      if (Number.isFinite(rid)) ids.add(rid);
+    }
+    return Array.from(ids);
+  }, [bookingList]);
+
+  // Fetch rooms info for these ids
+  const { data: roomsData } = useRoomsByIds(roomIds);
+
+  const roomMap = useMemo(() => {
+    const map = new Map<number, { name?: string; code?: string }>();
+    const rooms: any[] = Array.isArray(roomsData) ? roomsData : [];
+
+    for (const r of rooms) {
+      const rid = Number((r as any).id ?? (r as any).roomId);
+      if (!Number.isFinite(rid)) continue;
+      const name = (r as any).name || (r as any).roomName;
+      const code = (r as any).code || (r as any).roomCode;
+      map.set(rid, {
+        name: name ? String(name) : undefined,
+        code: code ? String(code) : undefined,
+      });
+    }
+
+    return map;
+  }, [roomsData]);
+
+  // Enrich booking with roomName/roomCode from roomMap
+  const enrichedBookings = useMemo(() => {
+    return (bookingList as any[]).map((b) => {
+      const rid = Number((b as any).roomId ?? (b as any).room_id);
+      const mapped = Number.isFinite(rid) ? roomMap.get(rid) : undefined;
+      return {
+        ...b,
+        roomName: (b as any).roomName || (b as any).room_name || mapped?.name,
+        roomCode: (b as any).roomCode || (b as any).room_code || mapped?.code,
+      };
+    });
+  }, [bookingList, roomMap]);
+
   const activeBookings = useMemo(() => {
-    const filtered = bookingList.filter((b: Booking) => b.status === "CHECKED_IN" || b.status === "APPROVED");
+    const filtered = enrichedBookings.filter((b: Booking) => b.status === "CHECKED_IN" || b.status === "APPROVED");
     // Sắp xếp theo checkinDate giảm dần để lấy mới nhất trước
     return filtered.sort((a: Booking, b: Booking) => {
       const dateA = new Date(a.checkinDate || 0).getTime();
       const dateB = new Date(b.checkinDate || 0).getTime();
       return dateB - dateA; // Giảm dần (mới nhất trước)
     });
-  }, [bookingList]);
+  }, [enrichedBookings]);
 
   const pendingBookings = useMemo(() => {
-    const filtered = bookingList.filter((b: Booking) => b.status === "PENDING");
+    const filtered = enrichedBookings.filter((b: Booking) => b.status === "PENDING");
     // Sắp xếp theo checkinDate giảm dần để lấy mới nhất trước
     return filtered.sort((a: Booking, b: Booking) => {
       const dateA = new Date(a.checkinDate || 0).getTime();
       const dateB = new Date(b.checkinDate || 0).getTime();
       return dateB - dateA; // Giảm dần (mới nhất trước)
     });
-  }, [bookingList]);
+  }, [enrichedBookings]);
 
-  // Parse orders
+  // Parse orders - orders is now an array from fetchOrders
   const orderList = useMemo(() => {
     if (!orders) return [];
-    return Array.isArray(orders) ? orders : (orders as any).items || (orders as any).data?.items || [];
+    return Array.isArray(orders) ? orders : [];
   }, [orders]);
 
   const pendingOrders = useMemo(() => 
@@ -111,7 +158,18 @@ export default function UserDashboardPage() {
     [orderList]
   );
 
-  const userName = user?.name || (user?.firstName && user?.lastName ? `${user.firstName} ${user.lastName}` : null) || user?.email || "Người dùng";
+  const pendingPaymentOrders = useMemo(() => 
+    orderList.filter((o: ServiceOrder) => (o.status as string) === "PENDING_PAYMENT"), 
+    [orderList]
+  );
+
+  const userName = 
+    (user?.firstName && user?.lastName ? `${user.firstName} ${user.lastName}`.trim() : null) ||
+    (user?.firstName ? user.firstName.trim() : null) ||
+    (user?.lastName ? user.lastName.trim() : null) ||
+    (user?.username ? user.username.trim() : null) ||
+    (user?.name && !user.name.includes('@') && user.name.trim() ? user.name.trim() : null) ||
+    "Người dùng";
   const isLoading = authLoading || bookingsLoading || ordersLoading;
 
   useEffect(() => {
@@ -128,6 +186,68 @@ export default function UserDashboardPage() {
       }
     };
     checkFace();
+  }, [user]);
+
+  // Fetch orders for all bookings (similar to user/orders page)
+  useEffect(() => {
+    const fetchOrders = async () => {
+      if (bookingList.length === 0) {
+        setOrdersLoading(false);
+        return;
+      }
+      
+      try {
+        setOrdersLoading(true);
+        const allOrders: any[] = [];
+        for (const booking of bookingList) {
+          try {
+            const res = await apiClient.getMyOrders(booking.id);
+            if (res.success && Array.isArray(res.data)) {
+              allOrders.push(...res.data);
+            }
+          } catch (err) {
+            console.error(`Error fetching orders for booking ${booking.id}:`, err);
+          }
+        }
+        setOrders(allOrders);
+      } catch (err) {
+        console.error("Error fetching orders:", err);
+        setOrders([]);
+      } finally {
+        setOrdersLoading(false);
+      }
+    };
+    
+    if (bookingList.length > 0) {
+      fetchOrders();
+    } else {
+      setOrders([]);
+    }
+  }, [bookingList]);
+
+  // Fetch payments
+  useEffect(() => {
+    const fetchPayments = async () => {
+      try {
+        setPaymentsLoading(true);
+        const response = await apiClient.getPaymentTransactions();
+        
+        if (response.success && response.data) {
+          const allPayments = Array.isArray(response.data) 
+            ? response.data 
+            : (response.data as any).items || (response.data as any).data?.items || [];
+          setPayments(allPayments);
+        }
+      } catch (err) {
+        console.error("Error fetching payments:", err);
+      } finally {
+        setPaymentsLoading(false);
+      }
+    };
+
+    if (user) {
+      fetchPayments();
+    }
   }, [user]);
 
   const getStatusBadgeTone = (status: string): "checked-in" | "approved" | "pending" | "checked-out" | "cancelled" => {
@@ -151,6 +271,25 @@ export default function UserDashboardPage() {
       COMPLETED: "Hoàn thành",
     };
     return statusMap[status] || status;
+  };
+
+  // Resolve room label: same logic as history page
+  const getRoomLabel = (booking: Booking) => {
+    const b: any = booking as any;
+
+    if (b.roomName) return b.roomName;
+    if (b.room_name) return b.room_name;
+    if (b.room?.name) return b.room.name;
+    if (b.bookingData?.roomName) return b.bookingData.roomName;
+
+    if (b.roomCode) return b.roomCode;
+    if (b.room_code) return b.room_code;
+    if (b.roomNumber) return b.roomNumber;
+    if (b.room_number) return b.room_number;
+
+    const rid = Number(b.roomId ?? b.room_id);
+    if (Number.isFinite(rid)) return `Phòng ${rid}`;
+    return "Phòng ?";
   };
 
   const formatDate = (date: string) => {
@@ -265,6 +404,52 @@ export default function UserDashboardPage() {
     const diff = Math.ceil((checkout.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
     return diff;
   };
+
+  // Tính toán payment info cho một booking
+  const getPaymentInfoForBooking = (bookingId: number) => {
+    // Lấy service orders cho booking này
+    const bookingOrders = orderList.filter((o: ServiceOrder) => o.booking_id === bookingId);
+    
+    // Lọc active orders (không CANCELLED)
+    const activeOrders = bookingOrders.filter(
+      (o: ServiceOrder) => o.status !== "CANCELLED"
+    );
+
+    // Tính tổng tiền cần thanh toán
+    const requiredAmount = activeOrders.reduce(
+      (sum: number, o: ServiceOrder) => sum + (o.total_amount || 0),
+      0
+    );
+
+    // Lấy payments liên quan
+    const orderIds = activeOrders.map((o: ServiceOrder) => o.id);
+    const relatedPayments = payments.filter((p: PaymentTransaction) =>
+      orderIds.includes(p.service_order_id)
+    );
+
+    // Tính tổng tiền đã thanh toán thành công
+    const paidAmount = relatedPayments
+      .filter((p: PaymentTransaction) => p.status === "SUCCEEDED")
+      .reduce((sum: number, p: PaymentTransaction) => sum + (p.amount || 0), 0);
+
+    // Tính số tiền còn thiếu
+    const remainingAmount = Math.max(0, requiredAmount - paidAmount);
+
+    return {
+      requiredAmount,
+      paidAmount,
+      remainingAmount,
+      isFullyPaid: remainingAmount === 0 && paidAmount >= requiredAmount,
+    };
+  };
+
+  // Tính tổng số tiền còn thiếu cho tất cả active bookings
+  const totalRemainingAmount = useMemo(() => {
+    return activeBookings.reduce((total: number, booking: Booking) => {
+      const paymentInfo = getPaymentInfoForBooking(booking.id);
+      return total + paymentInfo.remainingAmount;
+    }, 0);
+  }, [activeBookings, orderList, payments]);
 
   const handleShowQR = (booking: Booking) => {
     const qrUrl = (booking as any).qrImageUrl || null;
@@ -407,14 +592,12 @@ export default function UserDashboardPage() {
       <div className="max-w-7xl mx-auto space-y-6">
         {/* Header */}
         <div className="bg-white shadow-sm border border-gray-200 rounded-2xl overflow-hidden">
-          <div className="border-b border-gray-200/50 px-6 py-4">
+          <div className="px-6 py-5">
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-              <div>
-                <p className="text-sm text-gray-500">Chào mừng trở lại,</p>
-                <h1 className="text-3xl font-bold text-gray-900 leading-tight">{userName}</h1>
-                <p className="mt-1 text-sm text-gray-500">
-                  Quản lý đặt phòng, dịch vụ và hóa đơn của bạn
-                </p>
+              <div className="space-y-1">
+                <p className="text-sm text-gray-500">Chào mừng bạn đến với hệ thống SORMS,</p>
+                <h1 className="text-2xl font-bold text-gray-900">{userName}</h1>
+              
               </div>
               <div className="flex gap-3">
                 <Link href="/user/rooms">
@@ -430,22 +613,18 @@ export default function UserDashboardPage() {
 
 
         {/* Main Content */}
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-          {/* Left Column - Bookings */}
-          <div className="xl:col-span-2 space-y-6">
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-stretch">
+          {/* Column 1 - Phòng hiện tại */}
+          <div className="flex flex-col space-y-6">
             {/* Active Bookings */}
-            <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-md rounded-2xl overflow-hidden">
+            <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-md rounded-2xl overflow-hidden flex-1">
               <CardHeader className="bg-[hsl(var(--page-bg))]/40 border-b border-gray-200 !px-6 py-3">
                 <div className="flex items-center justify-between">
                   <div>
                     <h2 className="text-xl font-bold text-gray-900">
                       {activeBookings.length > 0 ? "Phòng hiện tại" : "Chưa có phòng đặt"}
                     </h2>
-                    <p className="text-sm text-gray-500">
-                      {activeBookings.length > 0
-                        ? "Các phòng bạn đang ở hoặc đã được duyệt"
-                        : "Bạn chưa có phòng nào đang được đặt"}
-                    </p>
+                    
                   </div>
                   {activeBookings.length > 0 && (
                     <Link href="/user/history" className="text-sm text-[hsl(var(--primary))] hover:underline font-medium">
@@ -464,59 +643,89 @@ export default function UserDashboardPage() {
                   <div className="space-y-3">
                     {activeBookings.slice(0, 2).map((b: Booking) => {
                       const daysLeft = getDaysRemaining(b.checkoutDate);
-                      // OLD: chỉ cho check-out khi còn <= 2 ngày
-                      // const showCheckout = b.status === "CHECKED_IN" && daysLeft <= 2;
-                      // NEW: cho phép check-out bất cứ lúc nào khi đang CHECKED_IN
                       const showCheckout = b.status === "CHECKED_IN";
+                      const paymentInfo = getPaymentInfoForBooking(b.id);
+                      const hasPendingPaymentOrder = pendingPaymentOrders.some(
+                        (o: ServiceOrder) => o.booking_id === b.id
+                      );
+
                       return (
                         <div
                           key={b.id}
                           className="border border-gray-200 rounded-xl p-4 hover:border-gray-300 transition-colors hover:bg-[#f2f8fe]"
                         >
-                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                            <div className="space-y-1">
+                          {/* Dòng 1: Tên phòng và trạng thái */}
+                          <div className="flex justify-between items-center mb-2">
+                            <span className="font-semibold text-gray-900 text-base">
+                              Phòng: {getRoomLabel(b)}
+                            </span>
+                            <Badge tone={getStatusBadgeTone(b.status)}>
+                              {getStatusText(b.status)}
+                            </Badge>
+                          </div>
+
+                          {/* Dòng 2: Ngày check-in/out và số ngày còn lại */}
+                          <div className="flex justify-between items-center text-sm mb-3">
+                            <div className="text-gray-600">
+                              {formatDate(b.checkinDate)} - {formatDate(b.checkoutDate)}
+                            </div>
+                            {b.status === "CHECKED_IN" && daysLeft > 0 && (
+                              <span className="text-gray-600">
+                                Còn <span className="font-semibold text-[hsl(var(--primary))]">{daysLeft} ngày</span>
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Các thông báo thanh toán */}
+                          {hasPendingPaymentOrder && (
+                            <div className="mb-3 p-2 bg-amber-50 border border-amber-200 rounded-lg">
                               <div className="flex items-center gap-2">
-                                <span className="font-semibold text-gray-900">
-                                  {b.roomCode || `Phòng #${b.roomId}`}
+                                <svg className="w-4 h-4 text-amber-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                </svg>
+                                <span className="text-xs text-amber-700">
+                                  Có đơn hàng đang chờ thanh toán
                                 </span>
-                                <Badge tone={getStatusBadgeTone(b.status)}>
-                                  {getStatusText(b.status)}
-                                </Badge>
-                              </div>
-                              <div className="text-sm text-gray-500">
-                                {formatDate(b.checkinDate)} - {formatDate(b.checkoutDate)}
                               </div>
                             </div>
-                            <div className="flex items-center gap-2">
-                              {b.status === "CHECKED_IN" && daysLeft > 0 && (
-                                <span className="text-sm text-gray-500">
-                                  Còn <span className="font-semibold text-[hsl(var(--primary))]">{daysLeft} ngày</span>
+                          )}
+                          
+                          {paymentInfo.remainingAmount > 0 && (
+                            <div className="mb-3 p-2 bg-red-50 border border-red-200 rounded-lg">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs text-red-700">Số tiền còn thiếu:</span>
+                                <span className="text-sm font-semibold text-red-700">
+                                  {paymentInfo.remainingAmount.toLocaleString("vi-VN")} đ
                                 </span>
-                              )}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Dòng 3: Các nút tác vụ */}
+                          <div className="flex gap-2 pt-1">
+                            <Button 
+                              variant="secondary" 
+                              className="h-9 flex-1 text-sm bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]"
+                              onClick={() => handleShowQR(b)}
+                            >
+                              Xem QR
+                            </Button>
+                            {showCheckout && (
                               <Button 
-                                variant="secondary" 
-                                className="h-9 px-4 text-sm bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]"
-                                onClick={() => handleShowQR(b)}
+                                variant="primary" 
+                                className="h-9 flex-1 text-sm"
+                                onClick={() => handleCheckout(b.id)}
                               >
-                                Xem QR
+                                Check-out
                               </Button>
-                              {showCheckout && (
-                                <Button 
-                                  variant="primary" 
-                                  className="h-9 px-4 text-sm"
-                                  onClick={() => handleCheckout(b.id)}
-                                >
-                                  Check-out
-                                </Button>
-                              )}
-                            </div>
+                            )}
                           </div>
                         </div>
                       );
                     })}
                   </div>
                 ) : (
-                  <div className="py-8 text-center">
+                  <div className="flex flex-col items-center justify-center py-16 text-center min-h-[200px]">
                     <p className="text-gray-500 mb-4">Bạn chưa có phòng nào đang được đặt</p>
                     <Link href="/user/rooms">
                       <Button variant="primary">Đặt phòng ngay</Button>
@@ -539,7 +748,7 @@ export default function UserDashboardPage() {
                       <div key={b.id} className="border border-orange-200 bg-orange-50/50 rounded-xl p-4">
                         <div className="flex items-center justify-between mb-3">
                           <div>
-                            <span className="font-medium text-gray-900">{b.roomCode || `Phòng #${b.roomId}`}</span>
+                            <span className="font-medium text-gray-900">Phòng: {getRoomLabel(b)}</span>
                             <p className="text-sm text-gray-500 mt-1">
                               {formatDate(b.checkinDate)} - {formatDate(b.checkoutDate)}
                             </p>
@@ -575,12 +784,145 @@ export default function UserDashboardPage() {
                 </CardBody>
               </Card>
             )}
+
           </div>
 
-          {/* Right Column - Summary */}
-          <div className="space-y-6">
+          {/* Column 2 - Đơn hàng chờ thanh toán */}
+          <div className="flex flex-col space-y-6">
+            {/* PENDING_PAYMENT Orders */}
+            {pendingPaymentOrders.length > 0 ? (
+              <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-md rounded-2xl overflow-hidden flex-1">
+                <CardHeader className="bg-[hsl(var(--page-bg))]/40 border-b border-gray-200 !px-6 py-3">
+                  <div>
+                    <h2 className="text-xl font-bold text-gray-900">Đơn hàng chờ thanh toán</h2>
+                  </div>
+                </CardHeader>
+                <CardBody className="p-6">
+                  <div className="space-y-4">
+                    {pendingPaymentOrders.slice(0, 3).map((order: ServiceOrder) => {
+                      // Tìm booking liên quan
+                      const relatedBooking = activeBookings.find((b: Booking) => b.id === order.booking_id) 
+                        || bookingList.find((b: Booking) => b.id === order.booking_id);
+                      const orderData = order as any;
+                      const orderAmount = parseFloat(orderData.totalAmount || orderData.total_amount || 0) || 0;
+                      const formatMoney = (amount: number) => {
+                        return amount.toLocaleString("vi-VN") + " đ";
+                      };
+                      return (
+                        <div key={order.id} className="border border-gray-200 bg-white rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
+                          <div className="space-y-3">
+                            <div className="flex items-center justify-between">
+                              <span className="text-base font-bold text-gray-900">
+                                {order.code || order.id}
+                              </span>
+                              <Badge tone="warning" className="rounded-full text-xs">Chờ thanh toán</Badge>
+                            </div>
+                            {relatedBooking && (
+                              <div className="flex items-center gap-2">
+                                <svg className="w-4 h-4 text-gray-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+                                </svg>
+                                <span className="text-sm text-gray-600 truncate">
+                                  Phòng: <span className="font-semibold text-gray-900">{getRoomLabel(relatedBooking)}</span>
+                                </span>
+                              </div>
+                            )}
+                            {order.created_at && (
+                              <p className="text-xs text-gray-500">
+                                Ngày tạo: {formatDate(order.created_at)}
+                              </p>
+                            )}
+                            <div className="p-3 bg-gray-50 rounded-lg">
+                              <div className="flex items-center justify-between">
+                                <span className="text-sm font-medium text-gray-700">Tổng tiền:</span>
+                                <span className="text-lg font-bold text-gray-900">
+                                  {formatMoney(orderAmount)}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 pt-3 mt-3 border-t border-gray-200">
+                            {relatedBooking ? (
+                              <>
+                                <Button 
+                                  variant="primary" 
+                                  className="flex-1 h-9 text-sm font-semibold"
+                                  onClick={() => handleCheckout(relatedBooking.id)}
+                                >
+                                
+                                  Thanh toán
+                                </Button>
+                                <Link href="/user/orders" className="flex-1">
+                                  <Button 
+                                    variant="secondary" 
+                                    className="w-full h-9 text-sm bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]"
+                                  >
+                                    
+                                    Xem chi tiết
+                                  </Button>
+                                </Link>
+                              </>
+                            ) : (
+                              <>
+                                <Link href={`/user/checkout?orderId=${order.id}`} className="flex-1">
+                                  <Button 
+                                    variant="primary" 
+                                    className="w-full h-9 text-sm font-semibold"
+                                  >
+                                    Thanh toán
+                                  </Button>
+                                </Link>
+                                <Link href="/user/orders" className="flex-1">
+                                  <Button 
+                                    variant="secondary" 
+                                    className="w-full h-9 text-sm bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]"
+                                  >
+                                    
+                                    Xem chi tiết
+                                  </Button>
+                                </Link>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {pendingPaymentOrders.length > 3 && (
+                      <div className="text-center pt-2">
+                        <Link href="/user/orders">
+                          <Button variant="secondary" className="text-sm px-6">
+                            Xem tất cả {pendingPaymentOrders.length} đơn hàng
+                            <svg className="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                            </svg>
+                          </Button>
+                        </Link>
+                      </div>
+                    )}
+                  </div>
+                </CardBody>
+              </Card>
+            ) : (
+              <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-md rounded-2xl overflow-hidden flex-1">
+                <CardHeader className="bg-[hsl(var(--page-bg))]/40 border-b border-gray-200 !px-6 py-3">
+                  <div>
+                    <h2 className="text-xl font-bold text-gray-900">Đơn hàng chờ thanh toán</h2>
+                    <p className="text-sm text-gray-500 mt-1">Không có đơn hàng nào</p>
+                  </div>
+                </CardHeader>
+                <CardBody className="p-6">
+                  <div className="py-8 text-center">
+                    <p className="text-gray-500">Chưa có đơn hàng nào đang chờ thanh toán</p>
+                  </div>
+                </CardBody>
+              </Card>
+            )}
+          </div>
+
+          {/* Column 3 - Tóm tắt */}
+          <div className="flex flex-col space-y-6">
             {/* Summary */}
-            <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-md rounded-2xl overflow-hidden">
+            <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-md rounded-2xl overflow-hidden flex-1">
               <CardHeader className="bg-[hsl(var(--page-bg))]/40 border-b border-gray-200 !px-6 py-3">
                 <div className="flex items-center justify-between">
                   <h3 className="text-xl font-bold text-gray-900">Tóm tắt</h3>
@@ -589,26 +931,48 @@ export default function UserDashboardPage() {
               </CardHeader>
               <CardBody className="p-6">
                 <div className="space-y-3 text-sm">
-                  <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+                  <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-200">
                     <span className="text-gray-600">Phòng đang ở</span>
                     <span className="font-bold text-gray-900">{activeBookings.length}</span>
                   </div>
-                  <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+                  <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-200">
                     <span className="text-gray-600">Chờ duyệt</span>
                     <span className="font-bold text-gray-900">{pendingBookings.length}</span>
                   </div>
-                  <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+                  <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-200">
                     <span className="text-gray-600">Đơn dịch vụ</span>
                     <span className="font-bold text-gray-900">{pendingOrders.length}</span>
                   </div>
+                  {pendingPaymentOrders.length > 0 && (
+                    <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-200">
+                      <span className="text-gray-600 font-medium">Đơn chờ thanh toán</span>
+                      <span className="font-bold text-gray-900">{pendingPaymentOrders.length}</span>
+                    </div>
+                  )}
+                  {totalRemainingAmount > 0 && (
+                    <div className="flex items-center justify-between p-3 bg-red-50 rounded-xl border border-red-200">
+                      <span className="text-red-700 font-medium">Số tiền còn thiếu</span>
+                      <span className="font-bold text-red-700">
+                        {totalRemainingAmount.toLocaleString("vi-VN")} đ
+                      </span>
+                    </div>
+                  )}
                   <div 
-                    className="flex items-center justify-between p-3 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition-colors"
+                    className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-200 cursor-pointer hover:bg-gray-100 transition-colors"
                     onClick={handleOpenFaceRegistration}
                   >
                     <span className="text-gray-600">Xác thực khuôn mặt</span>
-                    <span className="font-bold text-gray-900">
-                      {faceLoading ? "-" : faceRegistered ? "Đã đăng ký" : "Chưa"}
-                    </span>
+                    {faceLoading ? (
+                      <span className="font-bold text-gray-900">-</span>
+                    ) : faceRegistered ? (
+                      <span className="font-bold bg-green-100 text-green-800 border border-green-200 px-3 py-1 rounded-full text-sm">
+                        Đã đăng ký
+                      </span>
+                    ) : (
+                      <span className="font-bold bg-red-100 text-red-800 border border-red-200 px-3 py-1 rounded-full text-sm">
+                        Chưa đăng ký
+                      </span>
+                    )}
                   </div>
                 </div>
               </CardBody>
@@ -629,7 +993,7 @@ export default function UserDashboardPage() {
           {qrModal.booking && (
             <div className="mb-4">
               <p className="text-lg font-semibold text-gray-900">
-                {qrModal.booking.roomCode || `Phòng #${qrModal.booking.roomId}`}
+                Phòng: {getRoomLabel(qrModal.booking)}
               </p>
               <p className="text-sm text-gray-500">
                 {formatDate(qrModal.booking.checkinDate)} - {formatDate(qrModal.booking.checkoutDate)}
@@ -836,7 +1200,7 @@ export default function UserDashboardPage() {
               <div className="p-4 bg-gray-50 rounded-xl">
                 <p className="text-sm text-gray-600 mb-1">Mã phòng</p>
                 <p className="font-semibold text-gray-900">
-                  {detailModal.booking.roomCode || `Phòng #${detailModal.booking.roomId}`}
+                  Phòng: {getRoomLabel(detailModal.booking)}
                 </p>
               </div>
               <div className="p-4 bg-gray-50 rounded-xl">
@@ -1002,7 +1366,7 @@ export default function UserDashboardPage() {
             )}
             <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
               <p className="text-sm text-amber-800">
-                Bạn có chắc chắn muốn hủy đặt phòng <strong>{cancelModal.booking.roomCode || `Phòng #${cancelModal.booking.roomId}`}</strong> không?
+                Bạn có chắc chắn muốn hủy đặt phòng <strong>Phòng: {getRoomLabel(cancelModal.booking)}</strong> không?
               </p>
               <p className="text-xs text-amber-700 mt-2">
                 Chỉ có thể hủy các booking ở trạng thái <strong>Chờ duyệt</strong>.

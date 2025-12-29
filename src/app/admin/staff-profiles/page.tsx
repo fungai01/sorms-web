@@ -72,6 +72,13 @@ export default function StaffProfilesPage() {
   const [role, setRole] = useState<StaffRole>("STAFF");
   const [isSaving, setIsSaving] = useState(false);
 
+  // Email search modal states
+  const [emailSearchOpen, setEmailSearchOpen] = useState(false);
+  const [emailSearchQuery, setEmailSearchQuery] = useState("");
+  const [emailSearchResults, setEmailSearchResults] = useState<any[]>([]);
+  const [emailSearchLoading, setEmailSearchLoading] = useState(false);
+  const emailSearchDebounceRef = useRef<NodeJS.Timeout | null>(null);
+
   useEffect(() => {
     if (!flash) return;
     const t = setTimeout(() => setFlash(null), 3000);
@@ -137,7 +144,7 @@ export default function StaffProfilesPage() {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
   };
 
-  const resolveAccountIdByEmail = async (email: string): Promise<string | null> => {
+  const resolveAccountIdByEmail = async (email: string): Promise<{ accountId: string; user?: any } | null> => {
     const q = email.trim();
     if (!q) return null;
 
@@ -161,13 +168,81 @@ export default function StaffProfilesPage() {
     const found = list.find((u: any) => String(u.email || "").toLowerCase() === q.toLowerCase());
     const user = found || list[0];
     const id = user?.id;
-    return id ? String(id) : null;
+    return id ? { accountId: String(id), user } : null;
+  };
+
+  const searchUsersByEmail = async (keyword: string): Promise<any[]> => {
+    const q = keyword.trim();
+    if (!q) return [];
+
+    const params = new URLSearchParams();
+    params.set("q", q);
+    params.set("size", "20");
+
+    try {
+      const res = await fetch(`/api/system/users?${params.toString()}`, {
+        cache: "no-store",
+        credentials: "include",
+      });
+
+      if (!res.ok) {
+        console.error("Failed to search users:", await res.text().catch(() => ""));
+        return [];
+      }
+
+      const data = await res.json().catch(() => ({} as any));
+      const list = Array.isArray((data as any)?.items) ? (data as any).items : Array.isArray(data) ? data : [];
+      return list;
+    } catch (error) {
+      console.error("Error searching users:", error);
+      return [];
+    }
+  };
+
+  // Debounced search effect
+  useEffect(() => {
+    if (!emailSearchOpen) {
+      setEmailSearchResults([]);
+      return;
+    }
+
+    if (emailSearchDebounceRef.current) clearTimeout(emailSearchDebounceRef.current);
+
+    const query = emailSearchQuery.trim();
+    if (!query) {
+      setEmailSearchResults([]);
+      setEmailSearchLoading(false);
+      return;
+    }
+
+    setEmailSearchLoading(true);
+    emailSearchDebounceRef.current = setTimeout(async () => {
+      const results = await searchUsersByEmail(query);
+      setEmailSearchResults(results);
+      setEmailSearchLoading(false);
+    }, 500);
+
+    return () => {
+      if (emailSearchDebounceRef.current) clearTimeout(emailSearchDebounceRef.current);
+    };
+  }, [emailSearchQuery, emailSearchOpen]);
+
+  const handleSelectUser = (user: any) => {
+    setEdit({
+      ...edit,
+      workEmail: user.email || "",
+      accountId: user.id ? (typeof user.id === 'number' ? user.id : Number(user.id)) : undefined,
+      workPhone: user.phoneNumber || user.phone_number || edit.workPhone || "",
+    } as any);
+    setEmailSearchOpen(false);
+    setEmailSearchQuery("");
+    setEmailSearchResults([]);
   };
 
   const save = async () => {
     // Required fields
-    if (!edit.employeeId || !edit.department || !edit.position) {
-      setFlash({ type: "error", text: "Vui lòng nhập đủ: Mã nhân viên, Phòng ban, Chức vụ." });
+    if (!edit.employeeId || !edit.hireDate) {
+      setFlash({ type: "error", text: "Vui lòng nhập đủ: Mã nhân viên, Ngày tuyển dụng." });
       return;
     }
 
@@ -194,6 +269,9 @@ export default function StaffProfilesPage() {
 
     try {
       let accountId = ((edit as any).accountId ?? (edit as any).accountID ?? (edit as any).account_id) as any;
+      let resolvedUser: any = null;
+      let workPhoneToUse = edit.workPhone;
+      
       if (!accountId) {
         // auto resolve by email
         if (workEmail) {
@@ -202,7 +280,17 @@ export default function StaffProfilesPage() {
             setFlash({ type: "error", text: "Không tìm thấy tài khoản với email này." });
             return;
           }
-          accountId = resolved;
+          accountId = resolved.accountId;
+          resolvedUser = resolved.user;
+          
+          // Tự động fill workPhone từ user nếu có và chưa có trong form
+          if (resolvedUser && !workPhoneToUse) {
+            const userPhone = resolvedUser.phoneNumber || resolvedUser.phone_number;
+            if (userPhone) {
+              workPhoneToUse = userPhone;
+              setEdit({ ...edit, workPhone: userPhone });
+            }
+          }
         }
       }
 
@@ -212,7 +300,8 @@ export default function StaffProfilesPage() {
       }
       const payload = {
         ...edit,
-        accountId: edit.id ? Number(accountId) : String(accountId), 
+        accountId: edit.id ? Number(accountId) : String(accountId),
+        workPhone: workPhoneToUse,
         role,
       };
 
@@ -615,12 +704,11 @@ export default function StaffProfilesPage() {
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <h3 className="text-base sm:text-lg font-semibold text-gray-900 truncate">{selected.jobTitle || "Nhân sự"}</h3>
+                      <h3 className="text-base sm:text-lg font-semibold text-gray-900 truncate">Nhân viên</h3>
                       {renderStatusBadge(selected.isActive)}
                     </div>
                     <div className="text-sm text-gray-600 truncate">
                       {selected.department || "Chưa có phòng ban"}
-                      {selected.position ? ` • ${selected.position}` : ""}
                     </div>
                   </div>
                 </div>
@@ -636,13 +724,23 @@ export default function StaffProfilesPage() {
                   <div className="font-medium text-gray-900 break-words">{selected.department || "—"}</div>
                 </div>
                 <div className="rounded-lg border border-gray-200 p-3 bg-white">
-                  <div className="text-gray-500 mb-1">Chức vụ</div>
-                  <div className="font-medium text-gray-900 break-words">{selected.position || "—"}</div>
-                </div>
-                <div className="rounded-lg border border-gray-200 p-3 bg-white">
                   <div className="text-gray-500 mb-1">Email công việc</div>
                   <div className="font-medium text-gray-900 break-words">{selected.workEmail || "—"}</div>
                 </div>
+                <div className="rounded-lg border border-gray-200 p-3 bg-white">
+                  <div className="text-gray-500 mb-1">SĐT công việc</div>
+                  <div className="font-medium text-gray-900 break-words">{selected.workPhone || "—"}</div>
+                </div>
+                {selected.hireDate && (
+                  <div className="rounded-lg border border-gray-200 p-3 bg-white">
+                    <div className="text-gray-500 mb-1">Ngày tuyển dụng</div>
+                    <div className="font-medium text-gray-900 break-words">
+                      {typeof selected.hireDate === 'string' 
+                        ? new Date(selected.hireDate).toLocaleDateString('vi-VN')
+                        : selected.hireDate}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -693,7 +791,7 @@ export default function StaffProfilesPage() {
               </div>
               <div className="space-y-1">
                 <label className="text-sm font-medium">
-                  Phòng ban <span className="text-red-500">*</span>
+                  Phòng ban
                 </label>
                 <Input value={edit.department || ""} onChange={(e) => setEdit({ ...edit, department: e.target.value })} />
               </div>
@@ -702,33 +800,44 @@ export default function StaffProfilesPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1">
                 <label className="text-sm font-medium">
-                  Chức vụ <span className="text-red-500">*</span>
-                </label>
-                <Input value={edit.position || ""} onChange={(e) => setEdit({ ...edit, position: e.target.value })} />
-              </div>
-              <div className="space-y-1">
-                <label className="text-sm font-medium">
                   Email <span className="text-red-500">*</span>
                 </label>
-                <Input
-                  value={edit.workEmail || ""}
-                  onChange={(e) => setEdit({ ...edit, workEmail: e.target.value })}
-                  placeholder="VD: nguyenquyen220903@gmail.com"
-                />
+                <div className="flex gap-2">
+                  <Input
+                    value={edit.workEmail || ""}
+                    onChange={(e) => setEdit({ ...edit, workEmail: e.target.value })}
+                    placeholder="VD: nguyenquyen220903@gmail.com"
+                    className="flex-1"
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="h-10 px-4 whitespace-nowrap"
+                    onClick={() => setEmailSearchOpen(true)}
+                  >
+                    Tìm kiếm
+                  </Button>
+                </div>
                 {!edit.id && (
                   <p className="text-xs text-gray-500">Hệ thống sẽ tự tìm accountId theo email khi lưu.</p>
                 )}
               </div>
+              <div className="space-y-1">
+                <label className="text-sm font-medium">
+                  Ngày tuyển dụng <span className="text-red-500">*</span>
+                </label>
+                <Input
+                  type="date"
+                  value={edit.hireDate ? (typeof edit.hireDate === 'string' ? edit.hireDate.split('T')[0] : edit.hireDate) : ""}
+                  onChange={(e) => setEdit({ ...edit, hireDate: e.target.value })}
+                />
+              </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1">
                 <label className="text-sm font-medium">SĐT công việc</label>
                 <Input value={edit.workPhone || ""} onChange={(e) => setEdit({ ...edit, workPhone: e.target.value })} />
-              </div>
-              <div className="space-y-1">
-                <label className="text-sm font-medium">Địa điểm làm việc</label>
-                <Input value={edit.officeLocation || ""} onChange={(e) => setEdit({ ...edit, officeLocation: e.target.value })} />
               </div>
               <div className="space-y-1">
                 <label className="text-sm font-medium">
@@ -765,7 +874,102 @@ export default function StaffProfilesPage() {
             </div>
           </div>
         </Modal>
+
+        {/* Email Search Modal */}
+        <Modal open={emailSearchOpen} onClose={() => {
+          setEmailSearchOpen(false);
+          setEmailSearchQuery("");
+          setEmailSearchResults([]);
+        }} title="Tìm kiếm email" size="lg">
+          <div className="p-4 sm:p-6 space-y-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Tìm kiếm theo email hoặc tên</label>
+              <div className="relative">
+                <Input
+                  value={emailSearchQuery}
+                  onChange={(e) => setEmailSearchQuery(e.target.value)}
+                  placeholder="Nhập email hoặc tên để tìm kiếm..."
+                  className="w-full pl-4 pr-10 py-2.5 text-sm"
+                />
+                <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                  {emailSearchLoading ? (
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-gray-400 border-t-transparent" />
+                  ) : (
+                    <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-2 max-h-96 overflow-y-auto">
+              {emailSearchLoading && (
+                <div className="text-center py-8 text-gray-500 text-sm">
+                  <div className="flex items-center justify-center gap-2">
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-gray-400 border-t-transparent" />
+                    <span>Đang tìm kiếm...</span>
+                  </div>
+                </div>
+              )}
+
+              {!emailSearchLoading && emailSearchQuery.trim() && emailSearchResults.length === 0 && (
+                <div className="text-center py-8 text-gray-500 text-sm">
+                  Không tìm thấy kết quả nào
+                </div>
+              )}
+
+              {!emailSearchLoading && !emailSearchQuery.trim() && (
+                <div className="text-center py-8 text-gray-500 text-sm">
+                  Nhập email hoặc tên để bắt đầu tìm kiếm
+                </div>
+              )}
+
+              {!emailSearchLoading && emailSearchResults.length > 0 && (
+                <div className="space-y-2">
+                  {emailSearchResults.map((user: any) => (
+                    <div
+                      key={user.id}
+                      onClick={() => handleSelectUser(user)}
+                      className="p-3 rounded-lg border border-gray-200 bg-white hover:bg-blue-50 hover:border-blue-300 cursor-pointer transition-colors"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium text-gray-900 truncate">
+                            {user.fullName || user.firstName || user.lastName || "Chưa có tên"}
+                          </div>
+                          <div className="text-sm text-gray-600 truncate mt-1">
+                            {user.email || "—"}
+                          </div>
+                          {user.phoneNumber && (
+                            <div className="text-xs text-gray-500 mt-1">
+                              {user.phoneNumber}
+                            </div>
+                          )}
+                        </div>
+                        <div className="ml-3 flex-shrink-0">
+                          <Button
+                            type="button"
+                            variant="primary"
+                            className="h-8 px-3 text-xs"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleSelectUser(user);
+                            }}
+                          >
+                            Chọn
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </Modal>
       </div>
     </div>
   )
 }
+

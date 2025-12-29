@@ -77,34 +77,56 @@ export default function StaffDashboardPage() {
     return () => clearTimeout(timer);
   }, [flash]);
 
+  // Helper function to get staff profile ID from account ID
+  const getStaffProfileId = useCallback(async (): Promise<number | null> => {
+    if (!user?.id) return null;
+    
+    const accountId = String(user.id);
+    const allStaffProfiles = await apiClient.getStaffProfiles();
+    
+    if (allStaffProfiles.success && allStaffProfiles.data) {
+      const profiles = Array.isArray(allStaffProfiles.data) 
+        ? allStaffProfiles.data 
+        : (Array.isArray((allStaffProfiles.data as any)?.items) ? (allStaffProfiles.data as any).items : []);
+      
+      const staffProfile = profiles.find((p: any) => 
+        String(p.accountId || p.account_id || p.accountID) === accountId
+      );
+      
+      return staffProfile?.id || null;
+    }
+    
+    return null;
+  }, [user?.id]);
+
   const loadTasks = useCallback(async () => {
     if (!user?.id) return;
     
     setLoading(true);
     try {
-      const staffId = parseInt(String(user.id)) || 0;
+      const staffId = await getStaffProfileId();
       
-      if (staffId === 0) {
+      if (!staffId) {
         setFlash({ type: 'error', text: 'Không tìm thấy thông tin nhân viên' });
         setLoading(false);
         return;
       }
 
+      console.log('Loading tasks for staffId:', staffId);
       const response = await apiClient.getStaffTasksByAssignee(staffId);
+      console.log('Tasks response:', response);
       
-      if (response.success && response.data) {
-        const data = response.data as any;
-        const items = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : []);
+      if (response.success) {
+        // Parse giống như orders page: data?.items hoặc data trực tiếp
+        const data: any = response.data;
+        const items = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []);
+        
+        console.log('Parsed tasks:', items);
         setTasks(items);
       } else {
-        const allResponse = await apiClient.getStaffTasks();
-        if (allResponse.success && allResponse.data) {
-          const data = allResponse.data as any;
-          const items = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : []);
-          setTasks(items);
-        } else {
-          setTasks([]);
-        }
+        console.warn('Failed to load tasks by assignee:', response.error);
+        setFlash({ type: 'error', text: response.error || 'Không thể tải danh sách nhiệm vụ' });
+        setTasks([]);
       }
     } catch (error: any) {
       console.error('Error loading tasks:', error);
@@ -113,7 +135,7 @@ export default function StaffDashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, [user?.id]);
+  }, [user?.id, getStaffProfileId]);
 
   useEffect(() => {
     loadTasks();

@@ -73,6 +73,20 @@ export function useRooms() {
   return useList('/api/system/rooms')
 }
 
+// Fetch multiple rooms by their IDs
+export function useRoomsByIds(roomIds?: (number | string)[]) {
+  const uniqueIds = useMemo(() => (roomIds ? [...new Set(roomIds)].filter(id => id) : []), [roomIds])
+
+  const key = useMemo(() => {
+    if (uniqueIds.length === 0) return null
+    const params = new URLSearchParams()
+    uniqueIds.forEach(id => params.append('id', String(id)))
+    return `/api/system/rooms?${params.toString()}`
+  }, [uniqueIds])
+
+  return useList<any>(key)
+}
+
 // Fetch rooms with backend-side filters (status, roomTypeId)
 export function useRoomsFiltered(status?: string, roomTypeId?: number, startTime?: string, endTime?: string) {
   const params = new URLSearchParams()

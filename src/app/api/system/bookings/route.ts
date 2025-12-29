@@ -109,6 +109,65 @@ export async function GET(req: NextRequest) {
         filteredItems = items.filter((b: any) => String(b.status) === status)
       }
 
+      // Enrich with roomName/roomCode using rooms API (best-effort; don't fail user flow if it breaks)
+      // Why: bookings often only have roomId; frontend needs roomName.
+      try {
+        const roomsResp = await apiClient.getRooms(options as any)
+        if (roomsResp.success) {
+          const rooms: any[] = Array.isArray(roomsResp.data)
+            ? roomsResp.data
+            : (roomsResp.data as any)?.items || (roomsResp.data as any)?.data || []
+
+          const roomInfoById = new Map<number, { name?: string; code?: string }>()
+
+          for (const r of rooms) {
+            const rid = Number((r as any).id ?? (r as any).roomId)
+            if (!Number.isFinite(rid)) continue
+
+            const name = (r as any).name || (r as any).roomName
+            const code = (r as any).code || (r as any).roomCode
+
+            if (name || code) {
+              roomInfoById.set(rid, {
+                name: name ? String(name) : undefined,
+                code: code ? String(code) : undefined,
+              })
+            }
+          }
+
+          filteredItems = filteredItems.map((b: any) => {
+            const roomId = Number(b.roomId ?? b.room_id)
+            const mapped = Number.isFinite(roomId) ? roomInfoById.get(roomId) : undefined
+
+            const currentName = b.roomName || b.room_name || b.room?.name
+            const currentCode = b.roomCode || b.room_code || b.roomNumber || b.room_number
+
+            // Priority:
+            // - roomName: existing > mapped.name > roomTypeName (some BE fields) > existing code > mapped.code
+            // - roomCode: existing > mapped.code
+            const resolvedRoomName =
+              currentName ||
+              mapped?.name ||
+              b.roomTypeName ||
+              b.room_type_name ||
+              currentCode ||
+              mapped?.code ||
+              undefined
+
+            const resolvedRoomCode = currentCode || mapped?.code || undefined
+
+            return {
+              ...b,
+              roomId: Number.isFinite(roomId) ? roomId : b.roomId,
+              roomName: resolvedRoomName,
+              roomCode: resolvedRoomCode,
+            }
+          })
+        }
+      } catch (error: any) {
+        console.error('Failed to enrich room names:', error?.message || error)
+      }
+
       return NextResponse.json({ items: filteredItems, total: filteredItems.length })
     }
 

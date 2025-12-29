@@ -55,6 +55,7 @@ export interface Room {
 }
 
 export interface Booking {
+  room: any;
   id: number;
   code: string;
   userId: number;

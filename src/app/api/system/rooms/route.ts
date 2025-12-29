@@ -10,12 +10,27 @@ export async function GET(request: NextRequest) {
     const startTime = searchParams.get('startTime') || undefined
     const endTime = searchParams.get('endTime') || undefined
     const roomTypeId = searchParams.get('roomTypeId')
-    const id = searchParams.get('id')
+    const ids = searchParams.getAll('id').map(Number).filter(id => !isNaN(id) && id > 0)
 
     const authHeader = getAuthorizationHeader(request)
     const headers: Record<string, string> = authHeader ? { Authorization: authHeader } : {}
     const options: RequestInit = Object.keys(headers).length ? { headers } : {}
 
+    // Handle fetching multiple rooms by ID
+    if (ids.length > 0) {
+      // Fetch all rooms and filter by the provided IDs.
+      // This is a workaround if the backend doesn't support fetching by multiple IDs directly.
+      const response = await apiClient.getRooms(options)
+      if (!response.success) {
+        return NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
+      }
+      const allRooms: any[] = Array.isArray(response.data) ? response.data : (response.data as any)?.items || []
+      const filteredRooms = allRooms.filter(room => ids.includes(room.id))
+      return NextResponse.json(filteredRooms) // Return a simple array for useList hook
+    }
+
+    // Handle fetching a single room by ID
+    const id = searchParams.get('id')
     if (id) {
       const roomId = Number(id)
       if (!roomId || Number.isNaN(roomId)) {

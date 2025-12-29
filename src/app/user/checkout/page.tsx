@@ -23,9 +23,12 @@ export default function CheckoutPage() {
   const [success, setSuccess] = useState(false);
   const [payments, setPayments] = useState<PaymentTransaction[]>([]);
   const [paymentsLoading, setPaymentsLoading] = useState(false);
+  const [payingOrderId, setPayingOrderId] = useState<number | null>(null);
+  const [checkingPaymentStatus, setCheckingPaymentStatus] = useState(false);
+  const [autoCheckoutAttempted, setAutoCheckoutAttempted] = useState(false);
 
   // Get service orders for this booking
-  const { data: serviceOrdersData, loading: serviceOrdersLoading } = useMyServiceOrders(
+  const { data: serviceOrdersData, loading: serviceOrdersLoading, refetch: refetchServiceOrders } = useMyServiceOrders(
     bookingId ? Number(bookingId) : undefined
   );
 
@@ -60,87 +63,277 @@ export default function CheckoutPage() {
     fetchBooking();
   }, [bookingId]);
 
+  // Helper function để fetch payments (tách ra để dùng trong polling)
+  const fetchPayments = async () => {
+    if (!serviceOrdersData || !bookingId) return;
+
+    try {
+      setPaymentsLoading(true);
+      const response = await apiClient.getPaymentTransactions();
+      
+      if (response.success && response.data) {
+        const allPayments = Array.isArray(response.data) 
+          ? response.data 
+          : (response.data as any).items || (response.data as any).data?.items || [];
+        
+        const serviceOrders = Array.isArray(serviceOrdersData)
+          ? serviceOrdersData
+          : (serviceOrdersData as any).items || (serviceOrdersData as any).data?.items || [];
+        
+        const serviceOrderIds = serviceOrders.map((so: ServiceOrder) => so.id);
+        
+        // Filter payments related to service orders of this booking
+        const relatedPayments = allPayments.filter((p: PaymentTransaction) =>
+          serviceOrderIds.includes(p.service_order_id)
+        );
+        
+        setPayments(relatedPayments);
+      }
+    } catch (err) {
+      console.error("Error fetching payments:", err);
+      // Don't show error to user, just log it
+    } finally {
+      setPaymentsLoading(false);
+    }
+  };
+
   // Fetch payments for service orders
   useEffect(() => {
-    const fetchPayments = async () => {
-      if (!serviceOrdersData || !bookingId) return;
-
-      try {
-        setPaymentsLoading(true);
-        const response = await apiClient.getPaymentTransactions();
-        
-        if (response.success && response.data) {
-          const allPayments = Array.isArray(response.data) 
-            ? response.data 
-            : (response.data as any).items || (response.data as any).data?.items || [];
-          
-          const serviceOrders = Array.isArray(serviceOrdersData)
-            ? serviceOrdersData
-            : (serviceOrdersData as any).items || (serviceOrdersData as any).data?.items || [];
-          
-          const serviceOrderIds = serviceOrders.map((so: ServiceOrder) => so.id);
-          
-          // Filter payments related to service orders of this booking
-          const relatedPayments = allPayments.filter((p: PaymentTransaction) =>
-            serviceOrderIds.includes(p.service_order_id)
-          );
-          
-          setPayments(relatedPayments);
-        }
-      } catch (err) {
-        console.error("Error fetching payments:", err);
-        // Don't show error to user, just log it
-      } finally {
-        setPaymentsLoading(false);
-      }
-    };
-
     if (serviceOrdersData) {
       fetchPayments();
     }
   }, [serviceOrdersData, bookingId]);
 
+  // Kiểm tra payment return và tự động checkout
+  useEffect(() => {
+    const paymentReturn = searchParams.get("paymentReturn");
+    if (paymentReturn === "true" && !autoCheckoutAttempted && bookingId && booking && user?.id) {
+      setCheckingPaymentStatus(true);
+      setAutoCheckoutAttempted(true);
+
+      let pollCount = 0;
+      const maxPolls = 10; // Tối đa 10 lần (30 giây)
+      const pollInterval = 3000; // 3 giây
+
+      const checkPaymentStatus = async () => {
+        try {
+          pollCount++;
+
+          // Refetch service orders và payments
+          await refetchServiceOrders();
+          await fetchPayments();
+
+          // Đợi một chút để state cập nhật, sau đó kiểm tra lại
+          setTimeout(async () => {
+            // Refetch lại để lấy data mới nhất
+            const newServiceOrdersData = await refetchServiceOrders();
+            await fetchPayments();
+
+            // Parse service orders từ data mới
+            const serviceOrders = newServiceOrdersData
+              ? (Array.isArray(newServiceOrdersData)
+                  ? newServiceOrdersData
+                  : (newServiceOrdersData as any).items || (newServiceOrdersData as any).data?.items || [])
+              : [];
+
+            const hasPendingPayment = serviceOrders.some(
+              (so: ServiceOrder) => (so.status as string) === "PENDING_PAYMENT"
+            );
+
+            // Lấy payments mới nhất
+            const paymentsResponse = await apiClient.getPaymentTransactions();
+            const allPayments = paymentsResponse.success && paymentsResponse.data
+              ? (Array.isArray(paymentsResponse.data)
+                  ? paymentsResponse.data
+                  : (paymentsResponse.data as any).items || (paymentsResponse.data as any).data?.items || [])
+              : [];
+
+            const serviceOrderIds = serviceOrders.map((so: ServiceOrder) => so.id);
+            const relatedPayments = allPayments.filter((p: PaymentTransaction) =>
+              serviceOrderIds.includes(p.service_order_id)
+            );
+
+            const activeServiceOrders = serviceOrders.filter(
+              (so: ServiceOrder) => so.status !== "CANCELLED"
+            );
+            const requiredAmount = activeServiceOrders.reduce(
+              (sum: number, so: ServiceOrder) => sum + (so.total_amount || 0),
+              0
+            );
+            const paidAmount = relatedPayments
+              .filter((p: PaymentTransaction) => p.status === "SUCCEEDED")
+              .reduce((sum: number, p: PaymentTransaction) => sum + (p.amount || 0), 0);
+            const remainingAmount = Math.max(0, requiredAmount - paidAmount);
+            const isFullyPaid = remainingAmount === 0 && paidAmount >= requiredAmount;
+
+            // Nếu không còn PENDING_PAYMENT và đã thanh toán đủ, tự động checkout
+            if (!hasPendingPayment && isFullyPaid && !checkingOut) {
+              setCheckingPaymentStatus(false);
+              // Tự động checkout
+              try {
+                const response = await apiClient.checkoutBooking(Number(bookingId), user.id);
+                if (response.success) {
+                  setSuccess(true);
+                  setTimeout(() => {
+                    router.push("/user/dashboard");
+                  }, 2000);
+                } else {
+                  setError(response.error || "Tự động check-out thất bại. Vui lòng thử lại.");
+                  setCheckingPaymentStatus(false);
+                }
+              } catch (err) {
+                console.error("Error auto checkout:", err);
+                setError("Có lỗi xảy ra khi tự động check-out");
+                setCheckingPaymentStatus(false);
+              }
+              return;
+            }
+
+            // Nếu đã hết số lần polling
+            if (pollCount >= maxPolls) {
+              setCheckingPaymentStatus(false);
+              setError("Đã hết thời gian chờ thanh toán. Vui lòng kiểm tra lại trạng thái thanh toán.");
+            }
+          }, 1000);
+        } catch (err) {
+          console.error("Error checking payment status:", err);
+          if (pollCount >= maxPolls) {
+            setCheckingPaymentStatus(false);
+          }
+        }
+      };
+
+      // Bắt đầu polling
+      const intervalId = setInterval(checkPaymentStatus, pollInterval);
+      
+      // Kiểm tra ngay lập tức
+      checkPaymentStatus();
+
+      // Cleanup
+      return () => {
+        clearInterval(intervalId);
+      };
+    }
+  }, [searchParams, autoCheckoutAttempted, bookingId, checkingOut, booking, user, refetchServiceOrders, router]);
+
   // Calculate total payment amount and status
   const paymentInfo = useMemo(() => {
-    if (!payments.length) {
+    // Lấy danh sách service orders
+    const serviceOrders = serviceOrdersData
+      ? (Array.isArray(serviceOrdersData)
+          ? serviceOrdersData
+          : (serviceOrdersData as any).items || (serviceOrdersData as any).data?.items || [])
+      : [];
+
+    // Lấy danh sách service orders đang ở trạng thái PENDING_PAYMENT
+    const pendingPaymentOrders = serviceOrders.filter(
+      (so: ServiceOrder) => (so.status as string) === "PENDING_PAYMENT"
+    );
+    const hasPendingPaymentOrder = pendingPaymentOrders.length > 0;
+
+    // Lọc service orders cần thanh toán (loại bỏ CANCELLED)
+    const activeServiceOrders = serviceOrders.filter(
+      (so: ServiceOrder) => so.status !== "CANCELLED"
+    );
+
+    // Tính tổng tiền cần thanh toán từ service orders
+    const requiredAmount = activeServiceOrders.reduce(
+      (sum: number, so: ServiceOrder) => sum + (so.total_amount || 0),
+      0
+    );
+
+    // Nếu không có service orders cần thanh toán, cho phép checkout
+    if (activeServiceOrders.length === 0 || requiredAmount === 0) {
       return {
+        requiredAmount: 0,
         totalAmount: 0,
         paidAmount: 0,
         pendingAmount: 0,
+        remainingAmount: 0,
         status: "NO_PAYMENT" as const,
         hasPending: false,
         hasPaid: false,
+        isFullyPaid: true,
+        hasPendingPaymentOrder,
+        pendingPaymentOrders,
       };
     }
 
-    const totalAmount = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
+    // Tính tổng tiền đã thanh toán thành công
     const paidAmount = payments
       .filter((p) => p.status === "SUCCEEDED")
       .reduce((sum, p) => sum + (p.amount || 0), 0);
+
+    // Tính tổng tiền đang chờ thanh toán
     const pendingAmount = payments
       .filter((p) => p.status === "PENDING")
       .reduce((sum, p) => sum + (p.amount || 0), 0);
+
+    // Tính số tiền còn thiếu
+    const remainingAmount = Math.max(0, requiredAmount - paidAmount);
+
     const hasPending = payments.some((p) => p.status === "PENDING");
     const hasPaid = payments.some((p) => p.status === "SUCCEEDED");
+    const isFullyPaid = remainingAmount === 0 && paidAmount >= requiredAmount;
 
     let status: "NO_PAYMENT" | "PENDING" | "PARTIAL" | "PAID" = "NO_PAYMENT";
-    if (hasPaid && hasPending) {
+    if (isFullyPaid) {
+      status = "PAID";
+    } else if (hasPaid && hasPending) {
       status = "PARTIAL";
-    } else if (hasPending) {
+    } else if (hasPending || remainingAmount > 0) {
       status = "PENDING";
     } else if (hasPaid) {
       status = "PAID";
     }
 
     return {
-      totalAmount,
+      requiredAmount,
+      totalAmount: requiredAmount, // Giữ totalAmount để tương thích với code cũ
       paidAmount,
       pendingAmount,
+      remainingAmount,
       status,
       hasPending,
       hasPaid,
+      isFullyPaid,
+      hasPendingPaymentOrder,
+      pendingPaymentOrders,
     };
-  }, [payments]);
+  }, [payments, serviceOrdersData]);
+
+  const handlePay = async (order: ServiceOrder) => {
+    if (!bookingId) return;
+
+    try {
+      setPayingOrderId(order.id);
+      setError(null);
+
+      const response = await apiClient.createPayment({
+        serviceOrderId: order.id,
+        method: "BANK_TRANSFER",
+        returnUrl: `${window.location.origin}/user/checkout?bookingId=${bookingId}&paymentReturn=true`,
+        cancelUrl: `${window.location.origin}/user/checkout?bookingId=${bookingId}`,
+      });
+
+      if (response.success) {
+        const paymentData = response.data as any;
+        if (paymentData?.paymentUrl) {
+          window.location.href = paymentData.paymentUrl;
+        } else {
+          setError("Thanh toán đã được khởi tạo nhưng không có URL thanh toán.");
+          setPayingOrderId(null);
+        }
+      } else {
+        setError(response.error || "Khởi tạo thanh toán thất bại");
+        setPayingOrderId(null);
+      }
+    } catch (err: any) {
+      console.error("Error creating payment:", err);
+      setError(err?.message || "Có lỗi xảy ra khi tạo thanh toán");
+      setPayingOrderId(null);
+    }
+  };
 
   const handleCheckout = async () => {
     if (!booking || !bookingId) return;
@@ -150,12 +343,20 @@ export default function CheckoutPage() {
       return;
     }
 
-    // Kiểm tra payment status trước khi checkout
-    if (paymentInfo.hasPending && paymentInfo.pendingAmount > 0) {
-      const confirmMessage = `Bạn còn ${paymentInfo.pendingAmount.toLocaleString("vi-VN")} VNĐ chưa thanh toán. Bạn có chắc chắn muốn check-out không?`;
-      if (!window.confirm(confirmMessage)) {
-        return;
-      }
+    // Kiểm tra có service order nào đang ở trạng thái PENDING_PAYMENT không
+    if (paymentInfo.hasPendingPaymentOrder) {
+      setError(
+        "Không thể check-out: Có đơn hàng dịch vụ đang chờ thanh toán. Vui lòng hoàn tất thanh toán trước khi check-out."
+      );
+      return;
+    }
+
+    // Kiểm tra thanh toán đủ trước khi checkout
+    if (!paymentInfo.isFullyPaid && paymentInfo.remainingAmount > 0) {
+      setError(
+        `Bạn chưa thanh toán đủ. Còn thiếu ${paymentInfo.remainingAmount.toLocaleString("vi-VN")} VNĐ. Vui lòng thanh toán đầy đủ trước khi check-out.`
+      );
+      return;
     }
 
     try {
@@ -306,7 +507,8 @@ export default function CheckoutPage() {
   }
 
   const canCheckout = booking.status === "CHECKED_IN";
-  const hasUnpaidDebt = paymentInfo.hasPending && paymentInfo.pendingAmount > 0;
+  const hasUnpaidDebt = !paymentInfo.isFullyPaid && paymentInfo.remainingAmount > 0;
+  const hasPendingPaymentOrder = paymentInfo.hasPendingPaymentOrder;
 
   return (
     <div className="px-6 pt-4 pb-6" suppressHydrationWarning>
@@ -366,7 +568,7 @@ export default function CheckoutPage() {
         </Card>
 
         {/* Payment Info */}
-        {(payments.length > 0 || paymentsLoading) && (
+        {(payments.length > 0 || paymentsLoading || paymentInfo.requiredAmount > 0) && (
           <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-md rounded-2xl overflow-hidden">
             <CardHeader className="bg-[hsl(var(--page-bg))]/40 border-b border-gray-200 !px-6 py-3">
               <h2 className="text-xl font-bold text-gray-900">Thông tin thanh toán</h2>
@@ -377,12 +579,12 @@ export default function CheckoutPage() {
                   <div className="w-6 h-6 border-2 border-[hsl(var(--primary))] border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
                   <p className="text-sm text-gray-500">Đang tải thông tin thanh toán...</p>
                 </div>
-              ) : payments.length > 0 ? (
+              ) : paymentInfo.requiredAmount > 0 ? (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
-                    <span className="text-gray-600 font-medium">Tổng tiền:</span>
+                    <span className="text-gray-600 font-medium">Tổng tiền cần thanh toán:</span>
                     <span className="font-bold text-gray-900">
-                      {paymentInfo.totalAmount.toLocaleString("vi-VN")} VNĐ
+                      {paymentInfo.requiredAmount.toLocaleString("vi-VN")} VNĐ
                     </span>
                   </div>
                   
@@ -391,6 +593,15 @@ export default function CheckoutPage() {
                       <span className="text-green-700 font-medium">Đã thanh toán:</span>
                       <span className="font-bold text-green-700">
                         {paymentInfo.paidAmount.toLocaleString("vi-VN")} VNĐ
+                      </span>
+                    </div>
+                  )}
+                  
+                  {paymentInfo.remainingAmount > 0 && (
+                    <div className="flex items-center justify-between p-4 bg-red-50 rounded-xl">
+                      <span className="text-red-700 font-medium">Còn thiếu:</span>
+                      <span className="font-bold text-red-700">
+                        {paymentInfo.remainingAmount.toLocaleString("vi-VN")} VNĐ
                       </span>
                     </div>
                   )}
@@ -420,42 +631,44 @@ export default function CheckoutPage() {
                   </div>
 
                   {/* Payment Details */}
-                  <div className="pt-4 border-t border-gray-200">
-                    <h3 className="text-sm font-semibold text-gray-900 mb-3">Chi tiết thanh toán:</h3>
-                    <div className="space-y-2">
-                      {payments.map((payment) => (
-                        <div
-                          key={payment.id}
-                          className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
-                        >
-                          <div className="flex-1">
-                            <p className="text-sm font-medium text-gray-900">
-                              {payment.amount.toLocaleString("vi-VN")} VNĐ
-                            </p>
-                            <p className="text-xs text-gray-500">
-                              {getPaymentMethodText(payment.method)} - {getPaymentStatusText(payment.status)}
-                            </p>
-                            {payment.paid_at && (
-                              <p className="text-xs text-gray-400">
-                                Thanh toán: {new Date(payment.paid_at).toLocaleDateString("vi-VN")}
-                              </p>
-                            )}
-                          </div>
-                          <Badge
-                            tone={
-                              payment.status === "SUCCEEDED"
-                                ? "success"
-                                : payment.status === "PENDING"
-                                ? "warning"
-                                : "default"
-                            }
+                  {payments.length > 0 && (
+                    <div className="pt-4 border-t border-gray-200">
+                      <h3 className="text-sm font-semibold text-gray-900 mb-3">Chi tiết thanh toán:</h3>
+                      <div className="space-y-2">
+                        {payments.map((payment) => (
+                          <div
+                            key={payment.id}
+                            className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
                           >
-                            {getPaymentStatusText(payment.status)}
-                          </Badge>
-                        </div>
-                      ))}
+                            <div className="flex-1">
+                              <p className="text-sm font-medium text-gray-900">
+                                {payment.amount.toLocaleString("vi-VN")} VNĐ
+                              </p>
+                              <p className="text-xs text-gray-500">
+                                {getPaymentMethodText(payment.method)} - {getPaymentStatusText(payment.status)}
+                              </p>
+                              {payment.paid_at && (
+                                <p className="text-xs text-gray-400">
+                                  Thanh toán: {new Date(payment.paid_at).toLocaleDateString("vi-VN")}
+                                </p>
+                              )}
+                            </div>
+                            <Badge
+                              tone={
+                                payment.status === "SUCCEEDED"
+                                  ? "success"
+                                  : payment.status === "PENDING"
+                                  ? "warning"
+                                  : "default"
+                              }
+                            >
+                              {getPaymentStatusText(payment.status)}
+                            </Badge>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               ) : (
                 <div className="text-center py-4">
@@ -482,20 +695,88 @@ export default function CheckoutPage() {
           </div>
         )}
 
-        {/* Warning if has unpaid debt */}
+        {/* Error if has unpaid debt */}
         {canCheckout && hasUnpaidDebt && (
-          <div className="p-4 bg-orange-50 border border-orange-200 rounded-xl">
+          <div className="p-4 bg-red-50 border border-red-200 rounded-xl">
             <div className="flex items-start gap-3">
-              <svg className="w-5 h-5 text-orange-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-5 h-5 text-red-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
               </svg>
               <div className="flex-1">
-                <p className="text-sm font-semibold text-orange-800 mb-1">
-                  Cảnh báo: Còn khoản thanh toán chưa hoàn tất
+                <p className="text-sm font-semibold text-red-800 mb-1">
+                  Không thể check-out: Chưa thanh toán đủ
                 </p>
-                <p className="text-sm text-orange-700">
-                  Bạn còn <span className="font-bold">{paymentInfo.pendingAmount.toLocaleString("vi-VN")} VNĐ</span> chưa thanh toán. 
-                  Bạn vẫn có thể check-out, nhưng vui lòng thanh toán sớm để tránh phát sinh phí.
+                <p className="text-sm text-red-700">
+                  Bạn còn thiếu <span className="font-bold">{paymentInfo.remainingAmount.toLocaleString("vi-VN")} VNĐ</span> chưa thanh toán. 
+                  Vui lòng thanh toán đầy đủ trước khi check-out.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Error if has pending payment order */}
+        {canCheckout && hasPendingPaymentOrder && (
+          <div className="p-4 bg-red-50 border border-red-200 rounded-xl">
+            <div className="flex items-start gap-3">
+              <svg className="w-5 h-5 text-red-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <div className="flex-1">
+                <p className="text-sm font-semibold text-red-800 mb-2">
+                  Không thể check-out: Có đơn hàng dịch vụ đang chờ thanh toán
+                </p>
+                <p className="text-sm text-red-700 mb-3">
+                  Bạn có đơn hàng dịch vụ đang ở trạng thái chờ thanh toán (PENDING_PAYMENT). 
+                  Vui lòng hoàn tất thanh toán trước khi check-out.
+                </p>
+                {paymentInfo.pendingPaymentOrders && paymentInfo.pendingPaymentOrders.length > 0 && (
+                  <div className="space-y-2">
+                    {paymentInfo.pendingPaymentOrders.map((order: ServiceOrder) => (
+                      <div key={order.id} className="flex items-center justify-between p-3 bg-white rounded-lg border border-red-200">
+                        <div className="flex-1">
+                          <p className="text-sm font-medium text-gray-900">
+                            Đơn hàng #{order.code || order.id}
+                          </p>
+                          <p className="text-xs text-gray-600">
+                            Số tiền: {order.total_amount?.toLocaleString("vi-VN") || 0} VNĐ
+                          </p>
+                        </div>
+                        <Button
+                          variant="primary"
+                          onClick={() => handlePay(order)}
+                          disabled={payingOrderId === order.id || checkingPaymentStatus}
+                          className="text-sm px-3 py-1.5"
+                        >
+                          {payingOrderId === order.id ? (
+                            <span className="flex items-center gap-2">
+                              <span className="inline-block animate-spin rounded-full h-3 w-3 border-b-2 border-white"></span>
+                              Đang xử lý...
+                            </span>
+                          ) : (
+                            "Thanh toán"
+                          )}
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Checking payment status */}
+        {checkingPaymentStatus && (
+          <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl">
+            <div className="flex items-center gap-3">
+              <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+              <div className="flex-1">
+                <p className="text-sm font-semibold text-blue-800">
+                  Đang kiểm tra trạng thái thanh toán...
+                </p>
+                <p className="text-xs text-blue-700 mt-1">
+                  Sau khi thanh toán thành công, hệ thống sẽ tự động thực hiện check-out.
                 </p>
               </div>
             </div>
@@ -516,7 +797,7 @@ export default function CheckoutPage() {
             variant="primary"
             onClick={handleCheckout}
             className="flex-1"
-            disabled={!canCheckout || checkingOut}
+            disabled={!canCheckout || checkingOut || hasUnpaidDebt || hasPendingPaymentOrder}
           >
             {checkingOut ? (
               <span className="flex items-center gap-2">

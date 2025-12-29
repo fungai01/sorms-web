@@ -2,9 +2,9 @@
 
 import { useMemo, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { useAvailableRooms, useRoomTypes, useSelfUser } from "@/hooks/useApi";
+import { useAvailableRooms, useSelfUser } from "@/hooks/useApi";
 import { apiClient } from "@/lib/api-client";
-import type { Room, RoomType } from "@/lib/types";
+import type { Room } from "@/lib/types";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
@@ -25,6 +25,11 @@ export default function BookRoomPage() {
     const d = new Date(dateStr);
     d.setDate(d.getDate() + days);
     return d.toISOString().split("T")[0];
+  };
+
+  // Loại bỏ "Tòa " khỏi tên phòng
+  const formatRoomName = (name: string) => {
+    return name.replace(/^Tòa\s+/i, "");
   };
   const router = useRouter();
   const [checkin, setCheckin] = useState("");
@@ -82,18 +87,12 @@ export default function BookRoomPage() {
     checkin || undefined,
     checkout || undefined
   );
-  const { data: roomTypesData } = useRoomTypes();
-
   const rooms = useMemo(() => {
     if (!roomsData) return [];
     const roomList = Array.isArray(roomsData) ? roomsData : (roomsData as any).items || (roomsData as any).data?.content || [];
     return roomList;
   }, [roomsData]);
 
-  const roomTypes = useMemo(() => {
-    if (!roomTypesData) return [];
-    return Array.isArray(roomTypesData) ? roomTypesData : (roomTypesData as any).items || [];
-  }, [roomTypesData]);
 
 
   // Auto-hide flash messages
@@ -485,18 +484,7 @@ export default function BookRoomPage() {
     <div className="px-6 pt-4 pb-6" suppressHydrationWarning>
       <div className="max-w-7xl mx-auto space-y-6">
         {/* Header */}
-        <div className="bg-white shadow-sm border border-gray-200 rounded-2xl overflow-hidden">
-          <div className="border-b border-gray-200/50 px-6 py-4">
-            <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-              <div>
-                <h1 className="text-3xl font-bold text-gray-900 leading-tight">Tìm và đặt phòng</h1>
-                <p className="mt-1 text-sm text-gray-500">
-                  Chọn ngày và loại phòng để xem danh sách phòng khả dụng
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
+        
 
         {/* Flash Messages */}
         {flash && (
@@ -513,69 +501,25 @@ export default function BookRoomPage() {
           </div>
         )}
 
-        {/* Filter section */}
+        {/* Search + Available rooms (merged into one card) */}
         <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-md rounded-2xl overflow-hidden">
           <CardHeader className="bg-[hsl(var(--page-bg))]/40 border-b border-gray-200 !px-6 py-3">
-            <h2 className="text-xl font-bold text-gray-900">Bộ lọc tìm kiếm</h2>
-          </CardHeader>
-          <CardBody className="p-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+            <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Ngày nhận phòng
-                </label>
-                <input
-                  type="date"
-                  value={checkin}
-                  onChange={(e) => {
-                    const nextCheckin = e.target.value;
-                    setCheckin(nextCheckin);
-
-                    // Ensure checkout > checkin
-                    if (!checkout || (nextCheckin && checkout <= nextCheckin)) {
-                      setCheckout(nextCheckin ? addDays(nextCheckin, 1) : "");
-                    }
-                  }}
-                  min={new Date().toISOString().split('T')[0]}
-                  className="w-full h-11 px-3 text-sm border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] bg-white"
-                />
+                <h2 className="text-3xl font-bold text-gray-900 leading-tight">Tìm và đặt phòng</h2>
+                <p className="text-sm text-gray-500">
+                  {checkin && checkout
+                    ? `Tìm thấy ${rooms.length} phòng từ ${new Date(checkin).toLocaleDateString("vi-VN")} lúc ${checkinTime} đến ${new Date(checkout).toLocaleDateString("vi-VN")} lúc ${checkoutTime}`
+                    : "Chọn ngày và giờ để xem phòng còn trống"}
+                </p>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Giờ nhận phòng
-                </label>
-                <input
-                  type="time"
-                  value={checkinTime}
-                  onChange={(e) => setCheckinTime(e.target.value)}
-                  className="w-full h-11 px-3 text-sm border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] bg-white"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Ngày trả phòng
-                </label>
-                <input
-                  type="date"
-                  value={checkout}
-                  onChange={(e) => setCheckout(e.target.value)}
-                  min={checkin ? addDays(checkin, 1) : new Date().toISOString().split('T')[0]}
-                  className="w-full h-11 px-3 text-sm border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] bg-white"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Giờ trả phòng
-                </label>
-                <input
-                  type="time"
-                  value={checkoutTime}
-                  onChange={(e) => setCheckoutTime(e.target.value)}
-                  className="w-full h-11 px-3 text-sm border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] bg-white"
-                />
-              </div>
-              <div className="flex items-end">
-                {(checkin || checkout) ? (
+              <div className="flex items-center gap-2">
+                {rooms.length > 0 && (
+                  <span className="text-sm font-semibold text-[hsl(var(--primary))] bg-[hsl(var(--primary)/0.12)] px-3 py-1 rounded-full">
+                    {rooms.length} phòng
+                  </span>
+                )}
+                {(checkin || checkout) && (
                   <Button
                     variant="secondary"
                     onClick={() => {
@@ -584,38 +528,74 @@ export default function BookRoomPage() {
                       setCheckinTime("14:00");
                       setCheckoutTime("12:00");
                     }}
-                    className="w-full h-11"
+                    className="h-9 px-4"
                   >
                     Xóa bộ lọc
                   </Button>
-                ) : (
-                  <div className="w-full" />
                 )}
               </div>
             </div>
-          </CardBody>
-        </Card>
-
-        {/* Available rooms */}
-        <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-md rounded-2xl overflow-hidden">
-          <CardHeader className="bg-[hsl(var(--page-bg))]/40 border-b border-gray-200 !px-6 py-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-xl font-bold text-gray-900">Phòng khả dụng</h2>
-                <p className="text-sm text-gray-500">
-                  {checkin && checkout 
-                    ? `Tìm thấy ${rooms.length} phòng từ ${new Date(checkin).toLocaleDateString("vi-VN")} đến ${new Date(checkout).toLocaleDateString("vi-VN")}`
-                    : "Chọn ngày để xem phòng khả dụng"}
-                </p>
-              </div>
-              {rooms.length > 0 && (
-                <span className="text-sm font-semibold text-[hsl(var(--primary))] bg-[hsl(var(--primary)/0.12)] px-3 py-1 rounded-full">
-                  {rooms.length} phòng
-                </span>
-              )}
-            </div>
           </CardHeader>
-          <CardBody className="p-6">
+
+          <CardBody className="p-6 space-y-6">
+            {/* Filters */}
+            <div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Ngày nhận phòng</label>
+                  <input
+                    type="date"
+                    value={checkin}
+                    onChange={(e) => {
+                      const nextCheckin = e.target.value;
+                      setCheckin(nextCheckin);
+
+                      // Ensure checkout > checkin
+                      if (!checkout || (nextCheckin && checkout <= nextCheckin)) {
+                        setCheckout(nextCheckin ? addDays(nextCheckin, 1) : "");
+                      }
+                    }}
+                    min={new Date().toISOString().split("T")[0]}
+                    className="w-full h-11 px-3 text-sm border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Giờ nhận phòng</label>
+                  <input
+                    type="time"
+                    value={checkinTime}
+                    onChange={(e) => setCheckinTime(e.target.value)}
+                    className="w-full h-11 px-3 text-sm border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Ngày trả phòng</label>
+                  <input
+                    type="date"
+                    value={checkout}
+                    onChange={(e) => setCheckout(e.target.value)}
+                    min={checkin ? addDays(checkin, 1) : new Date().toISOString().split("T")[0]}
+                    className="w-full h-11 px-3 text-sm border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Giờ trả phòng</label>
+                  <input
+                    type="time"
+                    value={checkoutTime}
+                    onChange={(e) => setCheckoutTime(e.target.value)}
+                    className="w-full h-11 px-3 text-sm border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] focus:border-[hsl(var(--primary))] bg-white"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Available rooms */}
+            <div className="border-t border-gray-200 pt-6">
+              <h3 className="text-sm font-semibold text-gray-900 mb-4">Phòng khả dụng</h3>
 
           {roomsLoading ? (
               <div className="py-12 text-center">
@@ -641,7 +621,6 @@ export default function BookRoomPage() {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {rooms.map((room: Room) => {
-                const roomType = roomTypes.find((rt: RoomType) => rt.id === room.roomTypeId);
                 const isAvailable = room.status === "AVAILABLE";
                 const canBook = isAvailable && !bookingLoading;
 
@@ -662,36 +641,32 @@ export default function BookRoomPage() {
                       <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/30 to-transparent"></div>
                       
                       {/* Room info overlay */}
-                      <div className="absolute bottom-0 left-0 right-0 p-4">
+                      <div className="absolute bottom-0 left-0 right-0 px-5 pb-4">
                         <div className="flex items-start justify-between gap-2 mb-2">
                           <div className="flex-1">
                             <div className="flex items-center gap-2 flex-wrap mb-1.5">
                               <h3 className="text-lg font-bold text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
-                                {room.name ? `Phòng ${room.name}` : `Phòng ${room.code}`}
+                                {room.name ? `${formatRoomName(room.name)}` : `${formatRoomName(room.code)}`}
                               </h3>
-                              {roomType && (
-                                <Badge tone="default" className="text-xs font-medium px-2 py-0.5 bg-white text-gray-900 border-0 shadow-md">
-                                  {roomType.name}
-                                </Badge>
-                              )}
+
                             </div>
                             {/* Giá phòng đã được ẩn theo yêu cầu, không hiển thị giá ở đây */}
                           </div>
                           {isAvailable && (
                             <Badge tone="success" className="text-xs font-semibold px-2.5 py-1 bg-white text-green-700 border-0 shadow-md shrink-0">
-                              Còn trống
+                              Phòng trống
                             </Badge>
                           )}
                           {!isAvailable && (
                             <Badge tone={getRoomStatusBadge(room.status)} className="text-xs font-semibold px-2.5 py-1 bg-white border-0 shadow-md shrink-0">
-                              {room.status === "OCCUPIED" ? "Đang ở" : "Bảo trì"}
+                              {room.status === "OCCUPIED" ? "Có người sử dụng" : "Bảo trì"}
                             </Badge>
                           )}
                         </div>
                       </div>
                     </div>
 
-                    <div className="p-5">
+                    <div className="p-5 pt-3">
                       <div className="space-y-4">
                         {/* Action buttons */}
                         <div className="flex gap-3 pt-2">
@@ -727,6 +702,7 @@ export default function BookRoomPage() {
               })}
             </div>
           )}
+            </div>
           </CardBody>
         </Card>
       </div>
@@ -735,78 +711,55 @@ export default function BookRoomPage() {
       <Modal
         open={detailModalOpen}
         onClose={() => setDetailModalOpen(false)}
-        title={selectedRoom ? `Chi tiết phòng ${selectedRoom.code}` : "Chi tiết phòng"}
+        title={selectedRoom ? `Chi tiết phòng ${selectedRoom.name ? formatRoomName(selectedRoom.name) : formatRoomName(selectedRoom.code)}` : "Chi tiết phòng"}
         size="lg"
       >
         {selectedRoom && (() => {
-          const roomType = roomTypes.find((rt: RoomType) => rt.id === selectedRoom.roomTypeId);
           const isAvailable = selectedRoom.status === "AVAILABLE";
           
           return (
             <div className="space-y-4">
               {/* Large image */}
-              <div className="relative w-full h-64 bg-gradient-to-br from-gray-100 to-gray-200 rounded-lg overflow-hidden">
+              <div className="relative w-full h-64 bg-gradient-to-br from-gray-100 to-gray-200 rounded-xl overflow-hidden">
                 <Image
                   src={roomImage}
                   alt={selectedRoom.code}
                   fill
-                  className="object-cover rounded-lg"
+                  className="object-cover"
                   sizes="(max-width: 768px) 100vw, 768px"
                 />
-                {isAvailable && (
-                  <div className="absolute top-4 right-4">
-                    <Badge tone="success">
-                      Còn trống
-                    </Badge>
-                  </div>
-                )}
+
+                {/* overlay for readability */}
+                <div className="absolute inset-0 bg-gradient-to-t from-black/35 via-black/10 to-transparent" />
+
+                {/* Top row: room name (left) + status (right) */}
+                <div className="absolute bottom-4 left-4 right-4 flex items-end justify-between gap-3">
+                  <h3 className="text-xl font-bold text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
+                    {selectedRoom.name ? `${formatRoomName(selectedRoom.name)}` : `${formatRoomName(selectedRoom.code)}`}
+                  </h3>
+
+                  <Badge tone={isAvailable ? "success" : selectedRoom.status === "OCCUPIED" ? "default" : "warning"} className="bg-white/95 shrink-0">
+                    {isAvailable ? "Phòng trống" : selectedRoom.status === "OCCUPIED" ? "Có người sử dụng" : "Bảo trì"}
+                  </Badge>
+                </div>
               </div>
 
               {/* Room info */}
-              <div className="space-y-3">
-                <div>
-                  <div className="flex items-center gap-2 mb-2">
-                    <h3 className="text-2xl font-bold text-gray-900">
-                      {selectedRoom.name ? `Phòng ${selectedRoom.name}` : `Phòng ${selectedRoom.code}`}
-                    </h3>
-                    {roomType && (
-                      <Badge tone="default">{roomType.name}</Badge>
-                    )}
-                  </div>
-                  {checkin && checkout && (
-                    <div className="mt-2 text-sm text-gray-600">
-                      <span className="font-medium">Ngày khả dụng:</span>{" "}
-                      <span>{new Date(checkin).toLocaleDateString("vi-VN")} - {new Date(checkout).toLocaleDateString("vi-VN")}</span>
-                    </div>
-                  )}
-                </div>
-
-                {roomType && (
-                  <div className="space-y-2 text-sm">
-                    <div className="text-gray-600">
-                      <span>Sức chứa: <strong className="text-gray-900">{roomType.maxOccupancy} người</strong></span>
-                    </div>
-                    {/* Giá phòng đã được ẩn trong modal chi tiết */}
+              <div className="space-y-4 px-4">
+                {checkin && checkout && (
+                  <div className="text-sm text-gray-600">
+                    <span className="font-medium">Khả dụng:</span>{" "}
+                    <span>
+                      {new Date(checkin).toLocaleDateString("vi-VN")} - {new Date(checkout).toLocaleDateString("vi-VN")}
+                    </span>
                   </div>
                 )}
 
-                {/* Amenities description */}
-                <div className="pt-3 border-t border-gray-200">
-                  <h4 className="font-semibold text-gray-900 mb-2">Mô tả tiện nghi:</h4>
-                  <div className="text-sm text-gray-600 space-y-1">
-                    {selectedRoom.description ? (
-                      <p>{selectedRoom.description}</p>
-                    ) : (
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>Điều hòa nhiệt độ</div>
-                        <div>WiFi miễn phí</div>
-                        <div>Nước nóng</div>
-                        <div>Giường đôi</div>
-                        <div>Tủ quần áo</div>
-                        <div>Bàn làm việc</div>
-                      </div>
-                    )}
-                  </div>
+                <div className="text-sm text-gray-600">
+                  <span className="font-semibold text-gray-900">Mô tả:</span>{" "}
+                  <span className={selectedRoom.description ? "text-gray-600" : "text-gray-500"}>
+                    {selectedRoom.description || "Chưa có mô tả cho phòng này."}
+                  </span>
                 </div>
               </div>
             </div>
@@ -879,6 +832,7 @@ export default function BookRoomPage() {
             {currentStep === 1 && (
             <div className="space-y-4">
                 <h3 className="text-lg font-semibold text-gray-900 mb-4">Thông tin cá nhân</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1.5">
@@ -890,7 +844,7 @@ export default function BookRoomPage() {
                     onChange={(e) => setPersonalInfo({ ...personalInfo, fullName: e.target.value })}
                     placeholder="Nhập họ tên"
                   />
-                  </div>
+                </div>
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1.5">
@@ -939,7 +893,7 @@ export default function BookRoomPage() {
 
                 {showContactFields && (
                   <>
-                    <div>
+                    <div className="md:col-span-2">
                       <label className="block text-sm font-medium text-gray-700 mb-1.5">
                         Số điện thoại
                       </label>
@@ -982,6 +936,8 @@ export default function BookRoomPage() {
                     </div>
                   </>
                 )}
+
+                </div>
 
                 {/* Ngày giờ check-in / check-out */}
                 <div className="pt-2 border-t border-gray-200">
@@ -1214,15 +1170,17 @@ export default function BookRoomPage() {
                       
                       {/* Chỉ hiển thị nút gửi khi đã chụp đủ ảnh */}
                       {allFaceImagesCaptured && (
-                        <div className="flex gap-3 pt-3">
-                          <Button 
-                            variant="primary" 
-                            className="flex-1 h-11"
-                            onClick={handleSubmitFaceRegister}
-                            disabled={faceRegistering}
-                          >
-                            {faceRegistering ? "Đang đăng ký khuôn mặt..." : "Gửi / cập nhật dữ liệu khuôn mặt"}
-                          </Button>
+                        <div className="mt-4 sticky bottom-0 bg-white/95 backdrop-blur border-t border-gray-200 pt-3">
+                          <div className="flex gap-3">
+                            <Button 
+                              variant="primary" 
+                              className="flex-1 h-11"
+                              onClick={handleSubmitFaceRegister}
+                              disabled={faceRegistering}
+                            >
+                              {faceRegistering ? "Đang đăng ký khuôn mặt..." : "Gửi / cập nhật dữ liệu khuôn mặt"}
+                            </Button>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -1254,14 +1212,10 @@ export default function BookRoomPage() {
                           {new Date().toLocaleString("vi-VN")}
                         </span>
                       </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Mã phòng:</span>
-                        <span className="font-medium text-gray-900">{selectedRoom.code}</span>
-                      </div>
                       {selectedRoom.name && (
                         <div className="flex justify-between">
-                          <span className="text-gray-600">Tên phòng:</span>
-                          <span className="font-medium text-gray-900">{selectedRoom.name}</span>
+                          <span className="text-gray-600">Phòng:</span>
+                          <span className="font-medium text-gray-900">{formatRoomName(selectedRoom.name)}</span>
                         </div>
                       )}
                       <div className="flex justify-between">
@@ -1311,14 +1265,14 @@ export default function BookRoomPage() {
                   </div>
                 ) : (
           <div className="space-y-4">
-                  <div className="p-4 bg-amber-50 rounded-xl border border-amber-200">
-                    <p className="text-sm text-amber-700 font-medium mb-4">
+                  <div>
+                    <p className="text-sm text-gray-700 font-medium mb-4">
                       Vui lòng chọn ngày và giờ check-in, check-out để tiếp tục đặt phòng.
                     </p>
                     <div className="space-y-4">
                       {/* Check-in */}
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">Ngày check-in</label>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Ngày check-in <span className="text-red-500">*</span></label>
                         <div className="grid grid-cols-2 gap-3">
                           <div className="relative">
                             <input
@@ -1350,7 +1304,7 @@ export default function BookRoomPage() {
                       
                       {/* Check-out */}
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">Ngày check-out</label>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Ngày check-out <span className="text-red-500">*</span></label>
                         <div className="grid grid-cols-2 gap-3">
                           <div className="relative">
                             <input
