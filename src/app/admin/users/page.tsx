@@ -535,7 +535,7 @@ function UsersInner() {
       <div className="px-6 pt-4 pb-6">
         <div className="max-w-7xl mx-auto space-y-6">
           {/* Header & Filters */}
-          <div className="bg-white shadow-sm border border-gray-200 rounded-2xl overflow-hidden">
+          <div className="shadow-sm border border-gray-200 rounded-2xl overflow-hidden" style={{ backgroundColor: '#dcebff' }}>
             <div className="border-b border-gray-200/50 px-6 py-4">
               <div className="flex items-center justify-between gap-3">
                 <div>

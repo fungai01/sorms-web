@@ -61,8 +61,24 @@ function KPICard({ title, value, hint, trend, icon, bgColor = "bg-blue-50", icon
   icon?: React.ReactNode;
   iconColor?: string;
 }) {
+  const isHexBgColor = bgColor?.startsWith('#');
+  const isHexIconColor = iconColor?.startsWith('#');
+
+  const iconContainerProps = {
+    className: `w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${!isHexBgColor ? bgColor : ''}`,
+    style: isHexBgColor ? { backgroundColor: bgColor } : {},
+  };
+
+  const iconProps = {
+    className: !isHexIconColor ? iconColor : '',
+    style: isHexIconColor ? { color: iconColor } : {},
+  };
+
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm hover:shadow-md transition-shadow">
+    <div
+      className={`rounded-xl border border-gray-200 p-6 shadow-sm hover:shadow-md transition-shadow ${!isHexBgColor ? 'bg-white' : ''}`}
+      style={isHexBgColor ? { backgroundColor: bgColor } : undefined}
+    >
       <div className="flex items-center justify-between">
         <div className="flex-1">
           <p className="text-sm font-medium text-gray-600 mb-1">{title}</p>
@@ -78,8 +94,8 @@ function KPICard({ title, value, hint, trend, icon, bgColor = "bg-blue-50", icon
       )}
         </div>
         {icon && (
-          <div className={`w-12 h-12 ${bgColor} rounded-xl flex items-center justify-center flex-shrink-0`}>
-            <div className={iconColor}>
+          <div {...iconContainerProps}>
+            <div {...iconProps}>
               {icon}
             </div>
           </div>
@@ -515,7 +531,7 @@ export default function AdminHome() {
     <div className="px-6 pt-4 pb-6" suppressHydrationWarning>
       <div className="max-w-7xl mx-auto space-y-6">
       {/* Header */}
-        <div className="bg-white shadow-sm border border-gray-200 rounded-2xl overflow-hidden">
+        <div className="shadow-sm border border-gray-200 rounded-2xl overflow-hidden" style={{ backgroundColor: '#dcebff' }}>
           <div className="border-b border-gray-200/50 px-6 py-4">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
           <div>
@@ -548,8 +564,8 @@ export default function AdminHome() {
                 title="Phòng đang ở" 
                 value={`${kpis.occupiedRooms}/${kpis.totalRooms}`} 
                 hint={`${occupancyPercent}% đang ở`}
-                bgColor="bg-blue-100"
-                iconColor="text-blue-600"
+                bgColor="#f4f8ff"
+                iconColor="#0277b0" 
                 icon={
                   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
@@ -557,11 +573,11 @@ export default function AdminHome() {
                 }
               />
               <KPICard 
-                title="Đặt phòng trống" 
+                title="Phòng chờ xử lý" 
                 value={String(kpis.pendingBookings)} 
                 hint="Cần xử lý"
-                bgColor="bg-blue-100"
-                iconColor="text-blue-600"
+                bgColor="#f4f8ff"
+                iconColor="#0277b0"
                 icon={
                   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
@@ -572,8 +588,8 @@ export default function AdminHome() {
                 title="Doanh thu" 
                 value={fmtCurrency(kpis.revenueToday)} 
                 hint={`${kpis.paymentsToday} giao dịch`}
-                bgColor="bg-blue-100"
-                iconColor="text-blue-600"
+                bgColor="#f4f8ff"
+                iconColor="#0277b0"
                 icon={
                   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -584,8 +600,8 @@ export default function AdminHome() {
                 title="Công việc" 
                 value={String(kpis.tasksTodo)} 
                 hint="Cần thực hiện"
-                bgColor="bg-blue-100"
-                iconColor="text-blue-600"
+                bgColor="#f4f8ff"
+                iconColor="#0277b0"
                 icon={
                   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />

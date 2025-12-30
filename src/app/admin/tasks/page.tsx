@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { useStaffTasks, useStaffProfiles } from "@/hooks/useApi";
+import { useStaffTasks, useStaffProfiles, useServiceOrders, useUsers } from "@/hooks/useApi";
 import { apiClient } from "@/lib/api-client";
+import { authFetch } from "@/lib/http";
 import Input from "@/components/ui/Input";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
@@ -26,6 +27,10 @@ type StaffTask = {
   description?: string
   created_at: string
   isActive?: boolean
+  relatedType?: string
+  relatedId?: number
+  taskCreatedBy?: number
+  lastModifiedDate?: string
 }
 
 function normalizeTask(t: any, staffProfiles: any[] = []): StaffTask {
@@ -71,6 +76,70 @@ function normalizeTask(t: any, staffProfiles: any[] = []): StaffTask {
     description: t.description || t.note || '',
     created_at: t.created_at || t.createdAt || '',
     isActive: t.isActive !== undefined ? !!t.isActive : undefined,
+    relatedType: t.relatedType || undefined,
+    relatedId: t.relatedId !== undefined ? Number(t.relatedId) : undefined,
+    taskCreatedBy: t.taskCreatedBy !== undefined ? Number(t.taskCreatedBy) : undefined,
+    lastModifiedDate: t.lastModifiedDate || t.updated_at || t.updatedAt || undefined,
+  }
+}
+
+// Normalize service order thành StaffTask format
+function normalizeServiceOrderToTask(order: any, staffProfiles: any[] = []): StaffTask {
+  const assignedTo = order.assignedStaffId !== undefined ? Number(order.assignedStaffId) : undefined
+  const staff = assignedTo ? staffProfiles.find((s: any) => Number(s.id) === assignedTo) : null
+  const department = staff?.department || ''
+  
+  // Map service order status sang task status
+  let status: TaskStatus = 'TODO'
+  const orderStatus = (order.status || '').toUpperCase()
+  if (orderStatus === 'PENDING' || orderStatus === 'PENDING_STAFF_CONFIRMATION' || orderStatus === 'PENDING_PAYMENT') {
+    status = 'TODO'
+  } else if (orderStatus === 'CONFIRMED' || orderStatus === 'IN_PROGRESS') {
+    status = 'IN_PROGRESS'
+  } else if (orderStatus === 'COMPLETED' || orderStatus === 'DONE') {
+    status = 'DONE'
+  } else if (orderStatus === 'CANCELLED') {
+    status = 'CANCELLED'
+  }
+  
+  // Tạo title ngắn gọn từ service order code
+  const title = order.code || `Đơn #${order.id}`
+  
+  // Lấy thời gian từ service order: ưu tiên confirmedAt, sau đó createdDate
+  let due_date = ''
+  if (order.confirmedAt) {
+    try {
+      const date = new Date(order.confirmedAt)
+      due_date = date.toISOString().split('T')[0]
+    } catch (e) {
+      // Ignore
+    }
+  }
+  if (!due_date && (order.createdDate || order.created_at)) {
+    try {
+      const date = new Date(order.createdDate || order.created_at)
+      due_date = date.toISOString().split('T')[0]
+    } catch (e) {
+      // Ignore
+    }
+  }
+  
+  return {
+    id: Number(order.id) || 0,
+    title: title,
+    assignee: department,
+    assignedTo: assignedTo,
+    department: department,
+    due_date: due_date,
+    priority: 'MEDIUM' as TaskPriority, // Default priority
+    status: status,
+    description: order.note || `Đơn dịch vụ ${order.code || `#${order.id}`}`,
+    created_at: order.createdDate || order.created_at || '',
+    isActive: true,
+    relatedType: 'SERVICE_ORDER',
+    relatedId: Number(order.id) || 0,
+    taskCreatedBy: order.requestedBy ? undefined : undefined, // Service order không có taskCreatedBy
+    lastModifiedDate: order.confirmedAt || order.createdDate || undefined,
   }
 }
 
@@ -80,22 +149,87 @@ export default function TasksPage() {
   const [query, setQuery] = useState("")
   const [filterStatus, setFilterStatus] = useState<'ALL' | TaskStatus>('ALL')
   const [filterPriority, setFilterPriority] = useState<'ALL' | TaskPriority>('ALL')
+  const [filterSource, setFilterSource] = useState<'ALL' | 'SERVICE_ORDER' | 'ADMIN'>('ALL')
   const [page, setPage] = useState(1)
   const [size, setSize] = useState(10)
 
   const [detailOpen, setDetailOpen] = useState(false)
   const [selected, setSelected] = useState<StaffTask | null>(null)
+  const [orderDetail, setOrderDetail] = useState<any | null>(null)
+  const [orderDetailLoading, setOrderDetailLoading] = useState(false)
+  const [orderDetailError, setOrderDetailError] = useState<string | null>(null)
+  const [detailTab, setDetailTab] = useState<'OVERVIEW' | 'ORDER'>('OVERVIEW')
 
   const [editOpen, setEditOpen] = useState(false)
-  const [edit, setEdit] = useState<{ id?: number, title: string, assignedTo: number | null, due_date: string, priority: TaskPriority, status: TaskStatus, description: string }>({ title: '', assignedTo: null, due_date: '', priority: 'MEDIUM', status: 'TODO', description: '' })
+  const [edit, setEdit] = useState<{ id?: number, title: string, relatedType: 'SERVICE_ORDER' | 'ROOM' | 'BOOKING', relatedId: number | null, assignedTo: number | null, due_date: string, priority: TaskPriority, status: TaskStatus, description: string }>({ title: '', relatedType: 'SERVICE_ORDER', relatedId: null, assignedTo: null, due_date: '', priority: 'MEDIUM', status: 'TODO', description: '' })
   const [fieldErrors, setFieldErrors] = useState<{ title?: string, assignedTo?: string, due_date?: string, priority?: string, status?: string, description?: string }>({})
   const [confirmOpen, setConfirmOpen] = useState<{ open: boolean, id?: number }>({ open: false })
 
+  // Helper function để map status từ frontend format sang backend format
+  const mapStatusToBackend = (status: 'ALL' | TaskStatus): string | undefined => {
+    if (status === 'ALL') return undefined
+    // Map 'TODO' -> 'OPEN' cho backend (giống như trong save function)
+    if (status === 'TODO') return 'OPEN'
+    // Các status khác giữ nguyên
+    return status
+  }
+
+  const findStaffById = useCallback((assignedTo: number | undefined, staffProfiles: any[], users: any[]): any => {
+    if (!assignedTo) return null
+    
+    const staff = staffProfiles.find((s: any) => {
+      const staffId = Number(s.id)
+      const staffAccountId = s.accountId !== undefined ? Number(s.accountId) : undefined
+      const assignedToNum = Number(assignedTo)
+      return staffId === assignedToNum || staffAccountId === assignedToNum
+    })
+    
+    if (staff) return staff
+    
+    const user = users.find((u: any) => {
+      const userId = Number(u.id)
+      const assignedToNum = Number(assignedTo)
+      return userId === assignedToNum
+    })
+    
+    // Nếu tìm thấy user, tìm staff profile có accountId = user.id
+    if (user) {
+      const staffByAccountId = staffProfiles.find((s: any) => {
+        const staffAccountId = s.accountId !== undefined ? Number(s.accountId) : undefined
+        return staffAccountId === Number(user.id)
+      })
+      if (staffByAccountId) return staffByAccountId
+      // Nếu không có staff profile, trả về user object với full_name
+      return user
+    }
+    
+    return null
+  }, [])
+
+  // Helper function để lấy tên staff
+  const getStaffName = useCallback((assignedTo: number | undefined, staffProfiles: any[], users: any[]): string => {
+    if (!assignedTo) return '—'
+    const staffOrUser = findStaffById(assignedTo, staffProfiles, users)
+    if (staffOrUser) {
+      // Nếu là staff profile
+      if (staffOrUser.full_name || staffOrUser.fullName || staffOrUser.name) {
+        return staffOrUser.full_name || staffOrUser.fullName || staffOrUser.name
+      }
+      // Nếu là user object
+      if (staffOrUser.full_name) {
+        return staffOrUser.full_name
+      }
+    }
+    return `Staff ${assignedTo}`
+  }, [findStaffById])
+
   // Use hooks
   const { data: tasksData, loading: tasksLoading, refetch: refetchTasks } = useStaffTasks({
-    status: filterStatus !== 'ALL' ? filterStatus : undefined,
+    status: mapStatusToBackend(filterStatus),
   })
+  const { data: serviceOrdersData, loading: ordersLoading } = useServiceOrders()
   const { data: staffProfilesData } = useStaffProfiles()
+  const { data: usersData } = useUsers({ size: 1000 }) // Lấy tất cả users để match
 
   // Get staff profiles
   const staffProfiles = useMemo(() => {
@@ -104,13 +238,46 @@ export default function TasksPage() {
     return Array.isArray(data?.items) ? data.items : Array.isArray(data) ? data : []
   }, [staffProfilesData])
 
-  // Normalize and store tasks - map assignedTo to department for display
+  // Get users list
+  const users = useMemo(() => {
+    if (!usersData) return []
+    const data = usersData as any
+    return Array.isArray(data?.items) ? data.items : Array.isArray(data?.data?.content) ? data.data.content : Array.isArray(data) ? data : []
+  }, [usersData])
+
+  // Normalize and merge tasks from both sources
   const rows = useMemo(() => {
-    if (!tasksData) return []
-    const data = tasksData as any
-    const items = Array.isArray(data?.items) ? data.items : Array.isArray(data) ? data : []
-    return items.map((t: any) => normalizeTask(t, staffProfiles))
-  }, [tasksData, staffProfiles])
+    // Normalize staff tasks
+    const staffTasks: StaffTask[] = []
+    if (tasksData) {
+      const data = tasksData as any
+      const items = Array.isArray(data?.items) ? data.items : Array.isArray(data) ? data : []
+      staffTasks.push(...items.map((t: any) => normalizeTask(t, staffProfiles)))
+    }
+    
+    // Normalize service orders (chỉ lấy những order có assignedStaffId)
+    const serviceOrderTasks: StaffTask[] = []
+    if (serviceOrdersData) {
+      const data = serviceOrdersData as any
+      const orders = Array.isArray(data?.items) ? data.items : Array.isArray(data) ? data : []
+      // Chỉ lấy service orders có assignedStaffId (đã được assign cho staff)
+      const assignedOrders = orders.filter((o: any) => o.assignedStaffId)
+      serviceOrderTasks.push(...assignedOrders.map((o: any) => normalizeServiceOrderToTask(o, staffProfiles)))
+    }
+    
+    // Merge và loại bỏ duplicates (nếu StaffTask đã có relatedId trùng với service order id)
+    const merged: StaffTask[] = [...staffTasks]
+    const existingRelatedIds = new Set(staffTasks.filter(t => t.relatedType === 'SERVICE_ORDER' && t.relatedId).map(t => t.relatedId))
+    
+    // Chỉ thêm service order tasks nếu chưa có StaffTask tương ứng
+    serviceOrderTasks.forEach(serviceOrderTask => {
+      if (!existingRelatedIds.has(serviceOrderTask.relatedId)) {
+        merged.push(serviceOrderTask)
+      }
+    })
+    
+    return merged
+  }, [tasksData, serviceOrdersData, staffProfiles])
 
   useEffect(() => { if (!flash) return; const t = setTimeout(() => setFlash(null), 3000); return () => clearTimeout(t) }, [flash])
 
@@ -158,9 +325,18 @@ export default function TasksPage() {
       const matchesStatus = filterStatus === 'ALL' || r.status === filterStatus
       // Priority filter
       const matchesPriority = filterPriority === 'ALL' || r.priority === filterPriority
-      return matchesSearch && matchesStatus && matchesPriority
+      // Source filter
+      let matchesSource = true
+      if (filterSource === 'SERVICE_ORDER') {
+        // Chỉ hiển thị tasks có relatedType='SERVICE_ORDER' và relatedId > 0
+        matchesSource = r.relatedType === 'SERVICE_ORDER' && r.relatedId !== undefined && r.relatedId > 0
+      } else if (filterSource === 'ADMIN') {
+        // Admin tạo = tất cả task KHÔNG phải là task từ đơn dịch vụ (SERVICE_ORDER + relatedId > 0)
+        matchesSource = !(r.relatedType === 'SERVICE_ORDER' && r.relatedId !== undefined && r.relatedId > 0)
+      }
+      return matchesSearch && matchesStatus && matchesPriority && matchesSource
     })
-  }, [rows, query, filterStatus, filterPriority])
+  }, [rows, query, filterStatus, filterPriority, filterSource])
 
   function priorityWeight(p: TaskPriority) { return p === 'HIGH' ? 3 : p === 'MEDIUM' ? 2 : 1 }
 
@@ -175,24 +351,70 @@ export default function TasksPage() {
     if (s === 'IN_PROGRESS') return <Badge tone="in-progress">Đang làm</Badge>
     return <Badge tone="muted">Chờ</Badge>
   }
+  
+  function renderSourceBadge(task: StaffTask) {
+    if (task.relatedType === 'SERVICE_ORDER' && task.relatedId && task.relatedId > 0) {
+      return <Badge tone="info">Đơn dịch vụ</Badge>
+    }
+    return <Badge tone="muted">Admin tạo</Badge>
+  }
 
   function openCreate() {
-    setEdit({ title: '', assignedTo: null, due_date: '', priority: 'MEDIUM', status: 'TODO', description: '' })
+    setEdit({ title: '', relatedType: 'SERVICE_ORDER', relatedId: null, assignedTo: null, due_date: '', priority: 'MEDIUM', status: 'TODO', description: '' })
     setFieldErrors({})
     setFlash(null)
     setEditOpen(true)
   }
   function openEditRow(r: StaffTask) {
-    setEdit({ id: r.id, title: r.title, assignedTo: r.assignedTo || null, due_date: r.due_date || '', priority: r.priority, status: r.status, description: r.description || '' })
+    setEdit({
+      id: r.id,
+      title: r.title,
+      relatedType: (r.relatedType as any) || 'SERVICE_ORDER',
+      relatedId: r.relatedId !== undefined ? r.relatedId : null,
+      assignedTo: r.assignedTo || null,
+      due_date: r.due_date || '',
+      priority: r.priority,
+      status: r.status,
+      description: r.description || ''
+    })
     setFieldErrors({})
     setFlash(null)
     setEditOpen(true)
   }
   function confirmDelete(id: number) { setConfirmOpen({ open: true, id }) }
   
-  function openDetail(task: StaffTask) {
+  async function openDetail(task: StaffTask) {
     setSelected(task)
     setDetailOpen(true)
+    setDetailTab('OVERVIEW')
+
+    // Nếu là task từ đơn dịch vụ thì load full order detail
+    if (task.relatedType === 'SERVICE_ORDER' && task.relatedId && task.relatedId > 0) {
+      setOrderDetail(null)
+      setOrderDetailError(null)
+      setOrderDetailLoading(true)
+      try {
+        // Dùng endpoint order detail (đã proxy qua /api/system/orders?orderId=...)
+        const res = await authFetch(`/api/system/orders?orderId=${task.relatedId}`, {
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+        })
+        if (!res.ok) {
+          const txt = await res.text().catch(() => '')
+          throw new Error(txt || 'Không tải được chi tiết đơn dịch vụ')
+        }
+        const data = await res.json().catch(() => null)
+        setOrderDetail(data)
+      } catch (e: any) {
+        setOrderDetailError(e?.message || 'Không tải được chi tiết đơn dịch vụ')
+      } finally {
+        setOrderDetailLoading(false)
+      }
+    } else {
+      setOrderDetail(null)
+      setOrderDetailError(null)
+      setOrderDetailLoading(false)
+    }
   }
 
   async function doDelete() {
@@ -374,7 +596,7 @@ export default function TasksPage() {
                 </div>
               </div>
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-3 gap-3">
                   <div className="relative rounded-xl border border-gray-300 bg-white overflow-hidden">
           <select 
             value={filterStatus} 
@@ -403,6 +625,22 @@ export default function TasksPage() {
                       <option value="HIGH">HIGH</option>
                       <option value="MEDIUM">MEDIUM</option>
                       <option value="LOW">LOW</option>
+          </select>
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
+                      <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+        </div>
+              </div>
+                  <div className="relative rounded-xl border border-gray-300 bg-white overflow-hidden">
+          <select 
+            value={filterSource} 
+            onChange={(e) => setFilterSource(e.target.value as any)}
+                      className="w-full px-3 py-2.5 pr-10 text-sm focus:outline-none appearance-none bg-transparent border-0"
+          >
+                  <option value="ALL">Tất cả</option>
+                      <option value="SERVICE_ORDER">Từ đơn dịch vụ</option>
+                      <option value="ADMIN">Admin tạo</option>
           </select>
                     <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
                       <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -465,6 +703,22 @@ export default function TasksPage() {
                     </svg>
                   </div>
                 </div>
+                <div className="w-40 flex-shrink-0 relative rounded-xl border border-gray-300 bg-white overflow-hidden">
+              <select
+                value={filterSource}
+                onChange={(e) => setFilterSource(e.target.value as any)}
+                    className="w-full px-3 py-2.5 pr-10 text-sm focus:outline-none appearance-none bg-transparent border-0"
+              >
+                    <option value="ALL">Tất cả</option>
+                    <option value="SERVICE_ORDER">Từ đơn dịch vụ</option>
+                    <option value="ADMIN">Admin tạo</option>
+              </select>
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
+                    <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </div>
+                </div>
               </div>
               </div>
             </div>
@@ -502,6 +756,7 @@ export default function TasksPage() {
                   <THead>
                     <tr>
                       <th className="px-4 py-3 text-left text-sm font-bold">Tiêu đề</th>
+                      <th className="px-4 py-3 text-center text-sm font-bold">Loại đơn</th>
                       <th className="px-4 py-3 text-center text-sm font-bold">Người phụ trách</th>
                       <th className="px-4 py-3 text-center text-sm font-bold">Thời gian</th>
                       <th className="px-4 py-3 text-center text-sm font-bold">Ưu tiên</th>
@@ -511,15 +766,14 @@ export default function TasksPage() {
                   </THead>
                   <TBody>
                     {filtered.slice((page - 1) * size, page * size).map((r: StaffTask, index: number) => {
-                      // Tìm staff từ assignedTo
-                      const assignedStaff = r.assignedTo ? staffProfiles.find((s: any) => Number(s.id) === r.assignedTo) : null
-                      const staffName = assignedStaff ? (assignedStaff.full_name || assignedStaff.fullName || assignedStaff.name || `Staff ${r.assignedTo}`) : (r.assignedTo ? `Staff ${r.assignedTo}` : '—')
+                      const staffName = getStaffName(r.assignedTo, staffProfiles, users)
                       
                       return (
                       <tr key={r.id} className={`transition-colors ${index % 2 === 0 ? 'bg-white' : 'bg-gray-100'} hover:bg-[#f2f8fe]`}>
                         <td className="px-4 py-3 text-left text-gray-900">
                         <span title={r.title} className="block truncate">{r.title}</span>
                     </td>
+                      <td className="px-4 py-3 text-center">{renderSourceBadge(r)}</td>
                       <td className="px-4 py-3 text-center text-gray-700">{staffName}</td>
                       <td className="px-4 py-3 text-center text-gray-700 whitespace-nowrap">{r.due_date || '—'}</td>
                       <td className="px-4 py-3 text-center">{renderPriorityBadge(r.priority)}</td>
@@ -553,11 +807,10 @@ export default function TasksPage() {
                           <div className="min-w-0">
                             <h3 className="font-bold text-gray-900 text-base truncate" title={r.title}>{r.title}</h3>
                               {(() => {
-                                // Tìm staff từ assignedTo
-                                const assignedStaff = r.assignedTo ? staffProfiles.find((s: any) => Number(s.id) === r.assignedTo) : null
-                                const staffName = assignedStaff ? (assignedStaff.full_name || assignedStaff.fullName || assignedStaff.name || `Staff ${r.assignedTo}`) : (r.assignedTo ? `Staff ${r.assignedTo}` : '—')
+                                const staffName = getStaffName(r.assignedTo, staffProfiles, users)
                                 return <p className="text-sm text-gray-600 truncate">{staffName}</p>
                               })()}
+                            <div className="mt-1">{renderSourceBadge(r)}</div>
                           </div>
                         </div>
                         <div className="flex-shrink-0">{renderStatusBadge(r.status)}</div>
@@ -650,94 +903,194 @@ export default function TasksPage() {
       </Card>
 
       {/* Modal chi tiết */}
-      <Modal open={detailOpen} onClose={() => setDetailOpen(false)} title="Chi tiết công việc" size="lg">
+      <Modal open={detailOpen} onClose={() => {
+        setDetailOpen(false)
+        setOrderDetail(null)
+        setOrderDetailError(null)
+        setOrderDetailLoading(false)
+        setDetailTab('OVERVIEW')
+      }} title="Chi tiết công việc" size="lg">
         <div className="p-4 sm:p-6">
           {selected && (() => {
-            // Tìm staff từ assignedTo
-            const assignedStaff = selected.assignedTo ? staffProfiles.find((s: any) => Number(s.id) === selected.assignedTo) : null
-            const staffName = assignedStaff ? (assignedStaff.full_name || assignedStaff.fullName || assignedStaff.name || `Staff ${selected.assignedTo}`) : (selected.assignedTo ? `Staff ${selected.assignedTo}` : '—')
+            const staffName = getStaffName(selected.assignedTo, staffProfiles, users)
+            const assignedStaff = findStaffById(selected.assignedTo, staffProfiles, users)
             const staffDepartment = assignedStaff?.department || ''
             
             return (
-            <div className="space-y-6">
-              {/* Header với thông tin chính */}
-              <div className="bg-gradient-to-r from-[hsl(var(--page-bg))] to-[hsl(var(--primary)/0.08)] rounded-xl p-4 sm:p-6 border border-[hsl(var(--primary)/0.25)]">
-                <div className="space-y-4">
-                  {/* Header với icon và status */}
-                  <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
-                    <div className="flex items-center gap-3 w-full sm:w-auto">
-                      <div className="w-12 h-12 sm:w-14 sm:h-14 bg-[hsl(var(--primary))] rounded-xl flex items-center justify-center shadow-lg flex-shrink-0">
-                  <svg className="w-6 h-6 sm:w-7 sm:h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-                  </svg>
-                </div>
-                      <div className="flex-1 min-w-0">
-                        <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold text-gray-900 truncate" title={selected.title}>
-                          {selected.title}
-                        </h2>
-                        <p className="text-base sm:text-lg text-gray-600 truncate mt-2">
-                          Người phụ trách: {staffName} {staffDepartment ? `(${staffDepartment})` : ''}
-                        </p>
-                </div>
-              </div>
-                    <div className="flex-shrink-0 w-full sm:w-auto flex justify-start sm:justify-end">
-                      {(() => {
-                        // Render status badge với kích thước lớn hơn cho modal chi tiết
-                        const s = selected.status
-                        if (s === 'DONE') return <Badge tone="success" className="text-base sm:text-lg px-4 py-2 font-semibold">Hoàn thành</Badge>
-                        if (s === 'CANCELLED') return <Badge tone="error" className="text-base sm:text-lg px-4 py-2 font-semibold">Đã hủy</Badge>
-                        if (s === 'IN_PROGRESS') return <Badge tone="in-progress" className="text-base sm:text-lg px-4 py-2 font-semibold">Đang làm</Badge>
-                        return <Badge tone="muted" className="text-base sm:text-lg px-4 py-2 font-semibold">Chờ</Badge>
-                      })()}
+            <div className="space-y-4">
+              {/* Header gọn */}
+              <div className="bg-white border border-gray-200 rounded-2xl p-4 sm:p-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="text-xs font-semibold text-gray-500">Công việc</div>
+                    <h2 className="text-lg sm:text-xl font-bold text-gray-900 truncate" title={selected.title}>{selected.title}</h2>
+                    <div className="mt-1 text-sm text-gray-600 truncate">
+                      Người phụ trách: <span className="font-medium text-gray-900">{staffName}</span>{staffDepartment ? ` - ${staffDepartment}` : ''}
                     </div>
-            </div>
+                  </div>
+                  <div className="flex flex-col items-end gap-2 flex-shrink-0">
+                    {renderSourceBadge(selected)}
+                    {renderStatusBadge(selected.status)}
+                  </div>
+                </div>
 
-            {/* Thông tin nhanh */}
-                  <div className="grid grid-cols-2 gap-3 sm:gap-4">
-                    <div className="bg-white/70 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-[hsl(var(--primary)/0.25)]">
-                      <p className="text-sm sm:text-base font-semibold text-gray-700">
-                        <span className="text-gray-600">ID:</span>{" "}
-                        <span className="font-bold text-[hsl(var(--primary))]">{selected.id}</span>
-                      </p>
-              </div>
-
-                    <div className="bg-white/70 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-[hsl(var(--primary)/0.25)]">
-                      <div className="text-sm sm:text-base font-semibold text-gray-700">
-                        <span className="text-gray-600">Ưu tiên:</span>{" "}
-                        <div className="mt-1 inline-block">{renderPriorityBadge(selected.priority)}</div>
+                {/* Tabs */}
+                <div className="mt-4 flex gap-2 border-b border-gray-200">
+                  <button
+                    type="button"
+                    onClick={() => setDetailTab('OVERVIEW')}
+                    className={`px-3 py-2 text-sm font-semibold border-b-2 -mb-px ${detailTab === 'OVERVIEW' ? 'border-[hsl(var(--primary))] text-[hsl(var(--primary))]' : 'border-transparent text-gray-600 hover:text-gray-900'}`}
+                  >
+                    Tổng quan
+                  </button>
+                  {selected.relatedType === 'SERVICE_ORDER' && (selected.relatedId ?? 0) > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setDetailTab('ORDER')}
+                      className={`px-3 py-2 text-sm font-semibold border-b-2 -mb-px ${detailTab === 'ORDER' ? 'border-[hsl(var(--primary))] text-[hsl(var(--primary))]' : 'border-transparent text-gray-600 hover:text-gray-900'}`}
+                    >
+                      Chi tiết đơn
+                    </button>
+                  )}
                 </div>
               </div>
-            </div>
 
-                  {/* Thời gian */}
-                  <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-[hsl(var(--primary)/0.25)]">
-                    <p className="text-sm sm:text-base font-semibold text-gray-700">
-                      <span className="text-gray-600">Thời gian:</span>{" "}
-                      <span className="font-bold text-[hsl(var(--primary))]">{selected.due_date || '—'}</span>
-                    </p>
-                </div>
-                </div>
-              </div>
+              {/* Tab content */}
+              {detailTab === 'OVERVIEW' && (
+                <div className="space-y-4">
+                  {/* Tổng quan */}
+                  <div className="bg-white border border-gray-200 rounded-2xl p-4 sm:p-5">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="flex items-center space-x-2">
+  <div className="text-xs font-semibold text-gray-500">Task ID:</div>
+  <div className="text-sm font-bold text-gray-900">{selected.id}</div>
+</div>
+                      <div className="flex items-center space-x-2">
+                        <div className="text-xs font-semibold text-gray-500">Ưu tiên:</div>
+                        <div className="text-sm font-bold text-gray-900">{renderPriorityBadge(selected.priority)}</div>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <div className="text-xs font-semibold text-gray-500">Thời gian</div>
+                        <div className="text-sm font-medium text-gray-900">{selected.due_date || '—'}</div>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <div className="text-xs font-semibold text-gray-500">Nguồn:</div>
+                        <div className="text-sm font-bold text-gray-900">{renderSourceBadge(selected)}</div>
+                        
+                      </div>
+                    </div>
 
-              {selected.description && (
-                <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-gray-200">
-                  <p className="text-sm text-gray-800 whitespace-pre-line">
-                    <span className="font-semibold text-gray-600">Mô tả:</span>{" "}
-                    {selected.description}
-                  </p>
+                    <div className="mt-4 border-t border-gray-200 pt-4">
+                      <div className="text-xs font-semibold text-gray-500 mb-1">Mô tả</div>
+                      <div className="text-sm text-gray-800 whitespace-pre-line">{selected.description || <span className="text-gray-400 italic">Không có mô tả</span>}</div>
+                    </div>
+                  </div>
+
+                  {/* Audit */}
+                  <div className="bg-white border border-gray-200 rounded-2xl p-4 sm:p-5">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {selected.created_at && (
+                        <div className="flex items-center space-x-2">
+                          <div className="text-xs font-semibold text-gray-500">Ngày tạo</div>
+                          <div className="text-sm font-medium text-gray-900">{new Date(selected.created_at).toLocaleString('vi-VN')}</div>
+                        </div>
+                      )}
+                      {selected.lastModifiedDate && (
+                        <div  className="flex items-center space-x-2">
+                          <div className="text-xs font-semibold text-gray-500">Cập nhật lần cuối</div>
+                          <div className="text-sm font-medium text-gray-900">{new Date(selected.lastModifiedDate).toLocaleString('vi-VN')}</div>
+                        </div>
+                      )}
+                      {selected.taskCreatedBy && (
+                        <div>
+                          <div className="text-xs font-semibold text-gray-500">Người tạo</div>
+                          <div className="text-sm font-medium text-gray-900">{getStaffName(selected.taskCreatedBy, staffProfiles, users)}</div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
               )}
 
-              {selected.created_at && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                  <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-gray-200">
-                    <div className="text-xs sm:text-sm font-semibold text-gray-500 mb-1">Ngày tạo</div>
-                    <p className="text-sm font-medium text-gray-900">
-                      {selected.created_at ? new Date(selected.created_at).toLocaleString('vi-VN') : '—'}
-                    </p>
-              </div>
-            </div>
+              {detailTab === 'ORDER' && (
+                <div className="bg-white border border-gray-200 rounded-2xl p-4 sm:p-5">
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm font-semibold text-gray-900">Chi tiết đơn dịch vụ</div>
+                    {orderDetailLoading && <div className="text-xs text-gray-500">Đang tải...</div>}
+                  </div>
+
+                  {orderDetailError && <div className="mt-2 text-sm text-red-600">{orderDetailError}</div>}
+
+                  {orderDetail && (
+                    <div className="mt-4 space-y-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div className="flex items-center space-x-2">
+                          <div className="text-xs font-semibold text-gray-500">Mã đơn:</div>
+                          <div className="text-sm font-bold text-gray-900">{orderDetail.code || `#${orderDetail.id}`}</div>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <div className="text-xs font-semibold text-gray-500">Trạng thái</div>
+                          <div className="text-sm font-medium text-gray-900">{orderDetail.status || '—'}</div>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <div className="text-xs font-semibold text-gray-500">Booking:</div>
+                          <div className="text-sm font-medium text-gray-900">{orderDetail.bookingId || '—'}</div>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <div className="text-xs font-semibold text-gray-500">Nhân viên:</div>
+                          <div className="text-sm font-medium text-gray-900">{getStaffName(orderDetail.assignedStaffId ? Number(orderDetail.assignedStaffId) : undefined, staffProfiles, users)}</div>
+                        </div>
+                      </div>
+
+                      {Array.isArray(orderDetail.items) && orderDetail.items.length > 0 && (
+                        <div className="overflow-hidden border border-gray-200 rounded-xl">
+                          <table className="w-full text-sm">
+                            <thead className="bg-gray-50">
+                              <tr>
+                                <th className="text-left px-3 py-2 font-semibold text-gray-600">Dịch vụ</th>
+                                <th className="text-right px-3 py-2 font-semibold text-gray-600">SL</th>
+                                <th className="text-right px-3 py-2 font-semibold text-gray-600">Giá</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {orderDetail.items.map((it: any, idx: number) => (
+                                <tr key={idx} className="border-t border-gray-200">
+                                  <td className="px-3 py-2 text-gray-900">
+                                    {it.serviceName || it.service?.name || `Service #${it.serviceId || it.service_id || ''}`}
+                                  </td>
+                                  <td className="px-3 py-2 text-right text-gray-700">{it.quantity ?? it.qty ?? 1}</td>
+                                  <td className="px-3 py-2 text-right text-gray-900 font-medium">
+                                    {it.lineTotal ?? it.line_total ?? it.unitPrice ?? it.unit_price ?? ''}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
+                      {(orderDetail.totalAmount ?? orderDetail.total_amount) && (
+                        <div className="flex items-center justify-between pt-2 border-t border-gray-200">
+                          <div className="text-sm font-semibold text-gray-700">Tổng tiền</div>
+                          <div className="text-sm font-bold text-gray-900">{orderDetail.totalAmount ?? orderDetail.total_amount}</div>
+                        </div>
+                      )}
+
+                      {orderDetail.note && (
+                        <div className="pt-2 border-t border-gray-200">
+                          <div className="text-xs font-semibold text-gray-500 mb-1">Ghi chú</div>
+                          <div className="text-sm text-gray-800 whitespace-pre-line">{orderDetail.note}</div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {!orderDetailLoading && !orderDetailError && !orderDetail && (
+                    <div className="mt-3 text-sm text-gray-500">Chưa có dữ liệu đơn.</div>
+                  )}
+                </div>
               )}
+
           </div>
             )
           })()}
@@ -800,6 +1153,17 @@ export default function TasksPage() {
                       </option>
                     ))}
                   </select>
+                  {edit.assignedTo && (() => {
+                    const selectedStaff = staffProfiles.find((s: any) => Number(s.id) === edit.assignedTo)
+                    if (selectedStaff?.department) {
+                      return (
+                        <div className="mt-1 text-xs text-gray-500">
+                          Phòng ban: <span className="font-medium">{selectedStaff.department}</span>
+                        </div>
+                      )
+                    }
+                    return null
+                  })()}
                   {fieldErrors.assignedTo && (
                     <div className="mt-1 text-sm font-medium text-red-600">{fieldErrors.assignedTo}</div>
                   )}
@@ -873,9 +1237,9 @@ export default function TasksPage() {
                     <div className="mt-1 text-sm font-medium text-red-600">{fieldErrors.status}</div>
                   )}
             </div>
-            <div>
+            <div className="sm:col-span-2">
                   <label className="block text-sm font-medium text-gray-700 mb-1">Mô tả</label>
-                  <Input
+                  <textarea
                     key={`description-${edit.id || 'new'}`}
                     value={edit.description}
                     onChange={(e) => {
@@ -885,7 +1249,8 @@ export default function TasksPage() {
                       }
                     }}
                     placeholder="Nhập mô tả công việc (tùy chọn)"
-                    className={`w-full ${fieldErrors.description ? 'border-red-500 focus:ring-red-500' : ''}`}
+                    rows={4}
+                    className={`w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none ${fieldErrors.description ? 'border-red-500 focus:ring-red-500' : ''}`}
                   />
                   {fieldErrors.description && (
                     <div className="mt-1 text-sm font-medium text-red-600">{fieldErrors.description}</div>

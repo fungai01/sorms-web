@@ -82,7 +82,7 @@ function LineChart({ labels, values, color = "#2563eb", height = 280, title, uni
           <div className="grid grid-cols-3 gap-4">
             <div className="bg-blue-50 rounded-lg p-3">
               <div className="text-xs text-gray-600 mb-1">Tổng</div>
-              <div className="text-xl font-bold text-blue-600">{total.toLocaleString('vi-VN')}{unit}</div>
+              <div className="text-xl font-bold ">{total.toLocaleString('vi-VN')}{unit}</div>
             </div>
             <div className="bg-green-50 rounded-lg p-3">
               <div className="text-xs text-gray-600 mb-1">Trung bình</div>
@@ -208,7 +208,7 @@ function BarChart({ labels, values, color = "#10b981", height = 280, title, unit
             </div>
             <div className="bg-blue-50 rounded-lg p-3">
               <div className="text-xs text-gray-600 mb-1">Trung bình</div>
-              <div className="text-xl font-bold text-blue-600">{Math.round(avg).toLocaleString('vi-VN')}{unit}</div>
+              <div className="text-xl font-bold ">{Math.round(avg).toLocaleString('vi-VN')}{unit}</div>
             </div>
             <div className="bg-purple-50 rounded-lg p-3">
               <div className="text-xs text-gray-600 mb-1">Cao nhất</div>
@@ -458,10 +458,11 @@ export default function ReportsPage() {
     staffRevenues: [] 
   })
   const [loading, setLoading] = useState(false)
-  const [activeTab, setActiveTab] = useState<'overview'|'revenue'|'bookings'|'services'|'tasks'|'staff'>('overview')
+  const [activeTab, setActiveTab] = useState<'overview'|'revenue'|'bookings'|'services'|'tasks'|'staff'|'rooms'>('overview')
   const [viewMode, setViewMode] = useState<'table'|'chart'>('table')
   const [dateFrom, setDateFrom] = useState("")
   const [dateTo, setDateTo] = useState("")
+  const [roomQuery, setRoomQuery] = useState("")
   const [bookingStatus, setBookingStatus] = useState<string>('ALL')
   const [serviceStatus, setServiceStatus] = useState<string>('ALL')
   const [taskStatus, setTaskStatus] = useState<string>('ALL')
@@ -664,7 +665,7 @@ export default function ReportsPage() {
     <div className="px-6 pt-4 pb-6">
       <div className="max-w-7xl mx-auto space-y-6">
       {/* Header */}
-        <div className="bg-white shadow-sm border border-gray-200 rounded-2xl overflow-hidden">
+        <div className="shadow-sm border border-gray-200 rounded-2xl overflow-hidden" style={{ backgroundColor: '#dcebff' }}>
           <div className="border-b border-gray-200/50 px-6 py-4">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -700,21 +701,21 @@ export default function ReportsPage() {
 
         {/* Summary Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
+          <div className="rounded-xl border border-gray-200 p-6 shadow-sm" style={{ backgroundColor: '#f4f8ff' }}>
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-gray-600">Tổng đặt phòng</p>
                 <p className="text-3xl font-bold text-gray-900 mt-2">{data?.summary?.totalBookings ?? 0}</p>
             </div>
-              <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
-                <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div className="w-12 h-12 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#f4f8ff' }}>
+                <svg className="w-6 h-6" style={{ color: '#0277b0' }}  fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                     </svg>
             </div>
               </div>
           </div>
 
-          <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
+          <div className="rounded-xl border border-gray-200 p-6 shadow-sm" style={{ backgroundColor: '#f4f8ff' }}>
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-gray-600">Doanh thu</p>
@@ -722,36 +723,36 @@ export default function ReportsPage() {
                   {(data?.summary?.totalRevenue ?? 0).toLocaleString('vi-VN')}₫
                 </p>
               </div>
-              <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
-                <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div className="w-12 h-12 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#f4f8ff' }}>
+                <svg className="w-6 h-6" style={{ color: '#0277b0' }}  fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                   </div>
                 </div>
               </div>
 
-          <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
+          <div className="rounded-xl border border-gray-200 p-6 shadow-sm" style={{ backgroundColor: '#f4f8ff' }}>
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-gray-600">Số dịch vụ</p>
                 <p className="text-3xl font-bold text-gray-900 mt-2">{data?.summary?.totalServices ?? 0}</p>
             </div>
-              <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
-                <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div className="w-12 h-12 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#f4f8ff' }}>
+                <svg className="w-6 h-6" style={{ color: '#0277b0' }}  fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
                 </svg>
           </div>
               </div>
             </div>
 
-          <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
+          <div className="rounded-xl border border-gray-200 p-6 shadow-sm" style={{ backgroundColor: '#f4f8ff' }}>
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-gray-600">Công việc mở</p>
                 <p className="text-3xl font-bold text-gray-900 mt-2">{data?.summary?.openTasks ?? 0}</p>
               </div>
-              <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
-                <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div className="w-12 h-12 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#f4f8ff' }}>
+                <svg className="w-6 h-6" style={{ color: '#0277b0' }}  fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
                 </svg>
             </div>
@@ -846,7 +847,7 @@ export default function ReportsPage() {
                   (activeTab === 'staff' && data.staffRevenues.length > 0) ||
                   (activeTab === 'overview' && filtered.length > 0) ||
                   (activeTab === 'revenue' && serviceRows.length > 0)) && (
-                  <div className="px-3 py-1.5 bg-blue-100 text-blue-700 rounded-lg text-sm font-semibold">
+                  <div className="px-3 py-1.5  text-blue-700 rounded-lg text-sm font-semibold">
                     {activeTab === 'bookings' && `${bookingRows.length} đặt phòng`}
                     {activeTab === 'services' && `${serviceRows.length} dịch vụ`}
                     {activeTab === 'tasks' && `${taskRows.length} công việc`}
@@ -924,7 +925,7 @@ export default function ReportsPage() {
                                   b.status === 'APPROVED' ? 'bg-green-100 text-green-800' :
                                   b.status === 'PENDING' ? 'bg-yellow-100 text-yellow-800' :
                                   b.status === 'CANCELLED' || b.status === 'REJECTED' ? 'bg-red-100 text-red-800' :
-                                  'bg-blue-100 text-blue-800'
+                                  ' text-blue-800'
                                 }`}>
                                   {b.status}
                                 </span>
@@ -1001,7 +1002,7 @@ export default function ReportsPage() {
                                   o.status === 'COMPLETED' ? 'bg-green-100 text-green-800' :
                                   o.status === 'PENDING' ? 'bg-yellow-100 text-yellow-800' :
                                   o.status === 'CANCELLED' ? 'bg-red-100 text-red-800' :
-                                  'bg-blue-100 text-blue-800'
+                                  ' text-blue-800'
                                 }`}>
                                   {o.status || '—'}
                                 </span>
@@ -1198,7 +1199,7 @@ export default function ReportsPage() {
                               <td className="px-4 py-3 text-center text-gray-700">{i.date}</td>
                               <td className="px-4 py-3 text-center">
                                 <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                                  i.type === 'BOOKING' ? 'bg-blue-100 text-blue-800' :
+                                  i.type === 'BOOKING' ? ' text-blue-800' :
                                   i.type === 'SERVICE' ? 'bg-green-100 text-green-800' :
                                   i.type === 'PAYMENT' ? 'bg-purple-100 text-purple-800' :
                                   'bg-gray-100 text-gray-800'

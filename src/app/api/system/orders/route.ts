@@ -56,7 +56,8 @@ export async function GET(req: NextRequest) {
       if (Number.isNaN(idNum)) return NextResponse.json({ error: 'Invalid orderId' }, { status: 400 })
       const auth = getAuthorizationHeader(req)
       const options: RequestInit = auth ? { headers: { Authorization: auth } } : {}
-      const response = await apiClient.getServiceOrder(idNum)
+      // apiClient chưa có getServiceOrder(), nên gọi trực tiếp endpoint /orders/{id}
+      const response = await apiClient.get(`/orders/${idNum}`, options)
       if (!response.success) {
         return NextResponse.json({ error: response.error || 'Request failed' }, { status: 500 })
       }
