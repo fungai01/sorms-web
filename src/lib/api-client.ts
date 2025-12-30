@@ -871,6 +871,10 @@ class ApiClient {
   }
 
   // AI Face Recognition
+  async getUserFaceImages(userId: string) {
+    return this.get(`/ai/recognition/faces/${userId}/images`)
+  }
+
   async getUserFaceInfo(userId: string) {
     return this.get(`/ai/recognition/faces/${userId}`)
   }

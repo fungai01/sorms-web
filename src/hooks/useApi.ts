@@ -205,8 +205,8 @@ export function usePaymentStats() {
 }
 
 // Staff profiles
-export function useStaffProfiles() {
-  return useList('/api/system/staff-profiles')
+export function useStaffProfiles(keyOverride?: string | null) {
+  return useList(keyOverride === undefined ? '/api/system/staff-profiles' : keyOverride)
 }
 
 export function useStaffProfilesFiltered(status?: string, department?: string) {

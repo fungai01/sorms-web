@@ -1,1146 +1,2280 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Table, THead, TBody } from "@/components/ui/Table";
-import { useBookings, useServiceOrders, useStaffTasks } from "@/hooks/useApi";
-import { authFetch } from "@/lib/http";
+import Button from "@/components/ui/Button";
+import Badge from "@/components/ui/Badge";
+import { useBookings, useRooms, useServiceOrders, useUsers, useStaffProfiles } from "@/hooks/useApi";
+import type ExcelJS from "exceljs";
 
-type ReportItem = {
-  id: number
-  date: string
-  type: 'BOOKING' | 'PAYMENT' | 'SERVICE' | 'TASK'
-  title: string
-  amount?: number
-  count?: number
+type UiBookingStatus = "ALL" | "PENDING" | "APPROVED" | "CHECKED_IN" | "CHECKED_OUT";
+
+type RoomReportRow = {
+  roomKey: string;
+  roomName: string;
+  status: "Phòng trống" | "Có người sử dụng" | "Bảo trì" | "Khác";
+  bookingCount: number;
+  services: any[];
+  totalServiceCount: number;
+  staff: string[];
+  bookingDates: string[];
+  totalGuests: number;
+  paidAmount: number;
+  dueAmount: number;
+  revenue: number;
+  notes: string[];
+  bookings: any[];
+};
+
+function normalizeDate(iso?: string): string {
+  if (!iso) return "";
+  return iso.slice(0, 10);
 }
 
-type StaffRevenue = {
-  staffId: number
-  staffName: string
-  totalAmount: number
-  orderCount: number
+function formatCurrencyVnd(v: number) {
+  return `${Math.max(0, Math.round(v)).toLocaleString("vi-VN")}₫`;
 }
 
-type ReportResponse = {
-  summary: {
-    totalBookings: number
-    totalRevenue: number
-    totalServices: number
-    openTasks: number
+// Utility: Extract booking code
+function getBookingCode(booking: any): string {
+  return booking.code || (booking.id != null ? `#${booking.id}` : "—");
+}
+
+// Utility: Extract service order code
+function getServiceOrderCode(so: any): string {
+  return so.code || so.orderCode || so.id || "—";
+}
+
+// Utility: Extract service names from items
+function getServiceNames(items: any[]): string {
+  if (!Array.isArray(items) || items.length === 0) return "";
+  return items
+    .map((it: any) => it.name || it.serviceName || it.service?.name || "")
+    .filter(Boolean)
+    .join(", ");
+}
+
+// Utility: Calculate service order financials
+function calculateServiceOrderFinancials(so: any): {
+  total: number;
+  paid: number;
+  due: number;
+  isPaid: boolean;
+} {
+  const total = getNumberValue(so, "totalAmount", "total_amount", "totalPrice", "total_price");
+  const paid = getNumberValue(so, "paidAmount", "paid_amount", "amountPaid", "amount_paid");
+  const due = Math.max(0, total - paid);
+  const isPaid = due === 0 && total > 0;
+  return { total, paid, due, isPaid };
+}
+
+// Excel Styles Factory
+async function createExcelStyles() {
+  const ExcelJSImport = await import("exceljs");
+  const ExcelJS = ExcelJSImport.default;
+
+  const titleStyle: Partial<ExcelJS.Style> = {
+    font: { name: 'Arial', size: 16, bold: true, color: { argb: 'FF1F2937' } },
+    alignment: { horizontal: 'center', vertical: 'middle' },
+    fill: {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFE0F2FE' }
+    }
+  };
+
+  const sectionTitleStyle: Partial<ExcelJS.Style> = {
+    font: { name: 'Arial', size: 14, bold: true, color: { argb: 'FF1F2937' } },
+    alignment: { horizontal: 'center', vertical: 'middle' },
+    fill: {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFF3F4F6' }
+    }
+  };
+
+  const headerStyle: Partial<ExcelJS.Style> = {
+    font: { name: 'Arial', size: 12, bold: true, color: { argb: 'FFFFFFFF' } },
+    alignment: { horizontal: 'center', vertical: 'middle', wrapText: true },
+    fill: {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF0EA5E9' }
+    },
+    border: {
+      top: { style: 'thin', color: { argb: 'FF000000' } },
+      left: { style: 'thin', color: { argb: 'FF000000' } },
+      bottom: { style: 'thin', color: { argb: 'FF000000' } },
+      right: { style: 'thin', color: { argb: 'FF000000' } }
+    }
+  };
+
+  const dataStyle: Partial<ExcelJS.Style> = {
+    font: { name: 'Arial', size: 11 },
+    alignment: { vertical: 'middle' },
+    border: {
+      top: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+      left: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+      bottom: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+      right: { style: 'thin', color: { argb: 'FFD1D5DB' } }
+    }
+  };
+
+  const totalRowStyle: Partial<ExcelJS.Style> = {
+    font: { name: 'Arial', size: 12, bold: true, color: { argb: 'FF065F46' } },
+    alignment: { horizontal: 'right', vertical: 'middle' },
+    fill: {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFF0FDF4' }
+    },
+    border: {
+      top: { style: 'medium', color: { argb: 'FF10B981' } },
+      left: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+      bottom: { style: 'medium', color: { argb: 'FF10B981' } },
+      right: { style: 'thin', color: { argb: 'FFD1D5DB' } }
+    }
+  };
+
+  return { titleStyle, sectionTitleStyle, headerStyle, dataStyle, totalRowStyle };
+}
+
+// Excel Helper: Add header row
+function addExcelHeader(
+  worksheet: ExcelJS.Worksheet,
+  row: number,
+  title: string,
+  colSpan: number,
+  style: Partial<ExcelJS.Style>
+): number {
+  const cell = worksheet.getCell(row, 1);
+  cell.value = title;
+  cell.style = style;
+  worksheet.mergeCells(row, 1, row, colSpan);
+  return row + 1;
+}
+
+// Excel Helper: Add total row
+function addExcelTotalRow(
+  worksheet: ExcelJS.Worksheet,
+  row: number,
+  totals: { amount: number; paid: number; due: number },
+  labelColSpan: number,
+  styles: Awaited<ReturnType<typeof createExcelStyles>>
+): void {
+  worksheet.mergeCells(row, 1, row, labelColSpan);
+  const totalLabelCell = worksheet.getCell(row, 1);
+  totalLabelCell.value = 'TỔNG CỘNG:';
+  totalLabelCell.style = { ...styles.totalRowStyle, alignment: { horizontal: 'right', vertical: 'middle' } };
+
+  const totalAmountCell = worksheet.getCell(row, labelColSpan + 1);
+  totalAmountCell.value = totals.amount;
+  totalAmountCell.numFmt = '#,##0"₫"';
+  totalAmountCell.style = styles.totalRowStyle;
+
+  const totalPaidCell = worksheet.getCell(row, labelColSpan + 2);
+  totalPaidCell.value = totals.paid;
+  totalPaidCell.numFmt = '#,##0"₫"';
+  totalPaidCell.style = styles.totalRowStyle;
+
+  const totalDueCell = worksheet.getCell(row, labelColSpan + 3);
+  totalDueCell.value = totals.due;
+  totalDueCell.numFmt = '#,##0"₫"';
+  totalDueCell.style = { ...styles.totalRowStyle, font: { ...styles.totalRowStyle.font, color: { argb: 'FF000000' } } };
+  if (totals.due > 0) {
+    totalDueCell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFFFF1F2' }
+    };
   }
-  items: ReportItem[]
-  staffRevenues: StaffRevenue[]
 }
 
-// Professional Chart Components
-function LineChart({ labels, values, color = "#2563eb", height = 280, title, unit = "" }: { 
-  labels: string[], 
-  values: number[], 
-  color?: string,
-  height?: number,
-  title?: string,
-  unit?: string
-}) {
-  if (!values.length || values.every(v => v === 0)) {
+// Excel Helper: Download file
+async function downloadExcelFile(workbook: ExcelJS.Workbook, filename: string): Promise<void> {
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const link = document.createElement('a');
+  const url = URL.createObjectURL(blob);
+  link.setAttribute('href', url);
+  link.setAttribute('download', filename);
+  link.style.visibility = 'hidden';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+// Filter Utilities
+function filterBookingsByDate(bookings: any[], dateFrom?: string, dateTo?: string): any[] {
+  if (!dateFrom && !dateTo) return bookings;
+  const from = dateFrom || "0000-00-00";
+  const to = dateTo || "9999-12-31";
+  return bookings.filter((b: any) => {
+    const bookingDate = normalizeDate(b.createdDate || b.created_at || b.checkinDate);
+    if (!bookingDate) return true;
+    return bookingDate >= from && bookingDate <= to;
+  });
+}
+
+function filterBookingsByStatus(bookings: any[], statusFilter: string): any[] {
+  if (statusFilter === "ALL") return bookings;
+  return bookings.filter((b: any) => {
+    const s = bookingStatusToLabel(b.status);
     return (
-      <div className="flex items-center justify-center h-64 text-gray-400">
-        <div className="text-center">
-          <p className="text-sm">Không có dữ liệu</p>
-        </div>
-      </div>
+      (statusFilter === "CHECKED_IN" && s === "Đã check-in") ||
+      (statusFilter === "CHECKED_OUT" && s === "Check-out") ||
+      (statusFilter === "PENDING" && s === "Chờ duyệt") ||
+      (statusFilter === "OTHER" && s === "Khác")
+    );
+  });
+}
+
+function filterBookingsBySearch(bookings: any[], search: string): any[] {
+  if (!search.trim()) return bookings;
+  const searchLower = search.toLowerCase().trim();
+  return bookings.filter((b: any) => {
+    const code = (getBookingCode(b) || "").toLowerCase();
+    const guestName = (
+      b.guestName ??
+      b.guest_name ??
+      b.customerName ??
+      b.customer_name ??
+      b.guest?.name ??
+      ""
     )
+      .toString()
+      .toLowerCase();
+    const note = (
+      (b.note ?? b.notes ?? b.specialRequest ?? b.special_request ?? "")?.toString() || ""
+    ).toLowerCase();
+    return (
+      code.includes(searchLower) ||
+      guestName.includes(searchLower) ||
+      note.includes(searchLower)
+    );
+  });
+}
+
+// Helper: Escape CSV values để tránh lệch định dạng
+function escapeCsvValue(value: string | number): string {
+  const str = String(value || "");
+  // Nếu có dấu phẩy, dấu ngoặc kép, hoặc xuống dòng, cần bọc trong dấu ngoặc kép
+  if (str.includes(",") || str.includes('"') || str.includes("\n") || str.includes("\r")) {
+    // Escape dấu ngoặc kép bằng cách nhân đôi
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+// Helper: Lấy tên nhân viên từ service order
+function getStaffNameFromServiceOrder(
+  so: any,
+  userNameMap: Record<string | number, string>,
+  staffAccountIdMap: Record<string | number, string>
+): string {
+  // Thử lấy tên trực tiếp từ các field
+  const directName =
+    so.staffName ??
+    so.staff_name ??
+    so.employeeName ??
+    so.employee_name ??
+    so.staff?.name ??
+    so.staff?.fullName ??
+    so.staff?.full_name ??
+    so.createdBy?.name ??
+    so.createdBy?.fullName ??
+    so.createdBy?.full_name ??
+    so.staffProfile?.jobTitle ??
+    so.requestedBy?.name ??
+    so.requestedBy?.fullName ??
+    so.requestedBy?.full_name ??
+    "";
+
+  if (directName) return directName;
+
+  // Lấy các ID có thể
+  const staffId =
+    so.staffId ??
+    so.staff_id ??
+    so.employeeId ??
+    so.employee_id ??
+    so.assignedTo ??
+    so.assigned_to ??
+    so.staff?.id ??
+    so.staff?.userId ??
+    so.createdById ??
+    so.created_by_id ??
+    so.createdBy?.id ??
+    so.requestedBy?.id ??
+    so.requested_by ??
+    so.userId ??
+    so.requestedBy;
+
+  const staffAccountId =
+    so.staffProfile?.accountId ??
+    so.staffProfile?.account_id ??
+    so.staff?.accountId ??
+    so.staff?.account_id;
+
+  // Map từ ID
+  if (staffId != null) {
+    if (userNameMap[String(staffId)]) {
+      return userNameMap[String(staffId)];
+    }
+    return `ID: ${staffId}`;
   }
 
-  const max = Math.max(...values, 1)
-  const min = Math.min(...values.filter(v => v > 0), 0)
-  const range = max - min || 1
-  const width = 900
-  const padding = 60
-  const total = values.reduce((a, b) => a + b, 0)
-  const avg = total / values.length
+  if (staffAccountId != null) {
+    if (userNameMap[String(staffAccountId)]) {
+      return userNameMap[String(staffAccountId)];
+    }
+    if (staffAccountIdMap[String(staffAccountId)]) {
+      return staffAccountIdMap[String(staffAccountId)];
+    }
+    return `ID: ${staffAccountId}`;
+  }
 
-  const points = values.map((v, i) => {
-    const x = padding + (i / (values.length - 1 || 1)) * (width - 2 * padding)
-    const y = height - padding - ((v - min) / range) * (height - 2 * padding)
-    return { x, y, value: v, label: labels[i] }
-  })
+  return "—";
+}
 
-  const pathData = points.map((p, i) => 
-    i === 0 ? `M ${p.x},${p.y}` : `L ${p.x},${p.y}`
-  ).join(' ')
+// Helper: Lấy giá trị số từ object với nhiều field names
+function getNumberValue(obj: any, ...fieldNames: string[]): number {
+  for (const field of fieldNames) {
+    const value = obj?.[field];
+    if (value != null) {
+      const num = Number(value);
+      if (Number.isFinite(num)) return num;
+    }
+  }
+  return 0;
+}
 
-  // Area under line
-  const areaPath = pathData + ` L ${points[points.length - 1].x} ${height - padding} L ${points[0].x} ${height - padding} Z`
+// Helper: Lấy giá trị string từ object với nhiều field names
+function getStringValue(obj: any, ...fieldNames: string[]): string {
+  for (const field of fieldNames) {
+    const value = obj?.[field];
+    if (value != null) return String(value);
+  }
+  return "";
+}
 
-  return (
-    <div className="w-full bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
-      {/* Header with stats */}
-      {title && (
-        <div className="mb-6 pb-4 border-b border-gray-200">
-          <h3 className="text-lg font-bold text-gray-900 mb-3">{title}</h3>
-          <div className="grid grid-cols-3 gap-4">
-            <div className="bg-blue-50 rounded-lg p-3">
-              <div className="text-xs text-gray-600 mb-1">Tổng</div>
-              <div className="text-xl font-bold ">{total.toLocaleString('vi-VN')}{unit}</div>
-            </div>
-            <div className="bg-green-50 rounded-lg p-3">
-              <div className="text-xs text-gray-600 mb-1">Trung bình</div>
-              <div className="text-xl font-bold text-green-600">{Math.round(avg).toLocaleString('vi-VN')}{unit}</div>
-            </div>
-            <div className="bg-purple-50 rounded-lg p-3">
-              <div className="text-xs text-gray-600 mb-1">Cao nhất</div>
-              <div className="text-xl font-bold text-purple-600">{max.toLocaleString('vi-VN')}{unit}</div>
-            </div>
-          </div>
-        </div>
-      )}
+// Helper: Escape HTML để tránh lỗi định dạng và XSS
+function escapeHtml(text: string | number): string {
+  const str = String(text || "");
+  const map: Record<string, string> = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#039;',
+  };
+  return str.replace(/[&<>"']/g, (m) => map[m]);
+}
+
+// Helper: Export booking details to Excel với định dạng đẹp
+async function exportBookingToExcel(booking: any, serviceOrders: any[], userNameMap: Record<string | number, string>, staffAccountIdMap: Record<string | number, string> = {}) {
+  const bookingCode = getBookingCode(booking);
+  const checkin = normalizeDate(booking.checkinDate);
+  const checkout = normalizeDate(booking.checkoutDate);
+  const bookerName = booking.userId ? userNameMap[String(booking.userId)] || "" : "";
+  
+  const { default: ExcelJS } = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet(`Báo cáo Booking ${bookingCode}`);
+  const styles = await createExcelStyles();
+  
+  let currentRow = 1;
+  
+  // Tiêu đề chính
+  currentRow = addExcelHeader(worksheet, currentRow, `BÁO CÁO BOOKING ${bookingCode}`, 8, styles.titleStyle);
+  currentRow += 1;
+  
+  // Thông tin Booking
+  currentRow = addExcelHeader(worksheet, currentRow, 'Thông tin Booking', 2, styles.sectionTitleStyle);
+  
+  const infoLabels = ['Mã booking', 'Trạng thái', 'Ngày check-in', 'Ngày check-out', 'Số lượng khách', 'Người đặt', 'Ghi chú'];
+  const infoValues = [
+    bookingCode,
+    bookingStatusToLabel(booking.status),
+    checkin || "—",
+    checkout || "—",
+    getNumberValue(booking, "numGuests", "num_guests") || 1,
+    bookerName,
+    getStringValue(booking, "note", "notes", "specialRequest", "special_request") || "—"
+  ];
+  
+  infoLabels.forEach((label, idx) => {
+    const labelCell = worksheet.getCell(currentRow, 1);
+    labelCell.value = label + ':';
+    labelCell.style = { 
+      ...styles.dataStyle, 
+      font: { name: 'Arial', size: 11, bold: true },
+      fill: {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFFFFBEB' }
+      }
+    };
+    
+    const valueCell = worksheet.getCell(currentRow, 2);
+    valueCell.value = infoValues[idx];
+    if (typeof infoValues[idx] === 'number') {
+      valueCell.numFmt = '0';
+    }
+    valueCell.style = { 
+      ...styles.dataStyle, 
+      font: { ...styles.dataStyle.font, color: { argb: 'FF000000' } },
+      fill: {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFFFFBEB' }
+      }
+    };
+    currentRow++;
+  });
+  
+  currentRow += 1;
+  
+  // Hóa đơn dịch vụ
+  if (serviceOrders.length > 0) {
+    currentRow = addExcelHeader(worksheet, currentRow, 'Hóa đơn dịch vụ', 8, styles.sectionTitleStyle);
+    
+    // Header
+    const serviceHeaders = ['Mã hóa đơn', 'Ngày tạo', 'Dịch vụ', 'Nhân viên', 'Trạng thái', 'Tổng tiền', 'Đã thu', 'Còn thiếu'];
+    serviceHeaders.forEach((header, col) => {
+      const cell = worksheet.getCell(currentRow, col + 1);
+      cell.value = header;
+      cell.style = styles.headerStyle;
+    });
+    currentRow++;
+    
+    let totalInvoiceAmount = 0;
+    let totalInvoicePaid = 0;
+    let totalInvoiceDue = 0;
+    
+    serviceOrders.forEach((so: any) => {
+      const soCode = getServiceOrderCode(so);
+      const soCreated = normalizeDate(so.createdDate || so.created_at || so.createdAt);
+      const financials = calculateServiceOrderFinancials(so);
+      const items = so.items || so.serviceItems || so.lines || [];
+      const serviceNames = getServiceNames(items);
+      const staffName = getStaffNameFromServiceOrder(so, userNameMap, staffAccountIdMap);
       
-      <div className="w-full overflow-x-auto">
-        <svg viewBox={`0 0 ${width} ${height}`} className="w-full" style={{ minHeight: `${height}px` }} preserveAspectRatio="none">
-          {/* Grid lines */}
-          {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
-            const y = padding + ratio * (height - 2 * padding)
-            const value = max - (ratio * range)
-            return (
-              <g key={ratio}>
-                <line x1={padding} y1={y} x2={width - padding} y2={y} stroke="#e5e7eb" strokeWidth="1" strokeDasharray="4,4" />
-                <text x={padding - 15} y={y + 4} textAnchor="end" fontSize="11" fill="#6b7280" fontWeight="500">
-                  {value.toFixed(0)}
-                </text>
-              </g>
-            )
-          })}
-          
-          {/* Area under line */}
-          <path
-            d={areaPath}
-            fill={color}
-            opacity="0.1"
-          />
-          
-          {/* Line */}
-          <path
-            d={pathData}
-            fill="none"
-            stroke={color}
-            strokeWidth="3"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="drop-shadow-sm"
-          />
-          
-          {/* Points with hover */}
-          {points.map((p, i) => (
-            <g key={i} className="cursor-pointer group">
-              <circle cx={p.x} cy={p.y} r="6" fill="white" stroke={color} strokeWidth="3" className="group-hover:r-8 transition-all" />
-              <circle cx={p.x} cy={p.y} r="4" fill={color} className="group-hover:opacity-80" />
-              <circle cx={p.x} cy={p.y} r="12" fill={color} opacity="0.1" className="group-hover:opacity-20 transition-opacity" />
-              
-              {/* Tooltip */}
-              <g className="opacity-0 group-hover:opacity-100 transition-opacity">
-                <rect x={p.x - 50} y={p.y - 45} width="100" height="35" rx="6" fill="#1f2937" opacity="0.95" />
-                <text x={p.x} y={p.y - 30} textAnchor="middle" fontSize="10" fill="white" fontWeight="600">
-                  {p.label?.slice(5) || ''}
-                </text>
-                <text x={p.x} y={p.y - 15} textAnchor="middle" fontSize="12" fill="white" fontWeight="bold">
-                  {p.value.toLocaleString('vi-VN')}{unit}
-                </text>
-              </g>
-            </g>
-          ))}
-          
-          {/* X-axis labels */}
-          {labels.map((label, i) => {
-            if (i % Math.ceil(labels.length / 8) !== 0 && i !== labels.length - 1) return null
-            const x = padding + (i / (labels.length - 1 || 1)) * (width - 2 * padding)
-            return (
-              <g key={i}>
-                <line x1={x} y1={height - padding} x2={x} y2={height - padding + 5} stroke="#9ca3af" strokeWidth="2" />
-                <text x={x} y={height - padding + 20} textAnchor="middle" fontSize="11" fill="#6b7280" fontWeight="500">
-                  {label.slice(5)}
-                </text>
-              </g>
-            )
-          })}
-        </svg>
-      </div>
-    </div>
-  )
-}
-
-function BarChart({ labels, values, color = "#10b981", height = 280, title, unit = "" }: { 
-  labels: string[], 
-  values: number[], 
-  color?: string,
-  height?: number,
-  title?: string,
-  unit?: string
-}) {
-  if (!values.length || values.every(v => v === 0)) {
-    return (
-      <div className="flex items-center justify-center h-64 text-gray-400">
-        <div className="text-center">
-       
-          <p className="text-sm">Không có dữ liệu</p>
-        </div>
-      </div>
-    )
-  }
-
-  const max = Math.max(...values, 1)
-  const total = values.reduce((a, b) => a + b, 0)
-  const avg = total / values.length
-  const barCount = Math.min(values.length, 15)
-  const displayedValues = values.slice(0, barCount)
-  const displayedLabels = labels.slice(0, barCount)
-
-  return (
-    <div className="w-full bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
-      {/* Header with stats */}
-      {title && (
-        <div className="mb-6 pb-4 border-b border-gray-200">
-          <h3 className="text-lg font-bold text-gray-900 mb-3">{title}</h3>
-          <div className="grid grid-cols-3 gap-4">
-            <div className="bg-green-50 rounded-lg p-3">
-              <div className="text-xs text-gray-600 mb-1">Tổng</div>
-              <div className="text-xl font-bold text-green-600">{total.toLocaleString('vi-VN')}{unit}</div>
-            </div>
-            <div className="bg-blue-50 rounded-lg p-3">
-              <div className="text-xs text-gray-600 mb-1">Trung bình</div>
-              <div className="text-xl font-bold ">{Math.round(avg).toLocaleString('vi-VN')}{unit}</div>
-            </div>
-            <div className="bg-purple-50 rounded-lg p-3">
-              <div className="text-xs text-gray-600 mb-1">Cao nhất</div>
-              <div className="text-xl font-bold text-purple-600">{max.toLocaleString('vi-VN')}{unit}</div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div className="w-full overflow-x-auto">
-        <div className="flex items-end justify-between gap-2 px-2" style={{ minHeight: `${height}px` }}>
-          {displayedValues.map((v, i) => {
-            const barHeight = (v / max) * 100
-            const isMax = v === max
-            return (
-              <div key={i} className="flex-1 flex flex-col items-center group relative min-w-[40px]">
-                <div className="w-full h-full flex flex-col justify-end relative">
-                  {/* Value label on top */}
-                  {v > 0 && (
-                    <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
-                      <div className="bg-gray-900 text-white text-xs px-2 py-1 rounded-lg whitespace-nowrap shadow-lg font-semibold">
-                        {v.toLocaleString('vi-VN')}{unit}
-                      </div>
-                      <div className="w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-900 mx-auto"></div>
-                    </div>
-                  )}
-                  
-                  {/* Bar */}
-                  <div
-                    className="w-full rounded-t-lg transition-all duration-300 hover:opacity-90 cursor-pointer relative group/bar shadow-sm"
-                    style={{
-                      height: `${Math.max(barHeight, 3)}%`,
-                      backgroundColor: isMax ? color : color,
-                      background: isMax 
-                        ? `linear-gradient(to top, ${color}, ${color}dd)` 
-                        : `linear-gradient(to top, ${color}dd, ${color}aa)`,
-                      minHeight: v > 0 ? '8px' : '0',
-                      borderTopLeftRadius: '8px',
-                      borderTopRightRadius: '8px',
-                    }}
-                  >
-                    {/* Gradient overlay on hover */}
-                    <div className="absolute inset-0 bg-white opacity-0 group-hover/bar:opacity-20 rounded-t-lg transition-opacity"></div>
-                    
-                    {/* Percentage indicator */}
-                    {v > 0 && barHeight > 10 && (
-                      <div className="absolute inset-0 flex items-center justify-center">
-                        <span className="text-xs font-bold text-white opacity-0 group-hover/bar:opacity-100 transition-opacity drop-shadow-md">
-                          {((v / max) * 100).toFixed(0)}%
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-                
-                {/* X-axis label */}
-                <div className="text-xs text-gray-600 mt-3 text-center truncate w-full font-medium" style={{ fontSize: '11px' }}>
-                  {displayedLabels[i]?.slice(5) || ''}
-                </div>
-              </div>
-            )
-          })}
-        </div>
+      totalInvoiceAmount += financials.total;
+      totalInvoicePaid += financials.paid;
+      totalInvoiceDue += financials.due;
+      
+      const rowData = [
+        soCode,
+        soCreated || "—",
+        serviceNames,
+        staffName,
+        financials.isPaid ? "Đã thanh toán" : financials.due > 0 ? "Chưa thanh toán" : "—",
+        financials.total,
+        financials.paid,
+        financials.due
+      ];
+      
+      rowData.forEach((value, col) => {
+        const cell = worksheet.getCell(currentRow, col + 1);
+        cell.value = value;
+        cell.style = styles.dataStyle;
         
-        {/* Y-axis grid lines */}
-        <div className="relative -mt-[280px] h-[280px] pointer-events-none">
-          {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
-            const value = max - (ratio * max)
-            return (
-              <div key={ratio} className="absolute left-0 right-0 border-t border-dashed border-gray-200" style={{ bottom: `${ratio * 100}%` }}>
-                <span className="absolute -left-12 text-xs text-gray-500 font-medium">{value.toFixed(0)}</span>
-              </div>
-            )
-          })}
-        </div>
-      </div>
-    </div>
-  )
+        if (col >= 0 && col <= 4) {
+          cell.alignment = { ...cell.alignment, horizontal: 'center' };
+        }
+        
+        if (col >= 5 && col <= 7) { 
+          cell.numFmt = '#,##0"₫"';
+          cell.alignment = { ...cell.alignment, horizontal: 'right' };
+        }
+      });
+      currentRow++;
+    });
+    
+    addExcelTotalRow(worksheet, currentRow, {
+      amount: totalInvoiceAmount,
+      paid: totalInvoicePaid,
+      due: totalInvoiceDue
+    }, 5, styles);
+  }
+  
+  worksheet.columns.forEach((column, index) => {
+    if (index === 0) column.width = 18; 
+    else if (index === 1) column.width = 12; 
+    else if (index === 2) column.width = 30; 
+    else if (index === 3) column.width = 20; 
+    else if (index === 4) column.width = 14; 
+    else if (index >= 5 && index <= 9) column.width = 15; 
+    else column.width = 15;
+  });
+  
+  await downloadExcelFile(workbook, `booking-${bookingCode}-${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 
-function PieChart({ data, title }: { data: { label: string, value: number, color: string }[], title?: string }) {
-  if (!data.length || data.every(d => d.value === 0)) {
-    return (
-      <div className="flex items-center justify-center h-64 text-gray-400">
-        <div className="text-center">
-         
-          <p className="text-sm">Không có dữ liệu</p>
+// Helper: Export service order to PDF
+async function exportServiceOrderToPDF(so: any, userNameMap: Record<string | number, string>, staffAccountIdMap: Record<string | number, string> = {}) {
+  const soCode = getServiceOrderCode(so);
+  const soCreated = normalizeDate(so.createdDate || so.created_at || so.createdAt);
+  const financials = calculateServiceOrderFinancials(so);
+  const items = so.items || so.serviceItems || so.lines || [];
+  const serviceNames = getServiceNames(items);
+  const staffName = getStaffNameFromServiceOrder(so, userNameMap, staffAccountIdMap);
+  
+  // Tạo HTML template cho PDF
+  const htmlContent = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <link rel="preconnect" href="https://fonts.googleapis.com">
+      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+      <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+          font-family: 'Inter', 'Arial', 'Helvetica', 'DejaVu Sans', sans-serif;
+          padding: 40px;
+          background: #fff;
+          color: #1f2937;
+          -webkit-font-smoothing: antialiased;
+          -moz-osx-font-smoothing: grayscale;
+          width: 794px;
+          max-width: 794px;
+        }
+        .header {
+          border-bottom: 4px solid #0ea5e9;
+          padding-bottom: 20px;
+          margin-bottom: 30px;
+        }
+        .header h1 {
+          color: #0ea5e9;
+          font-size: 28px;
+          font-weight: bold;
+          margin-bottom: 10px;
+        }
+        .header .invoice-code {
+          color: #6b7280;
+          font-size: 16px;
+        }
+        .info-section {
+          margin-bottom: 25px;
+        }
+        .info-row {
+          display: flex;
+          justify-content: space-between;
+          padding: 12px 0;
+          border-bottom: 1px solid #e5e7eb;
+        }
+        .info-label {
+          font-weight: 600;
+          color: #4b5563;
+          width: 180px;
+        }
+        .info-value {
+          color: #111827;
+          flex: 1;
+          text-align: right;
+        }
+        .status-badge {
+          display: inline-block;
+          padding: 6px 14px;
+          border-radius: 20px;
+          font-size: 12px;
+          font-weight: 600;
+          ${financials.isPaid 
+            ? 'background: #d1fae5; color: #065f46; border: 1px solid #10b981;' 
+            : financials.due > 0 
+              ? 'background: #fef3c7; color: #92400e; border: 1px solid #f59e0b;'
+              : 'background: #f3f4f6; color: #374151; border: 1px solid #9ca3af;'
+          }
+        }
+        .amount-highlight {
+          font-size: 24px;
+          font-weight: bold;
+          color: #059669;
+        }
+        .table-section {
+          margin-top: 30px;
+        }
+        .table-header {
+          background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%);
+          color: white;
+          padding: 15px;
+          border-radius: 8px 8px 0 0;
+          font-weight: 600;
+          font-size: 16px;
+        }
+        table {
+          width: 100%;
+          border-collapse: collapse;
+          margin-top: 0;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        thead {
+          background: #f8fafc;
+        }
+        th {
+          padding: 12px 15px;
+          text-align: left;
+          font-weight: 600;
+          color: #374151;
+          border-bottom: 2px solid #e5e7eb;
+        }
+        td {
+          padding: 12px 15px;
+          border-bottom: 1px solid #e5e7eb;
+          color: #1f2937;
+        }
+        tbody tr:hover {
+          background: #f9fafb;
+        }
+        .text-right {
+          text-align: right;
+        }
+        .text-center {
+          text-align: center;
+        }
+        .total-row {
+          background: #f0fdf4;
+          font-weight: 600;
+          color: #065f46;
+        }
+        .footer {
+          margin-top: 40px;
+          padding-top: 20px;
+          border-top: 2px solid #e5e7eb;
+          text-align: center;
+          color: #6b7280;
+          font-size: 12px;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="header">
+        <h1>HÓA ĐƠN DỊCH VỤ</h1>
+        <div class="invoice-code">Mã hóa đơn: ${escapeHtml(soCode)}</div>
+      </div>
+      
+      <div class="info-section">
+        <div class="info-row">
+          <span class="info-label">Ngày tạo:</span>
+          <span class="info-value">${escapeHtml(soCreated || "—")}</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Trạng thái:</span>
+          <span class="info-value">
+            <span class="status-badge">${escapeHtml(financials.isPaid ? "Đã thanh toán" : financials.due > 0 ? "Chưa thanh toán" : "—")}</span>
+          </span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Nhân viên thực hiện:</span>
+          <span class="info-value">${escapeHtml(staffName)}</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Tổng tiền:</span>
+          <span class="info-value amount-highlight">${escapeHtml(formatCurrencyVnd(financials.total))}</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Đã thu:</span>
+          <span class="info-value" style="color: #059669; font-weight: 600;">${escapeHtml(formatCurrencyVnd(financials.paid))}</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Còn thiếu:</span>
+          <span class="info-value" style="color: ${financials.due > 0 ? '#dc2626' : '#059669'}; font-weight: 600;">${escapeHtml(formatCurrencyVnd(financials.due))}</span>
         </div>
       </div>
-    )
-  }
-
-  const total = data.reduce((sum, d) => sum + d.value, 0)
-  if (total === 0) {
-    return (
-      <div className="flex items-center justify-center h-64 text-gray-400">
-        <p className="text-sm">Không có dữ liệu</p>
+      
+      ${Array.isArray(items) && items.length > 0 ? `
+      <div class="table-section">
+        <div class="table-header">CHI TIẾT DỊCH VỤ</div>
+        <table>
+          <thead>
+            <tr>
+              <th>STT</th>
+              <th>Tên dịch vụ</th>
+              <th class="text-center">Số lượng</th>
+              <th class="text-right">Đơn giá</th>
+              <th class="text-right">Thành tiền</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${items.map((it: any, idx: number) => {
+              const name = it.name || it.serviceName || it.service?.name || "—";
+              const qty = Number(it.qty ?? it.quantity ?? 1) || 1;
+              const price = getNumberValue(it, "unitPrice", "unit_price", "price", "unit_price", "unitPrice");
+              // Tính thành tiền: ưu tiên lấy từ field total, nếu không có thì tính từ price * qty
+              let total = getNumberValue(it, "totalAmount", "total_amount", "totalPrice", "total_price", "lineTotal", "line_total");
+              if (total === 0 && price > 0) {
+                total = price * qty;
+              }
+              return `
+                <tr>
+                  <td>${idx + 1}</td>
+                  <td>${escapeHtml(name)}</td>
+                  <td class="text-center">${escapeHtml(qty)}</td>
+                  <td class="text-right">${escapeHtml(formatCurrencyVnd(price))}</td>
+                  <td class="text-right">${escapeHtml(formatCurrencyVnd(total))}</td>
+                </tr>
+              `;
+            }).join('')}
+            <tr class="total-row">
+              <td colspan="4" class="text-right" style="font-weight: bold;">TỔNG CỘNG:</td>
+              <td class="text-right" style="font-size: 18px;">${escapeHtml(formatCurrencyVnd(financials.total))}</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
-    )
+      ` : `<div style="padding: 20px; background: #f9fafb; border-radius: 8px; text-align: center; color: #6b7280;">
+        ${escapeHtml(serviceNames || "Không có chi tiết dịch vụ")}
+      </div>`}
+      
+      <div class="footer">
+        <p>Hóa đơn được tạo tự động từ hệ thống quản lý</p>
+        <p>Ngày xuất: ${escapeHtml(new Date().toLocaleDateString('vi-VN'))}</p>
+      </div>
+    </body>
+    </html>
+  `;
+  
+  // Tạo iframe để render HTML độc lập
+  const iframe = document.createElement('iframe');
+  iframe.style.position = 'absolute';
+  iframe.style.left = '-9999px';
+  iframe.style.width = '794px';
+  iframe.style.height = '1123px'; // A4 height in pixels at 96 DPI
+  iframe.style.border = 'none';
+  document.body.appendChild(iframe);
+  
+  try {
+    // Viết HTML trực tiếp vào iframe
+    const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
+    if (!iframeDoc) {
+      throw new Error('Cannot access iframe document');
+    }
+    
+    iframeDoc.open();
+    iframeDoc.write(htmlContent);
+    iframeDoc.close();
+    
+    // Đợi font và hình ảnh load xong
+    await new Promise((resolve) => {
+      if (iframeDoc.fonts && iframeDoc.fonts.ready) {
+        iframeDoc.fonts.ready.then(() => setTimeout(resolve, 500));
+      } else {
+        setTimeout(resolve, 1000);
+      }
+    });
+    
+    // Đợi thêm một chút để đảm bảo render hoàn tất
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    
+    const bodyElement = iframeDoc.body;
+    if (!bodyElement) {
+      throw new Error('Cannot find body element');
+    }
+    
+    // Convert HTML to canvas then to PDF
+    const { default: html2canvas } = await import("html2canvas");
+    const canvas = await html2canvas(bodyElement, {
+      scale: 2,
+      useCORS: true,
+      logging: false,
+      width: 794,
+      height: bodyElement.scrollHeight,
+      windowWidth: 794,
+      windowHeight: bodyElement.scrollHeight,
+      backgroundColor: '#ffffff',
+      allowTaint: false,
+    });
+    
+    const imgData = canvas.toDataURL('image/png', 1.0);
+
+    // Lazy-load jsPDF để giảm bundle size (tốt cho LCP)
+    const { default: jsPDF } = await import("jspdf");
+    const pdf = new jsPDF('p', 'mm', 'a4');
+    const imgWidth = 210; // A4 width in mm
+    const pageHeight = 297; // A4 height in mm
+    const imgHeight = (canvas.height * imgWidth) / canvas.width;
+    let heightLeft = imgHeight;
+    let position = 0;
+    
+    pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+    heightLeft -= pageHeight;
+    
+    while (heightLeft >= 0) {
+      position = heightLeft - imgHeight;
+      pdf.addPage();
+      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+      heightLeft -= pageHeight;
+    }
+    
+    pdf.save(`hoadon-${soCode}-${new Date().toISOString().slice(0, 10)}.pdf`);
+  } catch (error) {
+    console.error('Error generating PDF:', error);
+    alert('Có lỗi xảy ra khi tạo PDF. Vui lòng thử lại.');
+    throw error;
+  } finally {
+    document.body.removeChild(iframe);
   }
+}
 
-  let currentAngle = 0
-  const size = 280
-  const radius = size / 2 - 30
-  const centerX = size / 2
-  const centerY = size / 2
+// Helper: Export room report to Excel với định dạng đẹp
+async function exportRoomReportToExcel(room: RoomReportRow, userNameMap: Record<string | number, string>, staffAccountIdMap: Record<string | number, string> = {}) {
+  const { default: ExcelJS } = await import("exceljs");
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet(`Báo cáo phòng ${room.roomName}`);
+  const styles = await createExcelStyles();
+  
+  let currentRow = 1;
+  
+  // Tiêu đề chính
+  currentRow = addExcelHeader(worksheet, currentRow, `BÁO CÁO PHÒNG ${room.roomName}`, 9, styles.titleStyle);
+  currentRow += 1;
+  
+  // Thông tin phòng
+  currentRow = addExcelHeader(worksheet, currentRow, 'Thông tin phòng', 2, styles.sectionTitleStyle);
+  
+  const infoLabels = ['Tên phòng', 'Mã phòng', 'Trạng thái', 'Tổng lượt đặt', 'Tổng số khách', 'Doanh thu dịch vụ', 'Tổng số dịch vụ'];
+  const infoValues = [
+    room.roomName,
+    room.roomKey,
+    room.status,
+    room.bookingCount,
+    room.totalGuests,
+    room.revenue,
+    room.totalServiceCount
+  ];
+  
+  infoLabels.forEach((label, idx) => {
+    const labelCell = worksheet.getCell(currentRow, 1);
+    labelCell.value = label + ':';
+    labelCell.style = { 
+      ...styles.dataStyle, 
+      font: { name: 'Arial', size: 11, bold: true },
+      fill: {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFFFFBEB' }
+      }
+    };
+    
+    const valueCell = worksheet.getCell(currentRow, 2);
+    if (idx === 5) { // Doanh thu dịch vụ (index 5)
+      valueCell.value = room.revenue;
+      valueCell.numFmt = '#,##0"₫"';
+    } else {
+      valueCell.value = infoValues[idx];
+      if (typeof infoValues[idx] === 'number') {
+        valueCell.numFmt = '0';
+      }
+    }
+    valueCell.style = { 
+      ...styles.dataStyle, 
+      font: { ...styles.dataStyle.font, color: { argb: 'FF000000' } }, 
+      fill: {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFFFFBEB' }
+      }
+    };
+    currentRow++;
+  });
+  
+  currentRow += 1;
+  
+  // Danh sách Booking
+  if (room.bookings.length > 0) {
+    currentRow = addExcelHeader(worksheet, currentRow, 'Danh sách Booking', 9, styles.sectionTitleStyle);
+    
+    // Header
+    const bookingHeaders = ['Mã booking', 'Trạng thái', 'Check-in', 'Check-out', 'Số khách', 'Người đặt', 'Tổng tiền dịch vụ', 'Đã thu', 'Còn thiếu'];
+    bookingHeaders.forEach((header, col) => {
+      const cell = worksheet.getCell(currentRow, col + 1);
+      cell.value = header;
+      cell.style = styles.headerStyle;
+    });
+    currentRow++;
+    
+    let totalServiceAmount = 0;
+    let totalServicePaid = 0;
+    let totalServiceDue = 0;
+    
+    room.bookings.forEach((b: any) => {
+      const bookingCode = getBookingCode(b);
+      const checkin = normalizeDate(b.checkinDate);
+      const checkout = normalizeDate(b.checkoutDate);
+      const guests = getNumberValue(b, "numGuests", "num_guests") || 1;
+      const bookerName = b.userId ? userNameMap[String(b.userId)] || "" : "";
+      
+      const serviceOrdersForBooking = room.services?.filter((so: any) => so.__booking === b) || [];
+      const serviceTotal = serviceOrdersForBooking.reduce(
+        (sum: number, so: any) => sum + calculateServiceOrderFinancials(so).total,
+        0
+      );
+      const servicePaid = serviceOrdersForBooking.reduce(
+        (sum: number, so: any) => sum + calculateServiceOrderFinancials(so).paid,
+        0
+      );
+      const serviceDue = Math.max(0, serviceTotal - servicePaid);
+      
+      totalServiceAmount += serviceTotal;
+      totalServicePaid += servicePaid;
+      totalServiceDue += serviceDue;
+      
+      const rowData = [
+        bookingCode,
+        bookingStatusToLabel(b.status),
+        checkin || "—",
+        checkout || "—",
+        guests,
+        bookerName,
+        serviceTotal,
+        servicePaid,
+        serviceDue
+      ];
+      
+      rowData.forEach((value, col) => {
+        const cell = worksheet.getCell(currentRow, col + 1);
+        cell.value = value;
+        cell.style = styles.dataStyle;
+        
+        if (col >= 0 && col <= 5) {
+          cell.alignment = { ...cell.alignment, horizontal: 'center' };
+        }
+        
+        if (col >= 6 && col <= 8) { 
+          cell.numFmt = '#,##0"₫"';
+          cell.alignment = { ...cell.alignment, horizontal: 'right' };
+        } 
+      });
+      currentRow++;
+    });
+    
+    addExcelTotalRow(worksheet, currentRow, {
+      amount: totalServiceAmount,
+      paid: totalServicePaid,
+      due: totalServiceDue
+    }, 6, styles);
+    
+    currentRow += 2;
+  }
+  
+  // Chi tiết Hóa đơn Dịch vụ
+  if (room.services && room.services.length > 0) {
+    currentRow = addExcelHeader(worksheet, currentRow, 'Chi tiết Hóa đơn Dịch vụ', 9, styles.sectionTitleStyle);
+    
+    // Header
+    const serviceHeaders = ['Mã hóa đơn', 'Mã booking', 'Ngày tạo', 'Dịch vụ', 'Nhân viên', 'Trạng thái', 'Tổng tiền', 'Đã thu', 'Còn thiếu'];
+    serviceHeaders.forEach((header, col) => {
+      const cell = worksheet.getCell(currentRow, col + 1);
+      cell.value = header;
+      cell.style = styles.headerStyle;
+    });
+    currentRow++;
+    
+    let totalInvoiceAmount = 0;
+    let totalInvoicePaid = 0;
+    let totalInvoiceDue = 0;
+    
+    room.services.forEach((so: any) => {
+      const b = so.__booking || {};
+      const bookingCode = getBookingCode(b);
+      const soCode = getServiceOrderCode(so);
+      const soCreated = normalizeDate(so.createdDate || so.created_at || so.createdAt);
+      const financials = calculateServiceOrderFinancials(so);
+      const items = so.items || so.serviceItems || so.lines || [];
+      const serviceNames = getServiceNames(items);
+      const staffName = getStaffNameFromServiceOrder(so, userNameMap, staffAccountIdMap);
+      
+      totalInvoiceAmount += financials.total;
+      totalInvoicePaid += financials.paid;
+      totalInvoiceDue += financials.due;
+      
+      const rowData = [
+        soCode,
+        bookingCode,
+        soCreated || "—",
+        serviceNames,
+        staffName,
+        financials.isPaid ? "Đã thanh toán" : financials.due > 0 ? "Chưa thanh toán" : "—",
+        financials.total,
+        financials.paid,
+        financials.due
+      ];
+      
+      rowData.forEach((value, col) => {
+        const cell = worksheet.getCell(currentRow, col + 1);
+        cell.value = value;
+        cell.style = styles.dataStyle;
+        
+        if (col >= 0 && col <= 5) {
+          cell.alignment = { ...cell.alignment, horizontal: 'center' };
+        }
+        
+        if (col >= 6 && col <= 8) { 
+          cell.numFmt = '#,##0"₫"';
+          cell.alignment = { ...cell.alignment, horizontal: 'right' };
+        }
+      });
+      currentRow++;
+    });
+    
+    addExcelTotalRow(worksheet, currentRow, {
+      amount: totalInvoiceAmount,
+      paid: totalInvoicePaid,
+      due: totalInvoiceDue
+    }, 6, styles);
+  }
+  
+  // Điều chỉnh độ rộng cột
+  worksheet.columns.forEach((column, index) => {
+    if (index >= 0 && index <= 10) column.width = 20;
+    else column.width = 20;
+  });
+  
+  await downloadExcelFile(workbook, `baocao-phong-${room.roomName}-${new Date().toISOString().slice(0, 10)}.xlsx`);
+}
 
+// Map trạng thái phòng (room.status) -> label hiển thị
+function roomStatusToLabel(status?: string): RoomReportRow["status"] {
+  const s = (status || "").toUpperCase();
+  if (s === "AVAILABLE") return "Phòng trống";
+  if (s === "OCCUPIED") return "Có người sử dụng";
+  if (s === "MAINTENANCE" || s === "OUT_OF_ORDER") return "Bảo trì";
+  return "Khác";
+}
+
+// Map trạng thái booking -> label hiển thị (dùng trong chi tiết từng booking)
+function bookingStatusToLabel(status?: string): "Đã check-in" | "Check-out" | "Chờ duyệt" | "Khác" {
+  const s = (status || "").toUpperCase();
+  if (s === "CHECKED_IN") return "Đã check-in";
+  if (s === "CHECKED_OUT") return "Check-out";
+  if (s === "PENDING") return "Chờ duyệt";
+  return "Khác";
+}
+
+function Pill({
+  children,
+  className = "",
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+    return (
+    <span
+      className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold ${className}`}
+    >
+      {children}
+    </span>
+  );
+}
+
+function IconBack() {
   return (
-    <div className="w-full bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
-      {/* Header */}
-      {title && (
-        <div className="mb-6 pb-4 border-b border-gray-200">
-          <h3 className="text-lg font-bold text-gray-900 mb-3">{title}</h3>
-           
-        </div>
-      )}
+    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+    </svg>
+  );
+}
 
-      <div className="flex flex-col lg:flex-row items-center gap-8">
-        {/* Pie Chart */}
-        <div className="relative flex-shrink-0">
-          <svg viewBox={`0 0 ${size} ${size}`} className="w-72 h-72 lg:w-80 lg:h-80">
-            {data.map((item, i) => {
-              const percentage = (item.value / total) * 100
-              const angle = (percentage / 100) * 360
-              const startAngle = currentAngle
-              currentAngle += angle
+function IconDownload() {
+  return (
+    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+    </svg>
+  );
+}
 
-              const startRad = (startAngle - 90) * Math.PI / 180
-              const endRad = (currentAngle - 90) * Math.PI / 180
-              
-              const x1 = centerX + radius * Math.cos(startRad)
-              const y1 = centerY + radius * Math.sin(startRad)
-              const x2 = centerX + radius * Math.cos(endRad)
-              const y2 = centerY + radius * Math.sin(endRad)
-              
-              const largeArc = angle > 180 ? 1 : 0
-              const midAngle = (startAngle + currentAngle) / 2
-              const labelRadius = radius * 0.7
-              const labelX = centerX + labelRadius * Math.cos((midAngle - 90) * Math.PI / 180)
-              const labelY = centerY + labelRadius * Math.sin((midAngle - 90) * Math.PI / 180)
-
-              return (
-                <g key={i} className="group cursor-pointer">
-                  <path
-                    d={`M ${centerX} ${centerY} L ${x1} ${y1} A ${radius} ${radius} 0 ${largeArc} 1 ${x2} ${y2} Z`}
-                    fill={item.color}
-                    stroke="white"
-                    strokeWidth="4"
-                    className="hover:opacity-90 transition-all duration-300 hover:scale-105 origin-center"
-                    style={{ transformOrigin: `${centerX}px ${centerY}px` }}
-                  >
-                    <title>{item.label}: {item.value} ({percentage.toFixed(1)}%)</title>
-                  </path>
-                  
-                  {/* Percentage label */}
-                  {percentage > 5 && (
-                    <text
-                      x={labelX}
-                      y={labelY}
-                      textAnchor="middle"
-                      dominantBaseline="middle"
-                      fontSize="14"
-                      fontWeight="bold"
-                      fill="white"
-                      className="drop-shadow-lg"
-                    >
-                      {percentage.toFixed(0)}%
-                    </text>
-                  )}
-                </g>
-              )
-            })}
-            
-            {/* Center circle */}
-            <circle cx={centerX} cy={centerY} r="40" fill="white" className="drop-shadow-md" />
-            <text
-              x={centerX}
-              y={centerY - 8}
-              textAnchor="middle"
-              fontSize="16"
-              fontWeight="bold"
-              fill="#374151"
-            >
-              Tổng
-            </text>
-            <text
-              x={centerX}
-              y={centerY + 12}
-              textAnchor="middle"
-              fontSize="20"
-              fontWeight="bold"
-              fill="#1f2937"
-            >
-              {total}
-            </text>
-          </svg>
-        </div>
-
-        {/* Legend */}
-        <div className="flex-1 w-full lg:w-auto">
-          <div className="space-y-3">
-            {data.map((item, i) => {
-              const percentage = (item.value / total) * 100
-              return (
-                <div 
-                  key={i} 
-                  className="flex items-center gap-4 p-4 rounded-lg hover:bg-gray-50 transition-all cursor-pointer group border border-transparent hover:border-gray-200"
-                >
-                  <div 
-                    className="w-6 h-6 rounded-lg flex-shrink-0 shadow-sm group-hover:scale-110 transition-transform" 
-                    style={{ backgroundColor: item.color }} 
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between mb-1">
-                      <div className="text-sm font-semibold text-gray-900 truncate">{item.label}</div>
-                      <div className="text-sm font-bold text-gray-700 ml-2">{item.value.toLocaleString('vi-VN')}</div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div className="flex-1 bg-gray-200 rounded-full h-2 overflow-hidden">
-                        <div 
-                          className="h-full rounded-full transition-all duration-500"
-                          style={{ 
-                            width: `${percentage}%`,
-                            backgroundColor: item.color
-                          }}
-                        />
-                      </div>
-                      <div className="text-xs font-medium text-gray-600 w-12 text-right">
-                        {percentage.toFixed(1)}%
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        </div>
+function DetailTabs({
+  value,
+  onChange,
+  tabs,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  tabs: { key: string; label: string }[];
+}) {
+            return (
+    <div className="flex items-center gap-2 overflow-x-auto border-b border-gray-200 px-6">
+      {tabs.map((t) => (
+        <button
+          key={t.key}
+          type="button"
+          onClick={() => onChange(t.key)}
+          className={`h-10 px-4 rounded-t-xl text-sm font-semibold whitespace-nowrap transition-colors border-b-2 -mb-px ${
+            value === t.key
+              ? "text-sky-700 border-sky-600 bg-sky-50"
+              : "text-gray-600 border-transparent hover:text-gray-800 hover:bg-gray-50"
+          }`}
+        >
+          {t.label}
+        </button>
+      ))}
       </div>
-    </div>
-  )
+  );
+}
+
+function AccordionSection({
+  title,
+  open,
+  onToggle,
+  children,
+}: {
+  title: string;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+    return (
+    <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="w-full px-4 py-3 flex items-center justify-between gap-3 text-left"
+      >
+        <div className="font-bold text-gray-900">{title}</div>
+        <span className="text-gray-500 text-sm">{open ? "Ẩn" : "Xem"}</span>
+      </button>
+      {open && <div className="px-4 pb-4">{children}</div>}
+        </div>
+  );
 }
 
 export default function ReportsPage() {
-  const [data, setData] = useState<ReportResponse>({ 
-    summary: { totalBookings: 0, totalRevenue: 0, totalServices: 0, openTasks: 0 }, 
-    items: [], 
-    staffRevenues: [] 
-  })
-  const [loading, setLoading] = useState(false)
-  const [activeTab, setActiveTab] = useState<'overview'|'revenue'|'bookings'|'services'|'tasks'|'staff'|'rooms'>('overview')
-  const [viewMode, setViewMode] = useState<'table'|'chart'>('table')
-  const [dateFrom, setDateFrom] = useState("")
-  const [dateTo, setDateTo] = useState("")
-  const [roomQuery, setRoomQuery] = useState("")
-  const [bookingStatus, setBookingStatus] = useState<string>('ALL')
-  const [serviceStatus, setServiceStatus] = useState<string>('ALL')
-  const [taskStatus, setTaskStatus] = useState<string>('ALL')
+  // Filters
+  const [dateFrom, setDateFrom] = useState<string>("");
+  const [dateTo, setDateTo] = useState<string>("");
+  const [bookingStatus, setBookingStatus] = useState<UiBookingStatus>("ALL");
+  const [selectedRoomId, setSelectedRoomId] = useState<string>("ALL");
+  const [roomSearch, setRoomSearch] = useState<string>("");
+
+  // Level-2 screen
+  const [selectedRoom, setSelectedRoom] = useState<RoomReportRow | null>(null);
+  const [detailTab, setDetailTab] = useState<"bookings" | "services" | "staff">("bookings");
+  const [accordionOpen, setAccordionOpen] = useState<Record<string, boolean>>({
+    bookings: true,
+    services: false,
+    staff: false,
+  });
+  const [detailSearch, setDetailSearch] = useState<string>("");
+  const [detailBookingStatus, setDetailBookingStatus] = useState<string>("ALL");
+  const [detailDateFrom, setDetailDateFrom] = useState<string>("");
+  const [detailDateTo, setDetailDateTo] = useState<string>("");
+
+  // Data sources với loading states
+  const { data: roomList, loading: roomsLoading } = useRooms();
+  const rooms = (roomList as any[]) || [];
+
+  const { data: bookingList, loading: bookingsLoading } = useBookings(bookingStatus === "ALL" ? undefined : bookingStatus);
+  const bookings = (bookingList as any[]) || [];
+
+  const { data: serviceOrdersData, loading: serviceOrdersLoading } = useServiceOrders();
+  const serviceOrders = (serviceOrdersData as any[]) || [];
   
-  // Pagination
-  const [pageSize, setPageSize] = useState(10)
-  const [currentPage, setCurrentPage] = useState(1)
+  // NOTE: Currently not wired to API; kept as placeholders
+  const tasks: any[] = [];
 
-  // Fetch detailed data
-  const { data: bookingList } = useBookings(bookingStatus === 'ALL' ? undefined : bookingStatus)
-  const bookingRows = (bookingList as any[]) || []
+  // Lazy load users - chỉ fetch sau khi data chính đã load
+  const shouldLoadUsers = !roomsLoading && !bookingsLoading && !serviceOrdersLoading;
+  const { data: usersData, loading: usersLoading } = useUsers(shouldLoadUsers ? { size: 1000 } : undefined);
+  const users = useMemo(() => {
+    if (!usersData) return [];
+    // Handle different response structures
+    const items = (usersData as any)?.items || (usersData as any)?.data?.content || (usersData as any)?.content || (Array.isArray(usersData) ? usersData : []);
+    return items;
+  }, [usersData]);
 
-  const { data: serviceOrderList } = useServiceOrders(serviceStatus === 'ALL' ? undefined : serviceStatus)
-  const serviceRows = (serviceOrderList as any[]) || []
+  // Lazy load staff profiles - chỉ fetch sau khi users đã load
+  const shouldLoadStaff = shouldLoadUsers && !usersLoading;
+  const { data: staffProfilesData, loading: staffProfilesLoading } = useStaffProfiles(shouldLoadStaff ? "/api/system/staff-profiles" : null as any);
+  const staffProfiles = (staffProfilesData as any[]) || [];
 
-  const { data: taskList } = useStaffTasks(taskStatus === 'ALL' ? undefined : { status: taskStatus })
-  const taskRows = (taskList as any[]) || []
+  // Combined loading state
+  const isLoading = roomsLoading || bookingsLoading || serviceOrdersLoading || (shouldLoadUsers && usersLoading) || (shouldLoadStaff && staffProfilesLoading);
 
-  // Fetch report summary
-  useEffect(() => {
-    let aborted = false
-    const fetchData = async () => {
-      setLoading(true)
-      try {
-        const res = await authFetch('/api/system/reports', { 
-          headers: { 'Content-Type': 'application/json' }, 
-          credentials: 'include' 
-        })
-        
-        if (!res.ok) {
-          throw new Error(`HTTP error! status: ${res.status}`)
+  // Map userId -> userName (từ users)
+  const userNameMap = useMemo(() => {
+    const map: Record<string | number, string> = {};
+    users.forEach((u: any) => {
+      const id = u.id ?? u.userId;
+      if (id != null) {
+        const name = u.fullName || u.full_name || u.name || (u.firstName && u.lastName ? `${u.firstName} ${u.lastName}` : null) || u.email || `User ${id}`;
+        map[String(id)] = name;
+      }
+    });
+    return map;
+  }, [users]);
+
+  // Map accountId từ staff profiles -> userName
+  const staffAccountIdMap = useMemo(() => {
+    const map: Record<string | number, string> = {};
+    staffProfiles.forEach((sp: any) => {
+      const accountId = sp.accountId ?? sp.account_id;
+      if (accountId != null && userNameMap[String(accountId)]) {
+        map[String(accountId)] = userNameMap[String(accountId)];
+      }
+    });
+    return map;
+  }, [staffProfiles, userNameMap]);
+
+  const rows: RoomReportRow[] = useMemo(() => {
+    // Early return nếu đang loading để tránh tính toán không cần thiết
+    if (isLoading || !rooms || !bookings || !serviceOrders) {
+      return [];
+    }
+
+    const from = dateFrom || "0000-00-00";
+    const to = dateTo || "9999-12-31";
+
+    const filteredBookings = bookings.filter((b: any) => {
+      const d = normalizeDate(b.checkinDate || b.createdDate || b.created_at);
+      if (d && (d < from || d > to)) return false;
+
+      if (selectedRoomId !== "ALL") {
+        const roomId = (b.roomId ?? b.room_id ?? b.room?.id ?? b.room?.code ?? "")?.toString();
+        if (roomId !== selectedRoomId) return false;
+      }
+
+      return true;
+    });
+
+    const servicesByBookingId = new Map<number | string, any[]>();
+    for (const s of serviceOrders) {
+      const bookingId = s.bookingId ?? s.booking_id;
+      if (bookingId == null) continue;
+      const arr = servicesByBookingId.get(bookingId) || [];
+      arr.push(s);
+      servicesByBookingId.set(bookingId, arr);
+    }
+
+    const staffByRoomKey = new Map<string, Set<string>>();
+    for (const t of tasks) {
+      const staffName = t.staffName || t.assigneeName || t.assignee?.name || t.staff?.name;
+      if (!staffName) continue;
+
+      const roomKey = (t.roomId ?? t.room_id ?? t.relatedRoomId ?? t.related_room_id ?? "")?.toString() || "";
+      const bookingId = (t.bookingId ?? t.booking_id ?? t.relatedBookingId ?? t.related_booking_id) as
+        | number
+        | string
+        | undefined;
+
+      const key = roomKey || (bookingId != null ? `booking:${bookingId}` : "");
+      if (!key) continue;
+
+      if (!staffByRoomKey.has(key)) staffByRoomKey.set(key, new Set());
+      staffByRoomKey.get(key)!.add(staffName);
+    }
+
+    const byRoom = new Map<string, RoomReportRow>();
+    
+    // Khởi tạo tất cả phòng từ danh sách rooms, dùng trạng thái phòng
+    for (const room of rooms) {
+      const roomId = (room.id ?? room.code ?? "")?.toString();
+      const roomName = room.name ?? room.code ?? `Phòng ${roomId}`;
+      const roomKey = roomId || "—";
+      
+      if (selectedRoomId !== "ALL" && roomKey !== selectedRoomId) continue;
+
+      if (!byRoom.has(roomKey)) {
+        byRoom.set(roomKey, {
+          roomKey,
+          roomName,
+          status: roomStatusToLabel(room.status), 
+          bookingCount: 0,
+          services: [],
+          totalServiceCount: 0,
+          staff: [],
+          bookingDates: [],
+          totalGuests: 0,
+          paidAmount: 0,
+          dueAmount: 0,
+          revenue: 0,
+          notes: [],
+          bookings: [],
+        });
+      }
+    }
+
+    // Cập nhật thông tin từ bookings (không thay đổi trạng thái phòng)
+    for (const b of filteredBookings) {
+      const roomId = (b.roomId ?? b.room_id ?? b.room?.id ?? b.room?.code ?? "—")?.toString();
+      const roomKey = roomId || "—";
+      
+      const roomFromList = rooms.find((r: any) => {
+        const rId = (r.id ?? r.code ?? "")?.toString();
+        return rId === roomKey;
+      });
+      
+      const roomName = roomFromList 
+        ? (roomFromList.name ?? roomFromList.code ?? `Phòng ${roomKey}`)
+        : (b.room?.name ?? b.roomCode ?? b.room?.code ?? `Phòng ${roomKey}`);
+
+      if (!byRoom.has(roomKey)) {
+        byRoom.set(roomKey, {
+          roomKey,
+          roomName,
+          status: roomStatusToLabel(roomFromList?.status),
+          bookingCount: 0,
+          services: [],
+          totalServiceCount: 0,
+          staff: [],
+          bookingDates: [],
+          totalGuests: 0,
+          paidAmount: 0,
+          dueAmount: 0,
+          revenue: 0,
+          notes: [],
+          bookings: [],
+        });
+      }
+
+      const row = byRoom.get(roomKey)!;
+
+      row.bookings.push(b);
+      row.bookingCount += 1;
+
+      const bookingDate = normalizeDate(b.createdDate || b.created_at || b.checkinDate);
+      if (bookingDate) row.bookingDates.push(bookingDate);
+
+      row.totalGuests += getNumberValue(b, "numGuests", "num_guests") || 1;
+
+      const paid = getNumberValue(b, "paidAmount", "paid_amount", "amountPaid");
+      const total = getNumberValue(b, "totalAmount", "total_amount", "totalPrice", "total_price");
+      row.paidAmount += paid;
+      row.dueAmount += Math.max(0, total - paid);
+
+      const note = getStringValue(b, "note", "notes", "specialRequest", "special_request");
+      if (note) row.notes.push(note);
+
+      const bookingId = b.id ?? b.bookingId ?? b.booking_id;
+      const services = bookingId != null ? servicesByBookingId.get(bookingId) || [] : [];
+      for (const s of services) {
+        // Doanh thu dịch vụ: cộng tổng tiền của từng service order
+        row.revenue += getNumberValue(s, "totalAmount", "total_amount", "totalPrice", "total_price");
+
+        // Lưu chi tiết theo từng hoá đơn dịch vụ (không gộp)
+        row.services.push({ ...s, __booking: b });
+
+        // Tổng số lượng dịch vụ đã đặt
+        const items = s.items || s.serviceItems || s.lines || [];
+        if (Array.isArray(items) && items.length) {
+          row.totalServiceCount += items.reduce((sum, it) => sum + (Number(it.qty ?? it.quantity ?? 1) || 0), 0);
+        } else {
+          row.totalServiceCount += Number(s.qty ?? s.quantity ?? 1) || 0;
         }
-        
-        const json = await res.json()
-        if (!aborted) setData(json)
-      } catch (error) {
-        console.error('Error fetching report data:', error)
-        if (!aborted) setData({ 
-          summary: { totalBookings: 0, totalRevenue: 0, totalServices: 0, openTasks: 0 }, 
-          items: [], 
-          staffRevenues: [] 
-        })
-      } finally {
-        if (!aborted) setLoading(false)
+      }
+
+      const staffSet =
+        staffByRoomKey.get(roomKey) || (bookingId != null ? staffByRoomKey.get(`booking:${bookingId}`) : undefined);
+      if (staffSet) {
+        for (const name of staffSet) row.staff.push(name);
       }
     }
-    fetchData()
-    return () => { aborted = true }
-  }, [])
 
-  // Filter items by tab and date
-  const filtered = useMemo(() => {
-    let items = Array.isArray(data.items) ? data.items : []
+    const out = Array.from(byRoom.values()).map((r) => {
+      const uniq = <T,>(arr: T[]) => Array.from(new Set(arr.filter(Boolean) as any)) as T[];
 
-    if (activeTab === 'revenue') {
-      items = items.filter(i => i.type === 'PAYMENT' || i.type === 'SERVICE')
-    } else if (activeTab === 'bookings') {
-      items = items.filter(i => i.type === 'BOOKING')
-    } else if (activeTab === 'services') {
-      items = items.filter(i => i.type === 'SERVICE')
-    } else if (activeTab === 'tasks') {
-      items = items.filter(i => i.type === 'TASK')
-    }
+      return {
+        ...r,
+        bookingDates: uniq(r.bookingDates).sort(),
+        staff: uniq(r.staff),
+        notes: uniq(r.notes),
+        // services giữ nguyên dạng danh sách hoá đơn dịch vụ (service orders), không gộp
+        services: r.services,
+      };
+    });
 
-    if (dateFrom) items = items.filter(i => i.date >= dateFrom)
-    if (dateTo) items = items.filter(i => i.date <= dateTo)
-    
-    return items
-  }, [data.items, dateFrom, dateTo, activeTab])
+    out.sort((a, b) => a.roomKey.localeCompare(b.roomKey));
+    return out;
+  }, [bookings, serviceOrders, tasks, dateFrom, dateTo, selectedRoomId, rooms]);
 
-  // Reset page when tab or filters change
-  useEffect(() => {
-    setCurrentPage(1)
-  }, [activeTab, bookingStatus, serviceStatus, taskStatus, dateFrom, dateTo])
+  const filteredRows = useMemo(() => {
+    if (!roomSearch.trim()) return rows;
+    const searchLower = roomSearch.toLowerCase().trim();
+    return rows.filter(
+      (r) =>
+        r.roomName.toLowerCase().includes(searchLower) ||
+        r.roomKey.toLowerCase().includes(searchLower),
+    );
+  }, [rows, roomSearch]);
 
-  // Get current tab data
-  const currentTabData = useMemo(() => {
-    if (activeTab === 'bookings') return bookingRows
-    if (activeTab === 'services') return serviceRows
-    if (activeTab === 'tasks') return taskRows
-    if (activeTab === 'staff') return data.staffRevenues
-    return filtered
-  }, [activeTab, bookingRows, serviceRows, taskRows, data.staffRevenues, filtered])
+  const totalBookings = useMemo(() => rows.reduce((sum, r) => sum + r.bookingCount, 0), [rows]);
+  const totalPaid = useMemo(() => rows.reduce((sum, r) => sum + r.paidAmount, 0), [rows]);
+  const totalDue = useMemo(() => rows.reduce((sum, r) => sum + r.dueAmount, 0), [rows]);
+  const totalRevenue = useMemo(() => rows.reduce((sum, r) => sum + r.revenue, 0), [rows]);
 
-  // Paginated data
-  const paginatedData = useMemo(() => {
-    const start = (currentPage - 1) * pageSize
-    const end = start + pageSize
-    return currentTabData.slice(start, end)
-  }, [currentTabData, currentPage, pageSize])
+  const selectedRoomLive = useMemo(() => {
+    if (!selectedRoom) return null;
+    return rows.find((r) => r.roomKey === selectedRoom.roomKey) || selectedRoom;
+  }, [rows, selectedRoom]);
 
-  const totalPages = Math.ceil(currentTabData.length / pageSize)
-  const hasMore = currentPage < totalPages
+  const pillClassByStatus = (label: RoomReportRow["status"]) =>
+    label === "Phòng trống"
+      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+      : label === "Có người sử dụng"
+        ? "bg-sky-50 text-sky-700 border-sky-200"
+        : label === "Bảo trì"
+          ? "bg-amber-50 text-amber-800 border-amber-200"
+          : "bg-slate-50 text-slate-700 border-slate-200";
 
-  // Build chart data
-  const chartData = useMemo(() => {
-    const byDate: Record<string, { revenue: number; bookings: number; services: number }> = {}
-    
-    filtered.forEach((i) => {
-      const d = i.date
-      if (!byDate[d]) byDate[d] = { revenue: 0, bookings: 0, services: 0 }
-      if (i.type === 'BOOKING') byDate[d].bookings += i.count || 0
-      if (i.type === 'PAYMENT' || i.type === 'SERVICE') byDate[d].revenue += i.amount || 0
-      if (i.type === 'SERVICE') byDate[d].services += i.count || 0
-    })
-    
-    const bookingsByDate: Record<string, number> = {}
-    bookingRows.forEach((b: any) => {
-      const date = (b.checkinDate || b.createdDate || '').slice(0, 10)
-      if (date) bookingsByDate[date] = (bookingsByDate[date] || 0) + 1
-    })
-    
-    const servicesByDate: Record<string, { count: number; revenue: number }> = {}
-    serviceRows.forEach((s: any) => {
-      const date = (s.created_at || s.createdDate || '').slice(0, 10)
-      if (date) {
-        if (!servicesByDate[date]) servicesByDate[date] = { count: 0, revenue: 0 }
-        servicesByDate[date].count += 1
-        servicesByDate[date].revenue += (s.total_amount || s.totalAmount || 0)
-      }
-    })
-    
-    const tasksByStatus: Record<string, number> = {}
-    taskRows.forEach((t: any) => {
-      const status = (t.status || 'TODO').toUpperCase()
-      tasksByStatus[status] = (tasksByStatus[status] || 0) + 1
-    })
-    
-    const dates = Object.keys(byDate).sort()
-    const bookingDates = Object.keys(bookingsByDate).sort()
-    const serviceDates = Object.keys(servicesByDate).sort()
-    
-    return { 
-      dates, 
-      revenueSeries: dates.map(d => byDate[d].revenue), 
-      bookingsSeries: dates.map(d => byDate[d].bookings),
-      bookingDates,
-      bookingCounts: bookingDates.map(d => bookingsByDate[d]),
-      serviceDates,
-      serviceCounts: serviceDates.map(d => servicesByDate[d].count),
-      serviceRevenues: serviceDates.map(d => servicesByDate[d].revenue),
-      tasksByStatus,
-    }
-  }, [filtered, bookingRows, serviceRows, taskRows])
+  const DetailBookings = ({
+    room,
+    search,
+    statusFilter,
+    dateFrom,
+    dateTo,
+  }: {
+    room: RoomReportRow;
+    search: string;
+    statusFilter: string;
+    dateFrom?: string;
+    dateTo?: string;
+  }) => {
+    const [expandedServiceInvoicesByBooking, setExpandedServiceInvoicesByBooking] = useState<Record<string, boolean>>({});
+    const filteredBookings = useMemo(() => {
+      let result = room.bookings;
+      result = filterBookingsByDate(result, dateFrom, dateTo);
+      result = filterBookingsByStatus(result, statusFilter);
+      result = filterBookingsBySearch(result, search);
+      return result;
+    }, [room.bookings, search, statusFilter, dateFrom, dateTo]);
 
-  // Pagination Component
-  const PaginationControls = () => {
-    if (viewMode === 'chart' || currentTabData.length === 0) return null
-    
     return (
-      <div className="bg-gradient-to-r from-gray-50 to-[hsl(var(--page-bg))] px-6 py-6 border-t border-gray-200/50">
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-6">
-          <div className="text-center sm:text-left">
-            <div className="text-sm text-gray-600 mb-1">Hiển thị kết quả</div>
-            <div className="text-lg font-bold text-gray-900">
-              <span className="text-[hsl(var(--primary))]">
-                {((currentPage - 1) * pageSize) + 1}
-              </span>{' '}
-              -{' '}
-              <span className="text-[hsl(var(--primary))]">
-                {Math.min(currentPage * pageSize, currentTabData.length)}
-              </span>{' '}
-              / <span className="text-gray-600">{currentTabData.length}</span>
-            </div>
+      <div className="space-y-3">
+        {filteredBookings.length === 0 ? (
+          <div className="p-4 text-sm text-gray-500 bg-white rounded-xl border border-gray-200">
+            Không có dữ liệu đặt phòng.
           </div>
-          <div className="flex flex-col sm:flex-row items-center gap-4">
-            <div className="flex items-center gap-2 text-sm">
-              <span>Hàng:</span>
-              <select 
-                className="h-9 rounded-lg border border-gray-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]"
-                value={pageSize} 
-                onChange={(e) => {
-                  setPageSize(Number(e.target.value))
-                  setCurrentPage(1)
-                }}
-              >
-                <option value={10}>10</option>
-                <option value={20}>20</option>
-                <option value={50}>50</option>
-              </select>
+        ) : (
+          filteredBookings.map((b: any) => {
+            const bookingDate = normalizeDate(b.createdDate || b.created_at || b.checkinDate);
+            const checkin = normalizeDate(b.checkinDate);
+            const checkout = normalizeDate(b.checkoutDate);
+            const guests = Number(b.numGuests ?? b.num_guests ?? 1);
+            const note = (b.note ?? b.notes ?? b.specialRequest ?? b.special_request ?? "")?.toString();
+
+            const bookingKey = (b.id ?? b.code ?? `${room.roomKey}-${bookingDate}-${checkin}`)?.toString();
+
+              const guestName =
+                b.guestName ??
+                b.guest_name ??
+                b.customerName ??
+                b.customer_name ??
+                b.guest?.name ??
+                "";
+
+              // Lấy các hoá đơn dịch vụ thuộc về booking này (đã được gắn __booking khi build rows)
+              const serviceOrdersForBooking =
+                room.services?.filter((so: any) => so.__booking === b) || [];
+
+              // Tính toán tài chính dịch vụ
+              const serviceTotal = serviceOrdersForBooking.reduce(
+                (sum: number, so: any) => sum + calculateServiceOrderFinancials(so).total,
+                0
+              );
+              const servicePaid = serviceOrdersForBooking.reduce(
+                (sum: number, so: any) => sum + calculateServiceOrderFinancials(so).paid,
+                0
+              );
+              const serviceDue = Math.max(0, serviceTotal - servicePaid);
+    
+              return (
+                <div
+                  id={bookingKey ? `booking-${bookingKey}` : undefined}
+                  key={bookingKey}
+                  className="relative bg-white rounded-2xl shadow-lg border border-gray-200 overflow-hidden"
+                >
+                  {/* Header Booking */}
+                  <div className="bg-gradient-to-r from-sky-50 to-white px-6 py-4 border-b border-gray-100">
+                    <div className="flex items-start justify-between gap-4">
+                      {/* Thông tin booking - Bên trái */}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-3 mb-2">
+                          <div className="text-xl font-bold text-gray-900">
+                            {getBookingCode(b)}
+                          </div>
+                          <Pill
+                            className={
+                              bookingStatusToLabel(b.status) === "Đã check-in"
+                                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                : bookingStatusToLabel(b.status) === "Check-out"
+                                  ? "bg-gray-100 text-gray-700 border-gray-200"
+                                  : bookingStatusToLabel(b.status) === "Chờ duyệt"
+                                    ? "bg-amber-50 text-amber-800 border-amber-200"
+                                    : "bg-slate-50 text-slate-700 border-slate-200"
+                            }
+                          >
+                            {bookingStatusToLabel(b.status)}
+                          </Pill>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-2 text-sm text-gray-600">
+                          {b.userId && userNameMap[String(b.userId)] && (
+                            <div>
+                              <span className="font-medium text-gray-700">Người đặt:</span>{" "}
+                              <span className="text-gray-900">{userNameMap[String(b.userId)]}</span>
+                            </div>
+                          )}
+                          <div>
+                            <span className="font-medium text-gray-700">Số lượng khách:</span>{" "}
+                            <span className="text-gray-900">{guests}</span>
+                          </div>
+                          {guestName && (
+                            <div>
+                              <span className="font-medium text-gray-700">Khách:</span>{" "}
+                              <span className="text-gray-900">{String(guestName)}</span>
+                            </div>
+                          )}
+                          <div>
+                            <span className="font-medium text-gray-700">Ngày check-in:</span>{" "}
+                            <span className="text-gray-900">{checkin || "—"}</span>
+                          </div>
+                          <div>
+                            <span className="font-medium text-gray-700">Ngày check-out:</span>{" "}
+                            <span className="text-gray-900">{checkout || "—"}</span>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      {/* Tóm tắt tài chính dịch vụ - Ở giữa */}
+                      <div className="flex flex-col gap-2 min-w-[180px] bg-gray-50 rounded-lg p-3 border border-gray-200">
+                        <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
+                         Tổng tiền dịch vụ
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-sm text-gray-600">Tổng:</span>
+                          <span className="text-sm font-bold text-gray-900">
+                            {formatCurrencyVnd(serviceTotal)}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-sm text-gray-600">Đã thu:</span>
+                          <span className="text-sm font-bold text-emerald-700">
+                            {formatCurrencyVnd(servicePaid)}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center pt-1 border-t border-gray-200">
+                          <span className="text-sm font-medium text-gray-700">Còn thiếu:</span>
+                          <span
+                            className={`text-sm font-bold ${
+                              serviceDue > 0 ? "text-rose-700" : "text-emerald-700"
+                            }`}
+                          >
+                            {formatCurrencyVnd(serviceDue)}
+                          </span>
+                        </div>
+                      </div>
+                      
+                      {/* Nút tải xuống - Bên phải */}
+                      <div className="flex-shrink-0">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              await exportBookingToExcel(b, serviceOrdersForBooking, userNameMap, staffAccountIdMap);
+                            } catch (error) {
+                              console.error('Error exporting Excel:', error);
+                              alert('Có lỗi xảy ra khi tạo file Excel. Vui lòng thử lại.');
+                            }
+                          }}
+                          className="p-2 rounded-lg text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors border border-gray-200"
+                          title="Tải thông tin booking"
+                        >
+                          <IconDownload />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Ghi chú */}
+                  {note ? (
+                    <div className="px-6 py-3 bg-amber-50/50 border-b border-gray-100">
+                      <div className="text-sm text-gray-700">
+                        <span className="font-semibold text-gray-900">Ghi chú:</span> {note}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* Chi tiết các hoá đơn dịch vụ của booking */}
+                  {serviceOrdersForBooking.length > 0 ? (
+                    <div className="px-6 py-4 bg-gray-50/30">
+                      
+                      <div className="space-y-3">
+                        {(() => {
+                          const bookingKey = (b.id ?? b.code ?? `${room.roomKey}-${bookingDate}-${checkin}`)?.toString();
+                          const expanded = !!expandedServiceInvoicesByBooking[bookingKey];
+                          const visibleCount = expanded
+                            ? serviceOrdersForBooking.length
+                            : Math.min(1, serviceOrdersForBooking.length);
+                          const visibleOrders = serviceOrdersForBooking.slice(0, visibleCount);
+
+                          return (
+                            <>
+                              {visibleOrders.map((so: any, soIdx: number) => {
+                                const soCreated = normalizeDate(
+                                  so.createdDate || so.created_at || so.createdAt,
+                                );
+                                const financials = calculateServiceOrderFinancials(so);
+                                const items = so.items || so.serviceItems || so.lines || [];
+                                const staffName = getStaffNameFromServiceOrder(so, userNameMap, staffAccountIdMap);
+                                const serviceNamesArray = Array.isArray(items)
+                                  ? Array.from(
+                                      new Set(
+                                        items
+                                          .map((it: any) => {
+                                            const n =
+                                              it.name || it.serviceName || it.service?.name;
+                                            return n ? String(n) : "";
+                                          })
+                                          .filter(Boolean),
+                                      ),
+                                    )
+                                  : [];
+
+                                return (
+                                  <div
+                                    key={so.id ?? so.code ?? `${b.id ?? b.code}-so-${soIdx}`}
+                                    className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden hover:shadow-md transition-shadow"
+                                  >
+                                    {/* Header hóa đơn */}
+                                    <div className="px-5 py-4 bg-gradient-to-r from-slate-50 via-gray-50 to-white border-b border-gray-100">
+                                      {/* Dòng 1: Thông tin || Trạng thái || Tải xuống */}
+                                      <div className="grid grid-cols-[1fr_auto_auto] gap-4 items-center mb-3">
+                                        <div className="text-lg font-bold text-gray-900 tracking-tight">
+                                          {getServiceOrderCode(so)}
+                                        </div>
+                                        <div className="text-center">
+                                        <div className="text-right">
+  <Pill
+    className={
+      financials.isPaid
+        ? "bg-emerald-50 text-emerald-700 border-emerald-200 px-2.5 py-1 text-xs font-semibold"
+        : financials.due > 0
+        ? "bg-amber-50 text-amber-800 border-amber-200 px-2.5 py-1 text-xs font-semibold"
+        : "bg-gray-50 text-gray-700 border-gray-200 px-2.5 py-1 text-xs font-semibold"
+    }
+  >
+    {financials.isPaid ? "Đã thanh toán" : financials.due > 0 ? "Chưa thanh toán" : "—"}
+  </Pill>
+</div>
+
+                                        </div>
+                                        <div className="flex justify-end flex-shrink-0">
+                                          <button
+                                            type="button"
+                                            onClick={() => exportServiceOrderToPDF(so, userNameMap, staffAccountIdMap)}
+                                            className="p-1.5 rounded-lg text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors"
+                                            title="Tải hóa đơn dịch vụ"
+                                          >
+                                            <IconDownload />
+                                          </button>
+                                        </div>
+                                      </div>
+                                      
+                                      {/* Dòng 2: Ngày tạo || Số tiền (dưới trạng thái) */}
+                                      <div className="grid grid-cols-[1fr_auto_auto] gap-4 items-center mb-3">
+                                        {soCreated ? (
+                                          <div className="flex items-center gap-2">
+                                            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Ngày tạo:</span>
+                                            <span className="text-sm font-medium text-gray-900">{soCreated}</span>
+                                          </div>
+                                        ) : (
+                                          <div></div>
+                                        )}
+                                        <div className="text-right">
+                                          <div className="text-2xl font-bold text-emerald-700 tracking-tight">
+                                            {formatCurrencyVnd(financials.total)}
+                                          </div>
+                                        </div>
+                                                    </div>
+                                      
+                                      {/* Dòng 3: Dịch vụ */}
+                                      {serviceNamesArray.length > 0 && (
+                                        <div className="mb-3">
+                                          <div className="flex items-center gap-2">
+                                            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide min-w-[80px]">Dịch vụ:</span>
+                                            <span className="text-sm font-medium text-gray-900">{serviceNamesArray.join(", ")}</span>
+                                          </div>
+                                        </div>
+                                      )}
+                                      
+                                      {/* Dòng 4: Nhân viên */}
+                                      <div>
+                                        <div className="flex items-center gap-2">
+                                          <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide min-w-[80px]">Nhân viên:</span>
+                                          <span className="text-sm font-medium text-gray-900">{staffName}</span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+
+                              {serviceOrdersForBooking.length > 1 && (
+                                <div className="mt-2 flex justify-center">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const nextExpanded = !expanded;
+                                      setExpandedServiceInvoicesByBooking((prev) => ({
+                                        ...prev,
+                                        [bookingKey]: nextExpanded,
+                                      }));
+                                      if (!nextExpanded) {
+                                        requestAnimationFrame(() => {
+                                          document
+                                            .getElementById(`booking-${bookingKey}`)
+                                            ?.scrollIntoView({ behavior: "smooth", block: "start" });
+                                        });
+                                      }
+                                    }}
+                                    className="inline-flex items-center justify-center gap-1 px-2 py-1 text-[11px] font-semibold text-sky-700 hover:underline"
+                                  >
+                                  {expanded
+                                    ? "Thu gọn"
+                                    : `Xem thêm (${serviceOrdersForBooking.length - visibleCount} hoá đơn)`}
+                                  <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    className={`h-3 w-3 transition-transform ${expanded ? "rotate-180" : ""}`}
+                                    fill="none"
+                                    viewBox="0 0 24 24"
+                                    stroke="currentColor"
+                                  >
+                                    <path
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      strokeWidth={2}
+                                      d="M19 9l-7 7-7-7"
+                                    />
+                                  </svg>
+                                  </button>
+                                </div>
+                              )}
+                            </>
+                          );
+                        })()}
+                  </div>
+                </div>
+              ) : null}
             </div>
-            {hasMore && (
-              <button
-                onClick={() => setCurrentPage(p => p + 1)}
-                className="h-10 px-4 bg-[hsl(var(--primary))] text-white rounded-lg text-sm font-medium hover:bg-[hsl(var(--primary)/0.9)] transition-colors flex items-center gap-2 shadow-sm"
-              >
-                Xem tiếp
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-        </svg>
-              </button>
-            )}
-          </div>
-        </div>
+          )}
+        ))}
       </div>
-    )
-  }
+    );
+  };
+
+  const DetailServices = ({ room, search }: { room: RoomReportRow; search: string }) => {
+    // room.services hiện là danh sách các hoá đơn dịch vụ (service orders) kèm booking (__booking)
+    const filteredServiceOrders = useMemo(() => {
+      let result = room.services || [];
+
+      if (search.trim()) {
+        const searchLower = search.toLowerCase().trim();
+        result = result.filter((so: any) => {
+          const b = so.__booking || {};
+          const bookingCode = getBookingCode(b).toLowerCase();
+          const items = so.items || so.serviceItems || so.lines || [];
+          const itemText = getServiceNames(items).toLowerCase();
+          const serviceOrderCode = getServiceOrderCode(so).toLowerCase();
+          return (
+            bookingCode.includes(searchLower) ||
+            serviceOrderCode.includes(searchLower) ||
+            itemText.includes(searchLower)
+          );
+        });
+      }
+
+      return result;
+    }, [room.services, search]);
+    
+    return (
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        {filteredServiceOrders.length === 0 ? (
+          <div className="p-4 text-sm text-gray-500">Không có hoá đơn dịch vụ.</div>
+        ) : (
+          <div className="divide-y divide-gray-100">
+            {filteredServiceOrders.map((so: any, i: number) => {
+              const b = so.__booking || {};
+              const bookingLabel = getBookingCode(b);
+              const created = normalizeDate(so.createdDate || so.created_at || so.createdAt);
+              const financials = calculateServiceOrderFinancials(so);
+              const items = so.items || so.serviceItems || so.lines || [];
+
+              return (
+                <div key={so.id ?? so.code ?? `${room.roomKey}-so-${i}`} className="p-4 hover:bg-gray-50">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-gray-900 truncate">
+                        Hoá đơn DV: {getServiceOrderCode(so)}
+                      </div>
+                      <div className="mt-1 text-xs text-gray-600">
+                        Booking: {bookingLabel} {created ? `• ${created}` : ""}
+                      </div>
+                    </div>
+                    <div className="text-sm font-bold text-emerald-700 flex-shrink-0">{formatCurrencyVnd(financials.total)}</div>
+                  </div>
+
+                  {Array.isArray(items) && items.length ? (
+                    <div className="mt-3 space-y-2">
+                      {items.map((it: any, idx: number) => {
+                        const name = it.name || it.serviceName || it.service?.name || "—";
+                        const qty = Number(it.qty ?? it.quantity ?? 1) || 1;
+                        const price = getNumberValue(it, "unitPrice", "unit_price", "price", "unit_price", "unitPrice");
+                        // Tính thành tiền: ưu tiên lấy từ field total, nếu không có thì tính từ price * qty
+                        let lineTotal = getNumberValue(it, "totalAmount", "total_amount", "totalPrice", "total_price", "lineTotal", "line_total");
+                        if (lineTotal === 0 && price > 0) {
+                          lineTotal = price * qty;
+                        }
+
+                        return (
+                          <div
+                            key={`${so.id ?? i}-item-${idx}`}
+                            className="flex items-center justify-between gap-3 text-sm"
+                          >
+                            <div className="min-w-0">
+                              <div className="font-semibold text-gray-900 truncate">{String(name)}</div>
+                            </div>
+                            {lineTotal > 0 ? (
+                              <div className="text-xs font-semibold text-gray-700 flex-shrink-0">
+                                {formatCurrencyVnd(lineTotal)}
+                              </div>
+                            ) : (
+                              <Pill className="bg-gray-50 text-gray-700 border-gray-200">x{qty}</Pill>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="mt-3 text-sm text-gray-700">
+                      {(so.serviceName || so.service?.name || so.name) ? (
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="font-semibold text-gray-900">
+                            {String(so.serviceName || so.service?.name || so.name)}
+                          </div>
+                          <Pill className="bg-gray-50 text-gray-700 border-gray-200">x{Number(so.qty ?? so.quantity ?? 1) || 0}</Pill>
+                        </div>
+                      ) : (
+                        <div className="text-xs text-gray-500">Không có chi tiết dịch vụ.</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const DetailStaff = ({ room, search }: { room: RoomReportRow; search: string }) => {
+    const filteredStaff = useMemo(() => {
+      if (!search.trim()) return room.staff;
+      const searchLower = search.toLowerCase().trim();
+      return room.staff.filter((name) => name.toLowerCase().includes(searchLower));
+    }, [room.staff, search]);
 
     return (
-    <div className="px-6 pt-4 pb-6">
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        {filteredStaff.length === 0 ? (
+          <div className="p-4 text-sm text-gray-500">Không có thông tin nhân viên.</div>
+        ) : (
+          <div className="divide-y divide-gray-100">
+            {filteredStaff.map((name) => (
+              <div key={name} className="p-4 hover:bg-gray-50 flex items-center justify-between">
+                <div className="font-semibold text-gray-900">{name}</div>
+                <Pill className="bg-violet-50 text-violet-700 border-violet-200">Phụ trách</Pill>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+
+    return (
+    <div className="px-6 pt-4 pb-10">
       <div className="max-w-7xl mx-auto space-y-6">
-      {/* Header */}
-        <div className="shadow-sm border border-gray-200 rounded-2xl overflow-hidden" style={{ backgroundColor: '#dcebff' }}>
-          <div className="border-b border-gray-200/50 px-6 py-4">
+        {selectedRoomLive ? (
+          <div className="space-y-6">
             <div className="flex items-center justify-between gap-3">
-              <div>
-                <h1 className="text-3xl font-bold text-gray-900">Báo cáo tổng hợp</h1>
-                <p className="mt-1 text-sm text-gray-500">
-                  Phân tích và thống kê dữ liệu hệ thống
-                </p>
-          </div>
             <button
+                type="button"
               onClick={() => {
-                  const csv = [
-                    ['ID','Ngày','Loại','Tiêu đề','Số tiền','Số lượng'], 
-                    ...filtered.map(i => [i.id, i.date, i.type, i.title, i.amount ?? '', i.count ?? ''])
-                  ]
-                const blob = new Blob([csv.map(r => r.join(',')).join('\n')], { type: 'text/csv' })
-                const url = URL.createObjectURL(blob)
-                const a = document.createElement('a')
-                a.href = url
-                  a.download = `reports-${new Date().toISOString().slice(0, 10)}.csv`
-                a.click()
-                URL.revokeObjectURL(url)
-              }}
-                className="h-10 px-4 rounded-xl border border-gray-300 bg-white text-sm text-gray-700 hover:bg-gray-50 whitespace-nowrap flex items-center gap-2"
-            >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-              Xuất Excel
+                  setSelectedRoom(null);
+                  setDetailTab("bookings");
+                  setDetailDateFrom("");
+                  setDetailDateTo("");
+                }}
+                className="h-9 px-3 rounded-lg border border-gray-200 bg-white text-sm font-semibold text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+              >
+                <IconBack />
+                Quay lại
             </button>
-          </div>
-        </div>
-      </div>
 
-        {/* Summary Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="rounded-xl border border-gray-200 p-6 shadow-sm" style={{ backgroundColor: '#f4f8ff' }}>
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">Tổng đặt phòng</p>
-                <p className="text-3xl font-bold text-gray-900 mt-2">{data?.summary?.totalBookings ?? 0}</p>
-            </div>
-              <div className="w-12 h-12 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#f4f8ff' }}>
-                <svg className="w-6 h-6" style={{ color: '#0277b0' }}  fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                    </svg>
-            </div>
+              <div className="text-right">
+                <div className="text-sm font-semibold text-gray-900">{selectedRoomLive.roomName}</div>
               </div>
           </div>
 
-          <div className="rounded-xl border border-gray-200 p-6 shadow-sm" style={{ backgroundColor: '#f4f8ff' }}>
-            <div className="flex items-center justify-between">
+            <div className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+              <div className="px-6 py-5 border-b border-gray-200 bg-gradient-to-r from-sky-50 to-white">
+                <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="text-sm font-medium text-gray-600">Doanh thu</p>
-                <p className="text-3xl font-bold text-gray-900 mt-2">
-                  {(data?.summary?.totalRevenue ?? 0).toLocaleString('vi-VN')}₫
-                </p>
+                    <h1 className="text-2xl lg:text-3xl font-black text-gray-900">Phòng {selectedRoomLive.roomName}</h1>
               </div>
-              <div className="w-12 h-12 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#f4f8ff' }}>
-                <svg className="w-6 h-6" style={{ color: '#0277b0' }}  fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
+                  <div className="flex items-center gap-3">
+                    <Pill className={`${pillClassByStatus(selectedRoomLive.status)} px-3 py-1.5 text-sm font-semibold`}>{selectedRoomLive.status}</Pill>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await exportRoomReportToExcel(selectedRoomLive, userNameMap, staffAccountIdMap);
+                        } catch (error) {
+                          console.error('Error exporting Excel:', error);
+                          alert('Có lỗi xảy ra khi tạo file Excel. Vui lòng thử lại.');
+                        }
+                      }}
+                      className="p-2 rounded-lg text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors border border-gray-200"
+                      title="Tải báo cáo phòng"
+                    >
+                      <IconDownload />
+                    </button>
                   </div>
                 </div>
               </div>
 
-          <div className="rounded-xl border border-gray-200 p-6 shadow-sm" style={{ backgroundColor: '#f4f8ff' }}>
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">Số dịch vụ</p>
-                <p className="text-3xl font-bold text-gray-900 mt-2">{data?.summary?.totalServices ?? 0}</p>
-            </div>
-              <div className="w-12 h-12 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#f4f8ff' }}>
-                <svg className="w-6 h-6" style={{ color: '#0277b0' }}  fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                </svg>
-          </div>
-              </div>
+              {/* Desktop: filter + danh sách booking */}
+              <div className="hidden md:block">
+                <div className="p-6 space-y-4">
+                  <div className="flex flex-nowrap items-end gap-3 overflow-x-auto">
+                    <div className="flex-1 min-w-[360px]">
+                      <span className="mb-1 block text-xs font-semibold text-gray-700">Tìm kiếm</span>
+                      <input
+                        type="text"
+                        placeholder="Tìm theo mã booking, tên khách hoặc ghi chú..."
+                        value={detailSearch}
+                        onChange={(e) => setDetailSearch(e.target.value)}
+                        className="h-10 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+                      />
+                    </div>
+
+                    <div className="w-[160px] flex-shrink-0">
+                      <span className="mb-1 block text-xs font-semibold text-gray-700">Từ ngày</span>
+                      <input
+                        type="date"
+                        value={detailDateFrom}
+                        onChange={(e) => setDetailDateFrom(e.target.value)}
+                        className="h-10 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+                      />
+                    </div>
+
+                    <div className="w-[160px] flex-shrink-0">
+                      <span className="mb-1 block text-xs font-semibold text-gray-700">Đến ngày</span>
+                      <input
+                        type="date"
+                        value={detailDateTo}
+                        onChange={(e) => setDetailDateTo(e.target.value)}
+                        className="h-10 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+                      />
+                    </div>
+
+                    <div className="w-[220px] flex-shrink-0">
+                      <span className="mb-1 block text-xs font-semibold text-gray-700">Trạng thái</span>
+                      <select
+                        value={detailBookingStatus}
+                        onChange={(e) => setDetailBookingStatus(e.target.value)}
+                        className="h-10 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+                      >
+                        <option value="ALL">Tất cả trạng thái</option>
+                        <option value="CHECKED_IN">Đã check-in</option>
+                        <option value="CHECKED_OUT">Check-out</option>
+                        <option value="PENDING">Chờ duyệt</option>
+                        <option value="OTHER">Khác</option>
+                      </select>
+                    </div>
             </div>
 
-          <div className="rounded-xl border border-gray-200 p-6 shadow-sm" style={{ backgroundColor: '#f4f8ff' }}>
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-600">Công việc mở</p>
-                <p className="text-3xl font-bold text-gray-900 mt-2">{data?.summary?.openTasks ?? 0}</p>
-              </div>
-              <div className="w-12 h-12 rounded-lg flex items-center justify-center" style={{ backgroundColor: '#f4f8ff' }}>
-                <svg className="w-6 h-6" style={{ color: '#0277b0' }}  fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-                </svg>
-            </div>
-            </div>
+                  <DetailBookings
+                    room={selectedRoomLive}
+                    search={detailSearch}
+                    statusFilter={detailBookingStatus}
+                    dateFrom={detailDateFrom}
+                    dateTo={detailDateTo}
+                  />
             </div>
           </div>
 
-          {/* Tabs */}
-        <div className="bg-white rounded-xl border border-gray-200 p-1 flex items-center gap-1 overflow-x-auto">
-            {[
-              { key: 'overview', label: 'Tổng quan' },
-              { key: 'revenue', label: 'Doanh thu' },
-              { key: 'bookings', label: 'Đặt phòng' },
-            { key: 'services', label: 'Dịch vụ'},
-              { key: 'tasks', label: 'Công việc' },
-            { key: 'staff', label: 'Nhân viên'},
-            ].map(t => (
-            <button 
-              key={t.key} 
-              type="button" 
-              onClick={() => setActiveTab(t.key as any)} 
-              className={`px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-all ${
-                activeTab === t.key 
-                  ? 'bg-blue-600 text-white shadow-sm' 
-                  : 'text-gray-700 hover:bg-gray-100'
-              }`}
-            >
-              {t.label}
-            </button>
-            ))}
-          </div>
+              {/* Mobile: chỉ còn 1 accordion cho lịch sử đặt phòng */}
+              <div className="md:hidden p-4 space-y-3">
+                <div className="space-y-3 mb-4">
+                    <div className="space-y-2">
+                      <span className="text-xs font-semibold text-gray-700">
+                        Lọc theo thời gian
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="date"
+                          value={detailDateFrom}
+                          onChange={(e) => setDetailDateFrom(e.target.value)}
+                          className="flex-1 h-9 rounded-lg border border-gray-300 bg-white px-3 text-xs focus:outline-none focus:ring-2 focus:ring-sky-500"
+                        />
+                        <span className="text-xs text-gray-600">đến</span>
+                        <input
+                          type="date"
+                          value={detailDateTo}
+                          onChange={(e) => setDetailDateTo(e.target.value)}
+                          className="flex-1 h-9 rounded-lg border border-gray-300 bg-white px-3 text-xs focus:outline-none focus:ring-2 focus:ring-sky-500"
+                        />
+                      </div>
+                    </div>
 
-        {/* Main Content */}
-        <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-md rounded-2xl overflow-hidden">
-          <CardHeader className="bg-[hsl(var(--page-bg))]/40 border-b border-gray-200 !px-6 py-3">
-            <div className="flex items-center justify-between flex-wrap gap-4">
-              <h2 className="text-xl font-bold text-gray-900">
-                {activeTab === 'bookings' && ' Danh sách đặt phòng'}
-                {activeTab === 'services' && ' Danh sách dịch vụ'}
-                {activeTab === 'tasks' && ' Danh sách công việc'}
-                {activeTab === 'staff' && ' Doanh thu theo nhân viên'}
-                {activeTab === 'overview' && ' Tổng quan giao dịch'}
-                {activeTab === 'revenue' && ' Chi tiết doanh thu'}
-              </h2>
-              <div className="flex items-center gap-3 flex-wrap">
-                {/* Date Filter */}
-                {activeTab !== 'staff' && (
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="date"
-                      value={dateFrom}
-                      onChange={(e) => setDateFrom(e.target.value)}
-                      className="h-9 rounded-lg border border-gray-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                    <span className="text-gray-500">-</span>
-                    <input
-                      type="date"
-                      value={dateTo}
-                      onChange={(e) => setDateTo(e.target.value)}
-                      className="h-9 rounded-lg border border-gray-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-              </div>
-                )}
-                {/* View Toggle */}
-                <div className="flex items-center gap-1 bg-white border border-gray-300 rounded-lg p-1">
-                  <button
-                    type="button"
-                    onClick={() => setViewMode('table')}
-                    className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
-                      viewMode === 'table'
-                        ? 'bg-blue-600 text-white shadow-sm'
-                        : 'text-gray-600 hover:bg-gray-100'
-                    }`}
-                  >
-                    Bảng
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setViewMode('chart')}
-                    className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
-                      viewMode === 'chart'
-                        ? 'bg-blue-600 text-white shadow-sm'
-                        : 'text-gray-600 hover:bg-gray-100'
-                    }`}
-                  >
-                    Biểu đồ
-                  </button>
-            </div>
-                {((activeTab === 'bookings' && bookingRows.length > 0) ||
-                  (activeTab === 'services' && serviceRows.length > 0) ||
-                  (activeTab === 'tasks' && taskRows.length > 0) ||
-                  (activeTab === 'staff' && data.staffRevenues.length > 0) ||
-                  (activeTab === 'overview' && filtered.length > 0) ||
-                  (activeTab === 'revenue' && serviceRows.length > 0)) && (
-                  <div className="px-3 py-1.5  text-blue-700 rounded-lg text-sm font-semibold">
-                    {activeTab === 'bookings' && `${bookingRows.length} đặt phòng`}
-                    {activeTab === 'services' && `${serviceRows.length} dịch vụ`}
-                    {activeTab === 'tasks' && `${taskRows.length} công việc`}
-                    {activeTab === 'staff' && `${data.staffRevenues.length} nhân viên`}
-                    {activeTab === 'overview' && `${filtered.length} mục`}
-                    {activeTab === 'revenue' && `${serviceRows.length} giao dịch`}
-              </div>
-                )}
-            </div>
-          </div>
-          </CardHeader>
-          <CardBody className="p-0">
-            {/* BOOKINGS TAB */}
-            {activeTab === 'bookings' && (
-              <>
-                <div className="px-6 py-3 border-b border-gray-200 bg-gray-50">
-                  <div className="flex items-center gap-3">
-                    <label className="text-sm font-medium text-gray-700">Lọc theo trạng thái:</label>
+                  <input
+                    type="text"
+                    placeholder="Tìm theo mã booking, tên khách hoặc ghi chú..."
+                    value={detailSearch}
+                    onChange={(e) => setDetailSearch(e.target.value)}
+                    className="w-full h-9 rounded-lg border border-gray-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  />
                     <select
-                      className="h-9 rounded-lg border border-gray-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      value={bookingStatus}
-                      onChange={(e) => setBookingStatus(e.target.value)}
+                      value={detailBookingStatus}
+                      onChange={(e) => setDetailBookingStatus(e.target.value)}
+                      className="w-full h-9 rounded-lg border border-gray-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
                     >
-                      <option value="ALL">Tất cả</option>
+                      <option value="ALL">Tất cả trạng thái</option>
+                      <option value="CHECKED_IN">Đã check-in</option>
+                      <option value="CHECKED_OUT">Check-out</option>
                       <option value="PENDING">Chờ duyệt</option>
-                      <option value="APPROVED">Đã duyệt</option>
-                      <option value="CHECKED_IN">Đã nhận phòng</option>
-                      <option value="CHECKED_OUT">Đã trả phòng</option>
-                      <option value="CANCELLED">Đã hủy</option>
-                      <option value="REJECTED">Đã từ chối</option>
+                      <option value="OTHER">Khác</option>
                     </select>
               </div>
-          </div>
-                {viewMode === 'chart' ? (
-                  <div className="p-6">
-                    <BarChart 
-                      labels={chartData.bookingDates} 
-                      values={chartData.bookingCounts} 
-                      color="#3b82f6"
-                      title="Lượt đặt phòng theo ngày"
-                      unit=" lượt"
-                    />
-              </div>
-                ) : (
-              <div className="hidden lg:block overflow-x-auto">
-                    <Table>
-                      <THead>
-                        <tr>
-                          <th className="px-4 py-3 text-center text-sm font-bold">Mã booking</th>
-                          <th className="px-4 py-3 text-center text-sm font-bold">Phòng</th>
-                          <th className="px-4 py-3 text-center text-sm font-bold">Check-in</th>
-                          <th className="px-4 py-3 text-center text-sm font-bold">Check-out</th>
-                          <th className="px-4 py-3 text-center text-sm font-bold">Số khách</th>
-                          <th className="px-4 py-3 text-center text-sm font-bold">Trạng thái</th>
-                    </tr>
-                      </THead>
-                      <TBody>
-                        {paginatedData.length === 0 ? (
-                          <tr>
-                            <td colSpan={6} className="px-6 py-12 text-center text-gray-500">
-                              
-                              <p>Không có dữ liệu</p>
-                            </td>
-                      </tr>
-                        ) : (
-                          (paginatedData as any[]).map((b: any, index: number) => (
-                            <tr key={b.id} className={`transition-colors ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-[#f2f8fe]`}>
-                              <td className="px-4 py-3 text-center font-medium text-gray-900">{b.code}</td>
-                              <td className="px-4 py-3 text-center text-gray-700">{b.roomId ?? '—'}</td>
-                              <td className="px-4 py-3 text-center text-gray-700">{b.checkinDate}</td>
-                              <td className="px-4 py-3 text-center text-gray-700">{b.checkoutDate}</td>
-                              <td className="px-4 py-3 text-center text-gray-700">{b.numGuests ?? 1}</td>
-                              <td className="px-4 py-3 text-center">
-                                <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                                  b.status === 'APPROVED' ? 'bg-green-100 text-green-800' :
-                                  b.status === 'PENDING' ? 'bg-yellow-100 text-yellow-800' :
-                                  b.status === 'CANCELLED' || b.status === 'REJECTED' ? 'bg-red-100 text-red-800' :
-                                  ' text-blue-800'
-                                }`}>
-                                  {b.status}
-                                </span>
-                              </td>
-                      </tr>
-                          ))
-                        )}
-                  </TBody>
-                </Table>
-              </div>
-                )}
-                {viewMode === 'table' && <PaginationControls />}
-              </>
-            )}
 
-            {/* SERVICES TAB */}
-            {activeTab === 'services' && (
-              <>
-                <div className="px-6 py-3 border-b border-gray-200 bg-gray-50">
-                  <div className="flex items-center gap-3">
-                    <label className="text-sm font-medium text-gray-700">Lọc theo trạng thái:</label>
-                    <select
-                      className="h-9 rounded-lg border border-gray-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      value={serviceStatus}
-                      onChange={(e) => setServiceStatus(e.target.value)}
-                    >
-                      <option value="ALL">Tất cả</option>
-                      <option value="PENDING">Chờ xử lý</option>
-                      <option value="CONFIRMED">Đã xác nhận</option>
-                      <option value="COMPLETED">Hoàn thành</option>
-                      <option value="CANCELLED">Đã hủy</option>
-                    </select>
+                <AccordionSection
+                  title="Lịch sử đặt phòng"
+                  open={!!accordionOpen.bookings}
+                  onToggle={() => setAccordionOpen((p) => ({ ...p, bookings: !p.bookings }))}
+                >
+                  <DetailBookings
+                    room={selectedRoomLive}
+                    search={detailSearch}
+                    statusFilter={detailBookingStatus}
+                    dateFrom={detailDateFrom}
+                    dateTo={detailDateTo}
+                  />
+                </AccordionSection>
             </div>
               </div>
-                {viewMode === 'chart' ? (
-                  <div className="p-6">
-                    <LineChart 
-                      labels={chartData.serviceDates} 
-                      values={chartData.serviceRevenues} 
-                      color="#10b981"
-                      title="Doanh thu dịch vụ theo ngày"
-                      unit="₫"
-                    />
               </div>
                 ) : (
-              <div className="hidden lg:block overflow-x-auto">
-                    <Table>
-                      <THead>
-                        <tr>
-                          <th className="px-4 py-3 text-center text-sm font-bold">Mã đơn</th>
-                          <th className="px-4 py-3 text-center text-sm font-bold">Booking</th>
-                          <th className="px-4 py-3 text-center text-sm font-bold">Tổng tiền</th>
-                          <th className="px-4 py-3 text-center text-sm font-bold">Trạng thái</th>
-                    </tr>
-                      </THead>
-                      <TBody>
-                        {paginatedData.length === 0 ? (
-                          <tr>
-                            <td colSpan={4} className="px-6 py-12 text-center text-gray-500">
-                            
-                              <p>Không có dữ liệu</p>
-                            </td>
-                      </tr>
-                        ) : (
-                          (paginatedData as any[]).map((o: any, index: number) => (
-                            <tr key={o.id} className={`transition-colors ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-[#f2f8fe]`}>
-                              <td className="px-4 py-3 text-center font-medium text-gray-900">{o.code || o.id}</td>
-                              <td className="px-4 py-3 text-center text-gray-700">{o.bookingId ?? '—'}</td>
-                              <td className="px-4 py-3 text-center font-semibold text-green-600">
-                                {(o.totalAmount || o.total_amount || 0).toLocaleString('vi-VN')}₫
-                              </td>
-                              <td className="px-4 py-3 text-center">
-                                <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                                  o.status === 'COMPLETED' ? 'bg-green-100 text-green-800' :
-                                  o.status === 'PENDING' ? 'bg-yellow-100 text-yellow-800' :
-                                  o.status === 'CANCELLED' ? 'bg-red-100 text-red-800' :
-                                  ' text-blue-800'
-                                }`}>
-                                  {o.status || '—'}
-                                </span>
-                              </td>
-                      </tr>
-                          ))
-                        )}
-                  </TBody>
-                </Table>
+          <>
+            {/* Header Card + Filters */}
+            <div
+              className="shadow-sm border border-gray-200 rounded-2xl overflow-hidden"
+              style={{ backgroundColor: "#dcebff" }}
+            >
+            <div className="px-6 py-4 border-b border-gray-200/50">
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <div className="flex items-center gap-3 min-h-[40px]">
+                      <h1 className="text-3xl font-bold text-gray-900 leading-tight">
+                        Report theo phòng
+                      </h1>
+                      {isLoading && (
+                        <span
+                          className="inline-block h-4 w-4 rounded-full border-2 border-gray-400/40 border-t-[hsl(var(--primary))] animate-spin"
+                          aria-label="Đang tải dữ liệu"
+                        />
+                      )}
+                    </div>
+                  
               </div>
-                )}
-                {viewMode === 'table' && <PaginationControls />}
-              </>
-            )}
-
-            {/* TASKS TAB */}
-            {activeTab === 'tasks' && (
-              <>
-                <div className="px-6 py-3 border-b border-gray-200 bg-gray-50">
-                  <div className="flex items-center gap-3">
-                    <label className="text-sm font-medium text-gray-700">Lọc theo trạng thái:</label>
-                    <select
-                      className="h-9 rounded-lg border border-gray-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      value={taskStatus}
-                      onChange={(e) => setTaskStatus(e.target.value)}
-                    >
-                      <option value="ALL">Tất cả</option>
-                      <option value="TODO">Cần làm</option>
-                      <option value="IN_PROGRESS">Đang thực hiện</option>
-                      <option value="DONE">Hoàn thành</option>
-                      <option value="CANCELLED">Đã hủy</option>
-                    </select>
+                  <span className="self-start md:self-auto text-sm font-semibold text-[hsl(var(--primary))] bg-[hsl(var(--primary)/0.12)] px-3 py-1 rounded-full">
+                    {filteredRows.length} / {rows.length} phòng
+                  </span>
             </div>
           </div>
-                {viewMode === 'chart' ? (
-                  <div className="p-6">
-                    <PieChart 
-                      title="Phân bổ công việc theo trạng thái"
-                      data={Object.entries(chartData.tasksByStatus).map(([status, count]) => ({
-                        label: status === 'TODO' ? 'Cần làm' :
-                               status === 'OPEN' ? 'Mở' :
-                               status === 'IN_PROGRESS' ? 'Đang thực hiện' :
-                               status === 'DONE' ? 'Hoàn thành' :
-                               status === 'COMPLETED' ? 'Đã hoàn thành' :
-                               status === 'CANCELLED' ? 'Đã hủy' : status,
-                        value: count as number,
-                        color: status === 'TODO' || status === 'OPEN' ? '#ef4444' : 
-                               status === 'IN_PROGRESS' ? '#f59e0b' : 
-                               status === 'DONE' || status === 'COMPLETED' ? '#10b981' : '#6b7280'
-                      }))}
-                    />
-              </div>
-                ) : (
-              <div className="hidden lg:block overflow-x-auto">
-                    <Table>
-                      <THead>
-                        <tr>
-                          <th className="px-4 py-3 text-center text-sm font-bold">Tiêu đề</th>
-                          <th className="px-4 py-3 text-center text-sm font-bold">Loại</th>
-                          <th className="px-4 py-3 text-center text-sm font-bold">Liên quan</th>
-                          <th className="px-4 py-3 text-center text-sm font-bold">Trạng thái</th>
-                    </tr>
-                      </THead>
-                      <TBody>
-                        {paginatedData.length === 0 ? (
-                          <tr>
-                            <td colSpan={4} className="px-6 py-12 text-center text-gray-500">
-                           
-                              <p>Không có dữ liệu</p>
-                            </td>
-                      </tr>
-                    ) : (
-                          (paginatedData as any[]).map((t: any, index: number) => (
-                            <tr key={t.id} className={`transition-colors ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-[#f2f8fe]`}>
-                              <td className="px-4 py-3 text-center font-medium text-gray-900">{t.title || t.taskName || t.code}</td>
-                              <td className="px-4 py-3 text-center text-gray-700">{t.taskType || t.type || '—'}</td>
-                              <td className="px-4 py-3 text-center text-gray-700">{t.relatedType ? `${t.relatedType} #${t.relatedId}` : '—'}</td>
-                              <td className="px-4 py-3 text-center">
-                                <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                                  t.status === 'DONE' || t.status === 'COMPLETED' ? 'bg-green-100 text-green-800' :
-                                  t.status === 'IN_PROGRESS' ? 'bg-yellow-100 text-yellow-800' :
-                                  t.status === 'CANCELLED' ? 'bg-red-100 text-red-800' :
-                                  'bg-gray-100 text-gray-800'
-                                }`}>
-                                  {t.status}
-                                </span>
-                              </td>
-                        </tr>
-                      ))
-                    )}
-                  </TBody>
-                </Table>
-            </div>
-                )}
-                {viewMode === 'table' && <PaginationControls />}
-              </>
-            )}
 
-            {/* STAFF TAB */}
-          {activeTab === 'staff' && (
-              <>
-                {viewMode === 'chart' ? (
-                  <div className="p-6">
-                    <BarChart 
-                      labels={data.staffRevenues.map(s => s.staffName)} 
-                      values={data.staffRevenues.map(s => s.totalAmount)} 
-                      color="#8b5cf6"
-                      title="Doanh thu theo nhân viên"
-                      unit="₫"
+              {/* Date & Room filters */}
+              <div className="bg-white px-6 py-4 space-y-3">
+                <div className="flex flex-col lg:flex-row gap-3">
+                  <div className="flex flex-1 flex-col sm:flex-row gap-3">
+                    <div className="flex-1">
+                      <label className="block text-xs font-medium text-gray-600 mb-1">
+                        Từ ngày
+                      </label>
+                      <input
+                        type="date"
+                        value={dateFrom}
+                        onChange={(e) => setDateFrom(e.target.value)}
+                        className="w-full h-9 rounded-lg border border-gray-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]"
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <label className="block text-xs font-medium text-gray-600 mb-1">
+                        Đến ngày
+                      </label>
+                      <input
+                        type="date"
+                        value={dateTo}
+                        onChange={(e) => setDateTo(e.target.value)}
+                        className="w-full h-9 rounded-lg border border-gray-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2 items-end">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const today = new Date();
+                        const iso = today.toISOString().slice(0, 10);
+                        setDateFrom(iso);
+                        setDateTo(iso);
+                      }}
+                      className="h-9 px-3 rounded-lg border border-gray-300 bg-white text-xs font-semibold text-gray-700 hover:bg-gray-50"
+                    >
+                      Hôm nay
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const now = new Date();
+                        const y = now.getFullYear();
+                        const m = now.getMonth(); // 0-based
+                        const from = new Date(y, m, 1);
+                        const to = new Date(y, m + 1, 0);
+                        const fromIso = from.toISOString().slice(0, 10);
+                        const toIso = to.toISOString().slice(0, 10);
+                        setDateFrom(fromIso);
+                        setDateTo(toIso);
+                      }}
+                      className="h-9 px-3 rounded-lg border border-gray-300 bg-white text-xs font-semibold text-gray-700 hover:bg-gray-50"
+                    >
+                      Tháng này
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const now = new Date();
+                        const y = now.getFullYear();
+                        const from = new Date(y, 0, 1);
+                        const to = new Date(y, 11, 31);
+                        const fromIso = from.toISOString().slice(0, 10);
+                        const toIso = to.toISOString().slice(0, 10);
+                        setDateFrom(fromIso);
+                        setDateTo(toIso);
+                      }}
+                      className="h-9 px-3 rounded-lg border border-gray-300 bg-white text-xs font-semibold text-gray-700 hover:bg-gray-50"
+                    >
+                      Năm nay
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDateFrom("");
+                        setDateTo("");
+                      }}
+                      className="h-9 px-3 rounded-lg border border-red-200 bg-red-50 text-xs font-semibold text-red-700 hover:bg-red-100"
+                    >
+                      Xóa lọc ngày
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    Tìm theo tên phòng
+                  </label>
+                <input
+                  type="text"
+                    placeholder="Gõ để tìm phòng..."
+                  value={roomSearch}
+                  onChange={(e) => setRoomSearch(e.target.value)}
+                  className="w-full h-9 rounded-lg border border-gray-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]"
                     />
+                </div>
               </div>
-                ) : (
-              <div className="hidden lg:block overflow-x-auto">
+            </div>
+
+            {/* Room list Card */}
+            <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-md rounded-2xl overflow-hidden">
+              <CardHeader className="bg-[hsl(var(--page-bg))]/40 border-b border-gray-200 !px-6 py-3">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-xl font-bold text-gray-900">Danh sách phòng</h2>
+              </div>
+              </CardHeader>
+              <CardBody className="p-0">
+                {/* Desktop Table */}
+              <div className="hidden lg:block overflow-x-auto" style={{ minHeight: 420 }}>
                     <Table>
                       <THead>
                         <tr>
-                          <th className="px-4 py-3 text-center text-sm font-bold">Nhân viên</th>
-                          <th className="px-4 py-3 text-center text-sm font-bold">Số đơn</th>
+                        <th className="px-4 py-3 text-center text-sm font-bold">Tên phòng</th>
+                        <th className="px-4 py-3 text-center text-sm font-bold">Trạng thái</th>
+                        <th className="px-4 py-3 text-center text-sm font-bold">Lượt đặt</th>
+                        <th className="px-4 py-3 text-center text-sm font-bold">Số khách</th>
                           <th className="px-4 py-3 text-center text-sm font-bold">Doanh thu</th>
+                        <th className="px-4 py-3 text-center text-sm font-bold">Dịch vụ</th>
+                        <th className="px-4 py-3 text-center text-sm font-bold">Thao tác</th>
                     </tr>
                       </THead>
                       <TBody>
-                        {paginatedData.length === 0 ? (
-                          <tr>
-                            <td colSpan={3} className="px-6 py-12 text-center text-gray-500">
-                              <svg className="w-12 h-12 mx-auto mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                              </svg>
-                              <p>Chưa có dữ liệu</p>
+                      {isLoading ? (
+                        // Skeleton rows để giảm CLS
+                        Array.from({ length: 8 }).map((_, idx) => (
+                          <tr key={`sk-${idx}`} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-100'}>
+                            <td className="px-4 py-3"><div className="h-4 w-40 mx-auto rounded bg-gray-200 animate-pulse" /></td>
+                            <td className="px-4 py-3"><div className="h-6 w-28 mx-auto rounded-full bg-gray-200 animate-pulse" /></td>
+                            <td className="px-4 py-3"><div className="h-4 w-10 mx-auto rounded bg-gray-200 animate-pulse" /></td>
+                            <td className="px-4 py-3"><div className="h-4 w-10 mx-auto rounded bg-gray-200 animate-pulse" /></td>
+                            <td className="px-4 py-3"><div className="h-4 w-24 mx-auto rounded bg-gray-200 animate-pulse" /></td>
+                            <td className="px-4 py-3"><div className="h-4 w-10 mx-auto rounded bg-gray-200 animate-pulse" /></td>
+                            <td className="px-4 py-3"><div className="h-8 w-24 mx-auto rounded bg-gray-200 animate-pulse" /></td>
+                          </tr>
+                        ))
+                      ) : filteredRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="px-4 py-8 text-center text-gray-500">
+                            {rows.length === 0
+                              ? "Không có dữ liệu theo bộ lọc hiện tại."
+                              : "Không tìm thấy phòng nào."}
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredRows.map((r, index) => (
+                          <tr
+                            key={r.roomKey}
+                            className={`transition-colors ${index % 2 === 0 ? 'bg-white' : 'bg-gray-100'} hover:bg-gray-50`}
+                          >
+                            <td className="px-4 py-3 text-center">
+                              <div className="font-semibold text-gray-900">{r.roomName}</div>
                             </td>
-                      </tr>
-                    ) : (
-                          (paginatedData as any[]).map((s: any, index: number) => (
-                            <tr key={s.staffId} className={`transition-colors ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-[#f2f8fe]`}>
-                              <td className="px-4 py-3 text-center font-medium text-gray-900">{s.staffName}</td>
-                              <td className="px-4 py-3 text-center text-gray-700">{s.orderCount}</td>
-                              <td className="px-4 py-3 text-center font-semibold text-green-600">
-                                {s.totalAmount.toLocaleString('vi-VN')}₫
+                            <td className="px-4 py-3 text-center">
+                              <Pill className={pillClassByStatus(r.status)}>{r.status}</Pill>
+                            </td>
+                            <td className="px-4 py-3 text-center text-gray-700 font-semibold">{r.bookingCount}</td>
+                            <td className="px-4 py-3 text-center text-gray-700">{r.totalGuests}</td>
+                            <td className="px-4 py-3 text-center text-emerald-700 font-semibold">{formatCurrencyVnd(r.revenue)}</td>
+                            <td className="px-4 py-3 text-center text-gray-700">{r.totalServiceCount}</td>
+                            <td className="px-4 py-3 text-center">
+                              <Button
+                                variant="secondary"
+                                className="h-8 px-3 text-xs bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]"
+                                onClick={() => {
+                                  setSelectedRoom(r);
+                                  setDetailTab("bookings");
+                                  setDetailSearch("");
+                                  setDetailBookingStatus("ALL");
+                                  setDetailDateFrom("");
+                                  setDetailDateTo("");
+                                }}
+                              >
+                                Xem chi tiết
+                              </Button>
                               </td>
                         </tr>
                       ))
@@ -1148,83 +2282,90 @@ export default function ReportsPage() {
                   </TBody>
                 </Table>
               </div>
-                )}
-                {viewMode === 'table' && <PaginationControls />}
-              </>
-            )}
 
-            {/* OVERVIEW & REVENUE TABS */}
-            {(activeTab === 'overview' || activeTab === 'revenue') && (
-              <>
-                {viewMode === 'chart' ? (
-                  <div className="p-6 space-y-8">
-                    <LineChart 
-                      labels={chartData.dates} 
-                      values={chartData.revenueSeries} 
-                      color="#3b82f6"
-                      title="Doanh thu theo thời gian"
-                      unit="₫"
-                    />
-                    <BarChart 
-                      labels={chartData.dates} 
-                      values={chartData.bookingsSeries} 
-                      color="#10b981"
-                      title="Lượt đặt phòng theo thời gian"
-                      unit=" lượt"
-                    />
+                {/* Mobile Cards */}
+                <div className="lg:hidden space-y-3 p-4">
+                  {isLoading ? (
+                    <div className="space-y-3" aria-label="Đang tải danh sách phòng">
+                      {Array.from({ length: 6 }).map((_, idx) => (
+                        <div key={`msk-${idx}`} className="w-full rounded-2xl border border-gray-200 bg-white shadow-sm p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="h-4 w-40 rounded bg-gray-200 animate-pulse" />
+                            <div className="h-6 w-20 rounded-full bg-gray-200 animate-pulse" />
+                          </div>
+                          <div className="mt-3 grid grid-cols-2 gap-2">
+                            <div className="h-10 rounded-xl bg-gray-100 border border-gray-200 animate-pulse" />
+                            <div className="h-10 rounded-xl bg-gray-100 border border-gray-200 animate-pulse" />
+                          </div>
+                          <div className="mt-2 grid grid-cols-2 gap-2">
+                            <div className="h-10 rounded-xl bg-gray-100 border border-gray-200 animate-pulse" />
+                            <div className="h-10 rounded-xl bg-gray-100 border border-gray-200 animate-pulse" />
+                          </div>
+                          <div className="mt-3">
+                            <div className="h-9 rounded bg-gray-200 animate-pulse" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : filteredRows.length === 0 ? (
+                    <div className="py-8 text-center text-gray-500">
+                      {rows.length === 0
+                        ? "Không có dữ liệu theo bộ lọc hiện tại."
+                        : "Không tìm thấy phòng nào."}
                       </div>
                 ) : (
-                  <div className="hidden lg:block overflow-x-auto">
-                    <Table>
-                      <THead>
-                        <tr>
-                          <th className="px-4 py-3 text-center text-sm font-bold">Ngày</th>
-                          <th className="px-4 py-3 text-center text-sm font-bold">Loại</th>
-                          <th className="px-4 py-3 text-center text-sm font-bold">Tiêu đề</th>
-                          <th className="px-4 py-3 text-center text-sm font-bold">Số tiền</th>
-                          <th className="px-4 py-3 text-center text-sm font-bold">Số lượng</th>
-                    </tr>
-                      </THead>
-                      <TBody>
-                        {paginatedData.length === 0 ? (
-                          <tr>
-                            <td colSpan={5} className="px-6 py-12 text-center text-gray-500">
-                           
-                              <p>Không có dữ liệu</p>
-                            </td>
-                      </tr>
-                        ) : (
-                          (paginatedData as any[]).map((i: any, index: number) => (
-                            <tr key={i.id} className={`transition-colors ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50'} hover:bg-[#f2f8fe]`}>
-                              <td className="px-4 py-3 text-center text-gray-700">{i.date}</td>
-                              <td className="px-4 py-3 text-center">
-                                <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                                  i.type === 'BOOKING' ? ' text-blue-800' :
-                                  i.type === 'SERVICE' ? 'bg-green-100 text-green-800' :
-                                  i.type === 'PAYMENT' ? 'bg-purple-100 text-purple-800' :
-                                  'bg-gray-100 text-gray-800'
-                                }`}>
-                                  {i.type}
-                                </span>
-                              </td>
-                              <td className="px-4 py-3 text-center text-gray-900">{i.title}</td>
-                              <td className="px-4 py-3 text-center font-medium text-gray-900">
-                                {i.amount ? `${i.amount.toLocaleString('vi-VN')}₫` : '—'}
-                              </td>
-                              <td className="px-4 py-3 text-center text-gray-700">{i.count ?? '—'}</td>
-                            </tr>
-                          ))
-                        )}
-                  </TBody>
-                </Table>
+                    filteredRows.map((r) => (
+                      <div
+                        key={r.roomKey}
+                        className="w-full rounded-2xl border border-gray-200 bg-white shadow-sm p-4"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="font-semibold text-gray-900 text-base">{r.roomName}</div>
+                          </div>
+                          <Pill className={pillClassByStatus(r.status)}>{r.status}</Pill>
+                        </div>
+
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          <div className="rounded-xl bg-gray-50 border border-gray-200 px-3 py-2 text-sm">
+                            <span className="text-gray-600">Lượt đặt:</span> <span className="font-bold text-gray-900">{r.bookingCount}</span>
+                          </div>
+                          <div className="rounded-xl bg-gray-50 border border-gray-200 px-3 py-2 text-sm">
+                            <span className="text-gray-600">Số khách:</span> <span className="font-bold text-gray-900">{r.totalGuests}</span>
+                          </div>
+                        </div>
+                        <div className="mt-2 grid grid-cols-2 gap-2">
+                          <div className="rounded-xl bg-gray-50 border border-gray-200 px-3 py-2 text-sm">
+                            <span className="text-gray-600">Doanh thu:</span> <span className="font-bold text-emerald-700">{formatCurrencyVnd(r.revenue)}</span>
+                          </div>
+                          <div className="rounded-xl bg-gray-50 border border-gray-200 px-3 py-2 text-sm">
+                            <span className="text-gray-600">Dịch vụ:</span> <span className="font-bold text-gray-900">{r.totalServiceCount}</span>
+                          </div>
+                        </div>
+                        <div className="mt-3">
+                          <Button
+                            variant="secondary"
+                            className="w-full h-9 text-sm bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]"
+                            onClick={() => {
+                              setSelectedRoom(r);
+                              setDetailTab("bookings");
+                              setDetailSearch("");
+                              setDetailBookingStatus("ALL");
+                            }}
+                          >
+                            Xem chi tiết
+                          </Button>
+                        </div>
+                      </div>
+                    ))
+                  )}
                     </div>
-                )}
-                {viewMode === 'table' && <PaginationControls />}
-              </>
-            )}
             </CardBody>
           </Card>
+          </>
+        )}
         </div>
       </div>
-  )
+  );
 }
+

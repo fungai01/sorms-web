@@ -63,8 +63,12 @@ export default function BookingsPage() {
   const [detailOpen, setDetailOpen] = useState(false)
   const [selected, setSelected] = useState<Booking | null>(null)
 
-  // Face images cache: userId -> face image URL or null
-  const [faceImages, setFaceImages] = useState<Record<string, string | null>>({})
+  const [faceModalOpen, setFaceModalOpen] = useState(false)
+  const [currentImageIndex, setCurrentImageIndex] = useState(0)
+
+  // Face images cache: userId -> face image data URLs (from AI) or null
+  // We store data URLs so <img src="..."> can render base64 from API.
+  const [faceImages, setFaceImages] = useState<Record<string, string[] | null>>({})
   const [loadingFaces, setLoadingFaces] = useState<Record<string, boolean>>({})
 
   const [editOpen, setEditOpen] = useState(false)
@@ -121,7 +125,7 @@ export default function BookingsPage() {
     return () => clearTimeout(t)
   }, [flash])
 
-  // Helper: Hiển thị tên khách hàng (Tên > Email > #ID)
+  // Helper: Hiển thị tên người đặt phòng (Tên > Email > #ID)
   const getCustomerDisplay = useCallback((b: any) => {
     if (b.userName) return b.userName
     if (b.userEmail) return b.userEmail
@@ -131,19 +135,24 @@ export default function BookingsPage() {
   }, [users])
 
   // Helper: Get face image URL for a user
+  // IMPORTANT: Prefer AI face images cache first. Only fallback to avatarUrl when no AI face image.
   const getUserFaceImage = useCallback((userId: string | number | undefined) => {
     if (!userId) return null
     const userIdStr = String(userId)
-    // Always check users array first (source of truth)
+
+    // 1) Prefer AI face image (from GET /ai/recognition/faces/{id}/images)
+    const aiFaces = faceImages[userIdStr]
+    if (Array.isArray(aiFaces) && aiFaces.length > 0) return aiFaces[0]
+
+    // 2) Fallback to user avatar
     const user = users.find(u => String(u.id) === userIdStr)
-    if (user?.avatarUrl) {
-      return user.avatarUrl
-    }
-    // Fallback to cache if user not found or no avatarUrl
-    return faceImages[userIdStr] || null
+    if (user?.avatarUrl) return user.avatarUrl
+
+    return null
   }, [faceImages, users])
 
   // Fetch face image for a user
+  // Backend endpoint: GET /ai/recognition/faces/{id}/images (AIRecognitionController.java:125-133)
   const fetchFaceImage = useCallback(async (userId: string) => {
     if (!userId || faceImages[userId] !== undefined || loadingFaces[userId]) {
       return // Already fetched or loading
@@ -151,15 +160,41 @@ export default function BookingsPage() {
 
     setLoadingFaces(prev => ({ ...prev, [userId]: true }))
     try {
-      const response = await apiClient.getUserFaceInfo(userId)
-      if (response.success && response.data) {
-        // API trả về { success: true, message: "...", student: { class_id, num_images, student_id } }
-        // Nếu có face image URL trong response, lưu vào cache
-        // Hiện tại API chỉ trả về metadata, không có image URL
-        // Dùng avatarUrl từ UserResponse nếu có
+      // 1) Prefer actual face images endpoint
+      const imagesRes = await apiClient.getUserFaceImages(userId)
+
+      if (imagesRes?.success && imagesRes?.data) {
+        // Backend actual shape (based on your response):
+        // imagesRes.data = {
+        //   success: true,
+        //   message: "Retrieved ...",
+        //   images: [ { image_name, image_base64, image_path, file_size }, ... ],
+        //   student_id,
+        //   total_images
+        // }
+        const raw: any = imagesRes.data
+
+        const items: any[] = Array.isArray(raw?.images) ? raw.images : []
+        const dataUrls: string[] = items
+          .map((it: any) => {
+            const b64 = it?.image_base64
+            if (!b64 || typeof b64 !== 'string') return null
+            // BE sends pure base64 (no data: prefix)
+            return b64.startsWith('data:') ? b64 : `data:image/jpeg;base64,${b64}`
+          })
+          .filter(Boolean) as string[]
+
+        setFaceImages(prev => ({ ...prev, [userId]: dataUrls.length > 0 ? dataUrls : null }))
+        return
+      }
+
+      // 2) Fallback to face info (metadata) endpoint
+      const infoRes = await apiClient.getUserFaceInfo(userId)
+      if (infoRes?.success) {
+        // If we only have metadata, fallback to avatarUrl from users list
         const user = users.find(u => String(u.id) === String(userId))
         const imageUrl = user?.avatarUrl || null
-        setFaceImages(prev => ({ ...prev, [userId]: imageUrl }))
+        setFaceImages(prev => ({ ...prev, [userId]: imageUrl ? [imageUrl] : null }))
       } else {
         setFaceImages(prev => ({ ...prev, [userId]: null }))
       }
@@ -174,6 +209,13 @@ export default function BookingsPage() {
       })
     }
   }, [faceImages, loadingFaces, users])
+
+  // Reset image index when modal opens or selected booking changes
+  useEffect(() => {
+    if (faceModalOpen && selected) {
+      setCurrentImageIndex(0)
+    }
+  }, [faceModalOpen, selected])
 
   // Fetch face images for all bookings when users are loaded
   useEffect(() => {
@@ -311,7 +353,7 @@ export default function BookingsPage() {
       return
     }
     if (!edit.userId) {
-      setUserIdError('Vui lòng chọn khách hàng')
+      setUserIdError('Vui lòng chọn tên người đặt phòng')
       return
     }
     if (!edit.roomId || edit.roomId === 0) {
@@ -487,6 +529,7 @@ export default function BookingsPage() {
       } else if (e.key === 'Escape') {
         if (editOpen) handleCloseEdit()
         setDetailOpen(false)
+        setFaceModalOpen(false)
         setConfirmOpen({ open: false })
       }
     }
@@ -616,7 +659,7 @@ export default function BookingsPage() {
                   <THead>
                     <tr>
                       <th className="px-4 py-3 text-center text-sm font-bold">Mã Boking</th>
-                      <th className="px-4 py-3 text-left text-sm font-bold">Khách hàng</th>
+                      <th className="px-4 py-3 text-left text-sm font-bold">Người đặt phòng</th>
                       <th className="px-4 py-3 text-center text-sm font-bold">Phòng Đặt</th>
                       <th className="px-4 py-3 text-center text-sm font-bold">Thời gian</th>
                       <th className="px-4 py-3 text-center text-sm font-bold">Trạng thái</th>
@@ -658,6 +701,11 @@ export default function BookingsPage() {
                             <td className="px-4 py-3 text-center">
                               <div className="flex gap-2 justify-center">
                             <Button variant="secondary" className="h-8 px-3 text-xs bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]" onClick={() => { setSelected(row); setDetailOpen(true); }}>Xem</Button>
+                            <Button variant="secondary" className="h-8 px-3 text-xs bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]" onClick={() => {
+                              setSelected(row)
+                              if (row.userId) fetchFaceImage(String(row.userId))
+                              setFaceModalOpen(true)
+                            }}>Ảnh</Button>
                             <Button variant="secondary" className="h-8 px-3 text-xs bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))] hover:bg-[hsl(var(--primary)/0.06)]" onClick={() => openEdit(row)}>Sửa</Button>
                             <Button variant="danger" className="h-8 px-3 text-xs" onClick={() => confirmDelete(row.id)}>Xóa</Button>
                               </div>
@@ -710,6 +758,11 @@ export default function BookingsPage() {
                             </div>
                     <div className="mt-3 grid grid-cols-3 gap-2">
                       <Button variant="secondary" className="h-10 text-sm font-medium bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))]" onClick={() => { setSelected(row); setDetailOpen(true); }}>Xem</Button>
+                      <Button variant="secondary" className="h-10 text-sm font-medium bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))]" onClick={() => {
+                        setSelected(row)
+                        if (row.userId) fetchFaceImage(String(row.userId))
+                        setFaceModalOpen(true)
+                      }}>Ảnh</Button>
                       <Button variant="secondary" className="h-10 text-sm font-medium bg-white text-[hsl(var(--primary))] border border-[hsl(var(--primary))]" onClick={() => openEdit(row)}>Sửa</Button>
                       <Button variant="danger" className="h-10 text-sm font-medium" onClick={() => confirmDelete(row.id)}>Xóa</Button>
                           </div>
@@ -780,7 +833,7 @@ export default function BookingsPage() {
                 </div>
               </div>
 
-                  {/* Khách hàng và Phòng */}
+                  {/* Người đặt phòng và Phòng */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                     <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-[hsl(var(--primary)/0.25)]">
                       <div className="flex items-center gap-3">
@@ -804,7 +857,7 @@ export default function BookingsPage() {
                           )
                         })()}
                         <div className="min-w-0">
-                          <p className="text-xs text-gray-600 mb-1">Khách hàng</p>
+                          <p className="text-xs text-gray-600 mb-1">Người đặt phòng:</p>
                           <p className="text-sm sm:text-base font-bold text-[hsl(var(--primary))] break-words">
                             {getCustomerDisplay(selected)}
                           </p>
@@ -871,6 +924,151 @@ export default function BookingsPage() {
         </div>
       </Modal>
 
+      {/* Face Images Modal */}
+      <Modal open={faceModalOpen} onClose={() => setFaceModalOpen(false)} title="Ảnh nhận dạng khuôn mặt" size="md">
+        <div className="p-0 max-h-[calc(100vh-8rem)] flex flex-col">
+          {selected && (
+            <div className="space-y-0 flex flex-col flex-1 min-h-0">
+              {/* Header Section */}
+              <div className="bg-gradient-to-r from-blue-50 to-indigo-50 px-4 py-2 border-b border-gray-200 flex-shrink-0">
+                <div>
+                  <h3 className="text-base font-semibold text-gray-900 mb-0.5">
+                   Người đặt phòng: {getCustomerDisplay(selected)}
+                  </h3>
+                  <div className="text-xs text-gray-700">
+                    <span className="font-medium">Mã đặt phòng:</span>
+                    <span className="text-gray-900 font-semibold ml-1">{selected.code}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Images Section */}
+              <div className="p-3 bg-gray-50 flex-1 min-h-0 flex items-center justify-center">
+                {(() => {
+                  const uid = String(selected.userId)
+                  const images = faceImages[uid]
+
+                  // Helper function to get label for each image based on index
+                  const getImageLabel = (index: number): string => {
+                    const labels = ['Chính diện', 'Trái', 'Phải', 'CCCD trước', 'CCCD sau']
+                    return labels[index] || `Ảnh ${index + 1}`
+                  }
+
+                  // Loading state
+                  if (loadingFaces[uid]) {
+                    return (
+                      <div className="flex flex-col items-center justify-center">
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-2"></div>
+                        <p className="text-gray-700 font-semibold text-sm mb-0.5">Đang tải ảnh...</p>
+                        <p className="text-xs text-gray-500">Vui lòng đợi</p>
+                      </div>
+                    )
+                  }
+
+                  if (Array.isArray(images) && images.length > 0) {
+                    const currentImage = images[currentImageIndex]
+                    const currentLabel = getImageLabel(currentImageIndex)
+                    const hasPrev = currentImageIndex > 0
+                    const hasNext = currentImageIndex < images.length - 1
+
+                    return (
+                      <div className="w-full max-w-md mx-auto">
+                        {/* Main Image Container */}
+                        <div className="relative w-full">
+                          {/* Previous Button */}
+                          {hasPrev && (
+                            <button
+                              onClick={() => setCurrentImageIndex(prev => Math.max(0, prev - 1))}
+                              className="absolute left-1 top-1/2 -translate-y-1/2 bg-white/90 hover:bg-white text-gray-700 hover:text-blue-600 p-1.5 rounded-full shadow-lg transition-all z-10"
+                              aria-label="Ảnh trước"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                              </svg>
+                            </button>
+                          )}
+
+                          {/* Image */}
+                          <div className="bg-white rounded-lg overflow-hidden shadow-md">
+                            <div className="relative bg-gray-100" style={{ maxHeight: '50vh', minHeight: '300px' }}>
+                              <img
+                                src={currentImage}
+                                alt={`${currentLabel} - ${getCustomerDisplay(selected)}`}
+                                className="w-full h-full object-contain"
+                                style={{ maxHeight: '50vh' }}
+                                onError={(e) => {
+                                  const target = e.target as HTMLImageElement
+                                  target.style.display = 'none'
+                                  const parent = target.parentElement
+                                  if (parent) {
+                                    parent.innerHTML = `
+                                      <div class="w-full h-full flex items-center justify-center bg-gray-100" style="min-height: 300px;">
+                                        <svg class="w-10 h-10 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                        </svg>
+                                      </div>
+                                    `
+                                  }
+                                }}
+                              />
+                            </div>
+                            {/* Label */}
+                            <div className="px-3 py-2 bg-gray-50 text-center">
+                              <p className="text-xs font-semibold text-gray-800">
+                                {currentLabel}
+                              </p>
+                              <p className="text-xs text-gray-500">
+                                {currentImageIndex + 1} / {images.length}
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* Next Button */}
+                          {hasNext && (
+                            <button
+                              onClick={() => setCurrentImageIndex(prev => Math.min(images.length - 1, prev + 1))}
+                              className="absolute right-1 top-1/2 -translate-y-1/2 bg-white/90 hover:bg-white text-gray-700 hover:text-blue-600 p-1.5 rounded-full shadow-lg transition-all z-10"
+                              aria-label="Ảnh tiếp theo"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                              </svg>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  }
+
+                  return (
+                    <div className="flex flex-col items-center justify-center">
+                      <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mb-2">
+                        <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                      </div>
+                      <p className="text-sm font-semibold text-gray-700 mb-1">Không có ảnh nhận dạng</p>
+                      <p className="text-xs text-gray-500 text-center max-w-xs">Người đặt phòng này chưa có ảnh nhận dạng khuôn mặt trong hệ thống</p>
+                    </div>
+                  )
+                })()}
+              </div>
+              
+              {/* Footer */}
+              <div className="bg-white px-4 py-2 border-t border-gray-200 flex justify-end flex-shrink-0">
+                <Button 
+                  variant="secondary"
+                  onClick={() => setFaceModalOpen(false)}
+                  className="px-4 py-1.5 text-xs h-8"
+                >
+                  Đóng
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      </Modal>
+
       {/* Edit Modal */}
       <Modal open={editOpen} onClose={handleCloseEdit} title={edit.id ? 'Sửa đặt phòng' : 'Thêm đặt phòng mới'} size="lg">
         <div className="p-4 sm:p-6">
@@ -893,11 +1091,11 @@ export default function BookingsPage() {
                   )}
                 </div>
 
-              {/* Khách hàng và Phòng */}
+              {/*  Người đặt phòng và Phòng */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {/* Searchable User Dropdown */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Khách hàng <span className="text-red-500">*</span></label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Người đặt phòng <span className="text-red-500">*</span></label>
                   <div className="relative">
                     <input
                       type="text"
@@ -916,7 +1114,7 @@ export default function BookingsPage() {
                         }
                       }}
                       onBlur={() => setTimeout(() => setUserDropdownOpen(false), 200)}
-                      placeholder="Gõ để tìm khách hàng..."
+                      placeholder="Gõ để tìm người đặt..."
                       disabled={!!edit.id}
                       className={`w-full px-3 py-2 pr-10 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))] ${userIdError ? 'border-red-500' : 'border-gray-300'} ${edit.id ? 'bg-gray-100 cursor-not-allowed' : 'bg-white'}`}
                     />
@@ -928,7 +1126,7 @@ export default function BookingsPage() {
                     {userDropdownOpen && !edit.id && (
                       <div className="absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-48 overflow-y-auto">
                         {filteredUsers.length === 0 ? (
-                          <div className="px-3 py-2 text-sm text-gray-500">Không tìm thấy khách hàng</div>
+                          <div className="px-3 py-2 text-sm text-gray-500">Không tìm thấy tên người đặt</div>
                         ) : (
                           filteredUsers.map(user => (
                             <div
