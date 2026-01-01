@@ -14,12 +14,12 @@ export const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export const PHONE_REGEX = /^[0-9]{10,11}$/;
 
 export function isValidEmail(email: string): boolean {
-  if (!email.trim()) return true; // Email là optional
+  if (!email.trim()) return true; 
   return EMAIL_REGEX.test(email);
 }
 
 export function isValidPhone(phone: string): boolean {
-  if (!phone.trim()) return true; // Phone là optional
+  if (!phone.trim()) return true; 
   const phoneRegex = /^(0|\+84)[1-9][0-9]{8,9}$/;
   return phoneRegex.test(phone.replace(/\s/g, ''));
 }
@@ -30,17 +30,16 @@ export function isValidFullName(name: string): boolean {
 
 export function isValidCCCD(cccd: string): boolean {
   if (!cccd.trim()) return false;
-  // CCCD/CMND phải là số và có độ dài 9 hoặc 12 chữ số
   const cleaned = cccd.replace(/\s/g, '');
   return /^\d{9}$|^\d{12}$/.test(cleaned);
 }
 
 export function isValidDateOfBirth(dob: string): boolean {
-  if (!dob.trim()) return true; // DOB là optional
+  if (!dob.trim()) return true;
   const dobDate = new Date(dob);
   const today = new Date();
   const minDate = new Date();
-  minDate.setFullYear(today.getFullYear() - 120); // Không quá 120 tuổi
+  minDate.setFullYear(today.getFullYear() - 120); 
   
   return dobDate <= today && dobDate >= minDate;
 }

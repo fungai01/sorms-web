@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import Input from "@/components/ui/Input";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import Badge from "@/components/ui/Badge";
@@ -12,7 +13,8 @@ import { useBookings, useRooms, useUsers } from "@/hooks/useApi";
 import { apiClient } from "@/lib/api-client";
 import { authService } from "@/lib/auth-service";
 import { useRouter } from "next/navigation";
-import { formatDateTime } from "@/lib/utils";
+import { formatDate, formatDateTime } from "@/lib/utils";
+import { API_CONFIG } from "@/lib/config";
 
 type BookingRequest = {
   id: number;
@@ -31,6 +33,17 @@ type BookingRequest = {
   updated_at: string | null;
 };
 
+const statusOptions: ('PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED' | 'CHECKED_IN' | 'CHECKED_OUT')[] = ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED', 'CHECKED_IN', 'CHECKED_OUT'];
+
+const statusLabels: Record<'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED' | 'CHECKED_IN' | 'CHECKED_OUT', string> = {
+  "PENDING": "Chờ duyệt",
+  "APPROVED": "Đã duyệt",
+  "REJECTED": "Đã từ chối",
+  "CANCELLED": "Đã hủy",
+  "CHECKED_IN": "Đã nhận phòng",
+  "CHECKED_OUT": "Đã trả phòng"
+};
+
 export default function OfficeBookingsPage() {
   const router = useRouter();
 
@@ -45,7 +58,7 @@ export default function OfficeBookingsPage() {
   const scannerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadingFile, setUploadingFile] = useState(false);
-  const [qrModalPurpose, setQrModalPurpose] = useState<'checkin' | 'verify'>('verify'); // 'checkin' for APPROVED, 'verify' for CHECKED_IN
+
   const [qrResult, setQrResult] = useState<{
     valid: boolean;
     message: string;
@@ -63,6 +76,12 @@ export default function OfficeBookingsPage() {
     raw?: string;
   } | null>(null);
   const [filterStatus, setFilterStatus] = useState<'ALL' | 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED' | 'CHECKED_IN' | 'CHECKED_OUT'>('ALL');
+
+  // Face images state
+  const [faceImages, setFaceImages] = useState<Record<string, string[] | null>>({});
+  const [loadingFaces, setLoadingFaces] = useState<Record<string, boolean>>({});
+  const [faceModalOpen, setFaceModalOpen] = useState(false);
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
 
   // Use API hooks for data fetching (gửi status lên API nếu khác ALL)
   const { data: bookingsData, loading: bookingsLoading, error: bookingsError, refetch: refetchBookings } = useBookings(filterStatus);
@@ -92,6 +111,94 @@ export default function OfficeBookingsPage() {
         ? (usersData as any).data.content
         : [];
   
+  // Helper: Get full name for a user
+  const getUserFullName = useCallback((userId: string | number | undefined) => {
+    if (!userId) return null;
+    const userIdStr = String(userId);
+    const user = users.find((u: any) => 
+      String(u.id) === userIdStr || String(u.userId) === userIdStr
+    );
+    return user?.full_name || user?.fullName || null;
+  }, [users]);
+
+  // Helper: Get face image URL for a user
+  // IMPORTANT: Prefer AI face images cache first. Only fallback to avatarUrl when no AI face image.
+  const getUserFaceImage = useCallback((userId: string | number | undefined) => {
+    if (!userId) return null;
+    const userIdStr = String(userId);
+
+    // 1) Prefer AI face image (from GET /ai/recognition/faces/{id}/images)
+    const aiFaces = faceImages[userIdStr];
+    if (Array.isArray(aiFaces) && aiFaces.length > 0) return aiFaces[0];
+
+    // 2) Fallback to user avatar
+    const user = users.find((u: any) => 
+      String(u.id) === userIdStr || String(u.userId) === userIdStr
+    );
+    if (user?.avatarUrl) return user.avatarUrl;
+
+    return null;
+  }, [faceImages, users]);
+
+  // Fetch face image for a user
+  // Backend endpoint: GET /ai/recognition/faces/{id}/images
+  const fetchFaceImage = useCallback(async (userId: string) => {
+    if (!userId || faceImages[userId] !== undefined || loadingFaces[userId]) {
+      return; // Already fetched or loading
+    }
+
+    setLoadingFaces(prev => ({ ...prev, [userId]: true }));
+    try {
+      // 1) Prefer actual face images endpoint
+      const imagesRes = await apiClient.getUserFaceImages(userId);
+
+      if (imagesRes?.success && imagesRes?.data) {
+        // Backend actual shape:
+        // imagesRes.data = {
+        //   success: true,
+        //   message: "Retrieved ...",
+        //   images: [ { image_name, image_base64, image_path, file_size }, ... ],
+        //   student_id,
+        //   total_images
+        // }
+        const raw: any = imagesRes.data;
+
+        const items: any[] = Array.isArray(raw?.images) ? raw.images : [];
+        const dataUrls: string[] = items
+          .map((it: any) => {
+            const b64 = it?.image_base64;
+            if (!b64 || typeof b64 !== 'string') return null;
+            // BE sends pure base64 (no data: prefix)
+            return b64.startsWith('data:') ? b64 : `data:image/jpeg;base64,${b64}`;
+          })
+          .filter(Boolean) as string[];
+
+        setFaceImages(prev => ({ ...prev, [userId]: dataUrls.length > 0 ? dataUrls : null }));
+        return;
+      }
+
+      // 2) Fallback to face info (metadata) endpoint
+      const infoRes = await apiClient.getUserFaceInfo(userId);
+      if (infoRes?.success) {
+        // If we only have metadata, fallback to avatarUrl from users list
+        const user = users.find((u: any) => String(u.id) === String(userId));
+        const imageUrl = user?.avatarUrl || null;
+        setFaceImages(prev => ({ ...prev, [userId]: imageUrl ? [imageUrl] : null }));
+      } else {
+        setFaceImages(prev => ({ ...prev, [userId]: null }));
+      }
+    } catch (error) {
+      console.error(`Failed to fetch face image for user ${userId}:`, error);
+      setFaceImages(prev => ({ ...prev, [userId]: null }));
+    } finally {
+      setLoadingFaces(prev => {
+        const newState = { ...prev };
+        delete newState[userId];
+        return newState;
+      });
+    }
+  }, [faceImages, loadingFaces, users]);
+
   // Normalize dữ liệu - chuyển snake_case sang camelCase và map user/room info
   const bookings: BookingRequest[] = useMemo(() => rawBookings.map((item: any) => {
     const userId = item.userId || item.user_id;
@@ -199,10 +306,9 @@ export default function OfficeBookingsPage() {
     }
   };
 
-  const openQrModal = (booking: BookingRequest, purpose: 'checkin' | 'verify' = 'verify') => {
+  const openQrModal = (booking: BookingRequest) => {
     setSelectedBooking(booking);
     setQrResult(null);
-    setQrModalPurpose(purpose);
     setQrModalOpen(true);
     setTimeout(() => {
       startQrScan();
@@ -369,8 +475,7 @@ export default function OfficeBookingsPage() {
       } catch {}
 
       // Validate status based on purpose
-      const isCheckinPurpose = qrModalPurpose === 'checkin';
-      const requiredStatus = isCheckinPurpose ? 'APPROVED' : 'CHECKED_IN';
+      const requiredStatus = 'CHECKED_IN';
       const validStatus = String(status) === requiredStatus;
 
       setQrResult({
@@ -392,33 +497,7 @@ export default function OfficeBookingsPage() {
         raw: tokenToProcess,
       });
 
-      // Nếu quét thành công và là mục đích check-in, tự động gọi check-in
-      if (validStatus && isCheckinPurpose && selectedBooking) {
-        setTimeout(async () => {
-          try {
-            const res = await fetch(`/api/system/bookings?action=checkin&id=${selectedBooking.id}`, {
-              method: 'POST'
-            });
-            if (res.ok) {
-              setFlash({ type: 'success', text: 'Check-in thành công sau khi xác thực QR!' });
-              closeQrModal();
-              refetchBookings();
-              createBookingNotification(
-                selectedBooking.id,
-                selectedBooking.userName || `User #${selectedBooking.userId}`,
-                selectedBooking.roomCode || `Room #${selectedBooking.roomId}`,
-                'CONFIRMED'
-              );
-            } else {
-              const err = await res.text();
-              setFlash({ type: 'error', text: err || 'Xác thực QR thành công nhưng check-in thất bại' });
-            }
-          } catch (error) {
-            setFlash({ type: 'error', text: 'Xác thực QR thành công nhưng check-in thất bại' });
-            console.error('Check-in after QR verification error:', error);
-          }
-        }, 1000); // Delay 1s để user thấy kết quả xác thực
-      }
+
     } catch (e: any) {
       setQrResult({ valid: false, message: e?.message || 'Lỗi khi xác thực với backend', bookingId, raw: tokenToProcess });
     }
@@ -429,6 +508,27 @@ export default function OfficeBookingsPage() {
       stopQrScan();
     }
   }, [qrModalOpen]);
+
+  // Reset image index when modal opens or selected booking changes
+  useEffect(() => {
+    if (faceModalOpen && selectedBooking) {
+      setCurrentImageIndex(0);
+    }
+  }, [faceModalOpen, selectedBooking]);
+
+  // Fetch face images for all bookings when users are loaded
+  useEffect(() => {
+    if (users.length === 0) return; // Wait for users to load
+    bookings.forEach(booking => {
+      if (booking.userId) {
+        const userIdStr = String(booking.userId);
+        // Only fetch if not already cached and user exists
+        if (faceImages[userIdStr] === undefined && !loadingFaces[userIdStr]) {
+          fetchFaceImage(userIdStr).catch(console.error);
+        }
+      }
+    });
+  }, [bookings, users, faceImages, loadingFaces, fetchFaceImage]);
 
   // Auto-hide success/error messages
   useEffect(() => {
@@ -527,20 +627,21 @@ export default function OfficeBookingsPage() {
     try {
       const token = authService.getAccessToken();
       const userInfo = authService.getUserInfo();
+
+      // Direct backend call to reduce latency (skip Next.js route handler hop)
       const headers: HeadersInit = { 'Content-Type': 'application/json' };
       if (token) {
         headers['Authorization'] = `Bearer ${token}`;
       }
 
-      const body = {
-        approverId: userInfo?.id || undefined,
-        decision: 'APPROVED',
-      };
-
-      const res = await fetch(`/api/system/bookings?action=approve&id=${booking.id}`, {
+      const res = await fetch(`${API_CONFIG.BASE_URL}/bookings/${booking.id}/approve`, {
         method: 'POST',
         headers,
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          bookingId: booking.id,
+          approverId: userInfo?.id || undefined,
+          decision: 'APPROVED',
+        }),
         signal: controller.signal,
       });
       clearTimeout(timeoutId);
@@ -579,17 +680,13 @@ export default function OfficeBookingsPage() {
     }
   };
 
-  const handleCheckin = async (booking: BookingRequest) => {
-    // Mở modal quét QR thay vì gọi API trực tiếp
-    openQrModal(booking, 'checkin');
-  };
-
   const handleCheckout = async (booking: BookingRequest) => {
     try {
-      const response = await apiClient.updateBooking(booking.id, {
-        ...booking,
-        status: 'CHECKED_OUT'
-      });
+      const token = authService.getAccessToken();
+      const userInfo = authService.getUserInfo();
+      const userId = booking.userId ? String(booking.userId) : (userInfo?.id ? String(userInfo.id) : undefined);
+
+      const response = await apiClient.checkoutBooking(booking.id, userId);
 
       if (response.success) {
         setFlash({ type: 'success', text: 'Check-out thành công!' });
@@ -630,21 +727,24 @@ export default function OfficeBookingsPage() {
     try {
       const token = authService.getAccessToken();
       const userInfo = authService.getUserInfo();
+
+      // Direct backend call to reduce latency (skip Next.js route handler hop)
       const headers: HeadersInit = { 'Content-Type': 'application/json' };
       if (token) {
         headers['Authorization'] = `Bearer ${token}`;
       }
 
-      const body = {
-        approverId: userInfo?.id || undefined,
-        decision: 'REJECTED',
-        reason: rejectionReason.trim(),
-      };
 
-      const res = await fetch(`/api/system/bookings?action=approve&id=${booking.id}`, {
+
+      const res = await fetch(`${API_CONFIG.BASE_URL}/bookings/${booking.id}/approve`, {
         method: 'POST',
         headers,
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          bookingId: booking.id,
+          approverId: userInfo?.id || undefined,
+          decision: 'REJECTED',
+          reason: rejectionReason.trim(),
+        }),
         signal: controller.signal,
       });
       clearTimeout(timeoutId);
@@ -714,178 +814,71 @@ export default function OfficeBookingsPage() {
 
   return (
     <>
-      {/* Header */}
-      <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 border-b border-transparent shadow-sm px-4 py-8">
-        <div className="max-w-7xl mx-auto">
-          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-            <div className="min-w-0 flex-1">
-              <h1 className="text-2xl lg:text-3xl font-bold text-gray-900">Quản lý đặt phòng</h1>
-              <p className="text-sm lg:text-base text-gray-600 mt-1">Theo dõi và xử lý yêu cầu đặt phòng</p>
+      <div className="px-6 pt-4 pb-6">
+        <div className="max-w-7xl mx-auto space-y-6">
+          {/* Header & Filters Card */}
+          <div className="bg-white shadow-sm border border-gray-200 rounded-2xl overflow-hidden">
+            <div className="header border-b border-gray-200/50 px-6 py-4">
+              <div className="flex items-center justify-between">
+                <h1 className="text-3xl font-bold text-gray-900 leading-tight">Quản lý đặt phòng</h1>
+              </div>
+            </div>
+
+            <div className="bg-white px-6 py-4">
+              <div className="flex flex-col lg:flex-row gap-4 items-center">
+                <div className="flex-1 min-w-0 w-full">
+                  <Input
+                    placeholder="Tìm kiếm đặt phòng..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full px-3 py-2.5 text-sm border-gray-300 rounded-xl focus:ring-0 focus:border-gray-300"
+                  />
+                </div>
+                <div className="w-full lg:w-48 flex-shrink-0 relative rounded-xl border border-gray-300 bg-white overflow-hidden">
+                  <select
+                    value={filterStatus}
+                    onChange={(e) => setFilterStatus(e.target.value as any)}
+                    className="w-full px-3 py-2.5 pr-10 text-sm focus:outline-none appearance-none bg-transparent border-0"
+                  >
+                    <option value="ALL">Tất cả trạng thái</option>
+                    {statusOptions.map(s => <option key={s} value={s}>{statusLabels[s]}</option>)}
+                  </select>
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
+                    <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
-      </div>
-
-      {/* Content */}
-      <div className="max-w-7xl mx-auto px-3 sm:px-4 py-5 sm:py-6">
-        <div className="space-y-5 sm:space-y-6">
-          {/* Flash Messages */}
+          
+          {/* Success/Error Messages */}
           {flash && (
-            <div className={`rounded-md border p-2 sm:p-3 text-xs sm:text-sm shadow-sm ${
-              flash.type === 'success' 
-                ? 'bg-green-50 border-green-200 text-green-800' 
-                : 'bg-red-50 border-red-200 text-red-800'
+            <div className={`py-2.5 rounded-xl px-4 border shadow-sm animate-fade-in flex items-center gap-2 ${
+              flash.type === 'success' ? 'bg-green-50 text-green-800 border-green-100' : 'bg-red-50 text-red-800 border-red-100'
             }`}>
-              {flash.text}
+              <svg className={`w-5 h-5 ${flash.type === 'success' ? 'text-green-500' : 'text-red-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                {flash.type === 'success' 
+                  ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                }
+              </svg>
+              <span className="text-sm font-medium">{flash.text}</span>
             </div>
           )}
 
-          {/* Toolbar */}
-          <Card>
-            <CardBody>
-              <div className="space-y-4">
-                {/* Search, Status Filter and View Toggle */}
-                <div className="flex flex-col sm:flex-row gap-3">
-                  <div className="flex-1">
-                    <input
-                      type="search"
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      placeholder="Tìm đặt phòng theo mã, người đặt, phòng..."
-                      className="w-full px-3 py-2 h-10 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      aria-label="Tìm kiếm đặt phòng"
-                    />
-                  </div>
-                  <div className="flex gap-2">
-                    <select
-                      value={filterStatus}
-                      onChange={(e) => setFilterStatus(e.target.value as any)}
-                      className="px-2 sm:px-3 py-2 h-10 border border-gray-300 rounded-md text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white flex-1 sm:flex-none min-w-[100px]"
-                      aria-label="Lọc theo trạng thái"
-                    >
-                      <option value="ALL">Tất cả</option>
-                      <option value="PENDING">Chờ duyệt</option>
-                      <option value="APPROVED">Đã duyệt</option>
-                      <option value="REJECTED">Từ chối</option>
-                      <option value="CHECKED_IN">Đã nhận</option>
-                      <option value="CHECKED_OUT">Đã trả</option>
-                      <option value="CANCELLED">Đã hủy</option>
-                    </select>
-                    <Button
-                      variant={showAdvanced ? "primary" : "secondary"}
-                      onClick={() => setShowAdvanced(!showAdvanced)}
-                      className="whitespace-nowrap text-xs sm:text-sm px-3 sm:px-4"
-                    >
-                       Bộ lọc
-                    </Button>
-                  </div>
-                </div>
-
-                {/* Advanced Filters */}
-                {showAdvanced && (
-                  <div className="border-t pt-4">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                      <div>
-                        <label className="block text-xs font-medium text-gray-700 mb-1">Check-in từ</label>
-                        <input
-                          type="date"
-                          value={checkinFrom}
-                          onChange={(e) => setCheckinFrom(e.target.value)}
-                          className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-gray-700 mb-1">Check-in đến</label>
-                        <input
-                          type="date"
-                          value={checkinTo}
-                          onChange={(e) => setCheckinTo(e.target.value)}
-                          className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-gray-700 mb-1">Check-out từ</label>
-                        <input
-                          type="date"
-                          value={checkoutFrom}
-                          onChange={(e) => setCheckoutFrom(e.target.value)}
-                          className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-gray-700 mb-1">Check-out đến</label>
-                        <input
-                          type="date"
-                          value={checkoutTo}
-                          onChange={(e) => setCheckoutTo(e.target.value)}
-                          className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-gray-700 mb-1">Số khách tối thiểu</label>
-                        <input
-                          type="number"
-                          min="1"
-                          value={guestsMin}
-                          onChange={(e) => setGuestsMin(e.target.value)}
-                          placeholder="Min"
-                          className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-gray-700 mb-1">Số khách tối đa</label>
-                        <input
-                          type="number"
-                          min="1"
-                          value={guestsMax}
-                          onChange={(e) => setGuestsMax(e.target.value)}
-                          placeholder="Max"
-                          className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-gray-700 mb-1">ID người dùng</label>
-                        <input
-                          type="number"
-                          value={userIdFilter}
-                          onChange={(e) => setUserIdFilter(e.target.value)}
-                          placeholder="User ID"
-                          className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-gray-700 mb-1">ID phòng</label>
-                        <input
-                          type="number"
-                          value={roomIdFilter}
-                          onChange={(e) => setRoomIdFilter(e.target.value)}
-                          placeholder="Room ID"
-                          className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                      </div>
-                    </div>
-                    <div className="flex gap-2 mt-3">
-                      <Button variant="secondary" onClick={resetAdvancedFilters} className="text-sm">
-                        Đặt lại
-                      </Button>
-                      <Button variant="primary" onClick={() => setShowAdvanced(false)} className="text-sm">
-                        Áp dụng
-                      </Button>
-                    </div>
-                  </div>
-                )}
+          {/* Table Card */}
+          <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-md rounded-2xl overflow-hidden">
+            <CardHeader className="bg-[hsl(var(--page-bg))]/40 border-b border-gray-200 !px-6 py-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-bold text-gray-900">Danh sách đặt phòng</h2>
+                <span className="text-sm font-semibold text-[hsl(var(--primary))] bg-[hsl(var(--primary)/0.12)] px-3 py-1 rounded-full">
+                  {filteredBookings.length} đặt phòng
+                </span>
               </div>
-            </CardBody>
-          </Card>
-
-          {/* Bookings Table */}
-          <Card>
-            <CardHeader>
-              <h3 className="text-lg font-semibold text-gray-900">
-                Danh sách đặt phòng ({filteredBookings.length})
-              </h3>
             </CardHeader>
-            <CardBody>
+            <CardBody className="p-0">
               {bookingsLoading ? (
                 <div className="space-y-2">
                   {Array.from({ length: 6 }).map((_, i) => (
@@ -915,13 +908,34 @@ export default function OfficeBookingsPage() {
                         <CardBody>
                           <div className="space-y-3">
                             <div className="flex items-start justify-between">
-                              <div className="flex-1 min-w-0">
-                                <div className="font-semibold text-gray-900 mb-1">{booking.code}</div>
-                                <div className="text-sm text-gray-600">
-                                  {booking.userName || `User #${booking.userId}`}
-                                </div>
-                                <div className="text-sm text-gray-600 mt-1">
-                                  {booking.roomName || booking.roomCode || `Room #${booking.roomId}`}
+                              <div className="flex items-center gap-2 flex-1 min-w-0">
+                                {(() => {
+                                  const faceImageUrl = getUserFaceImage(booking.userId);
+                                  return faceImageUrl ? (
+                                    <img 
+                                      src={faceImageUrl} 
+                                      alt={booking.userName || `User #${booking.userId}`}
+                                      className="w-10 h-10 rounded-full object-cover border-2 border-gray-200 flex-shrink-0"
+                                      onError={(e) => {
+                                        e.currentTarget.style.display = 'none';
+                                      }}
+                                    />
+                                  ) : (
+                                    <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center border-2 border-gray-200 flex-shrink-0">
+                                      <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                                      </svg>
+                                    </div>
+                                  );
+                                })()}
+                                <div className="flex-1 min-w-0">
+                                  <div className="font-semibold text-gray-900 mb-1">{booking.code}</div>
+                                  <div className="text-sm text-gray-600">
+                                    {getUserFullName(booking.userId) || booking.userName || `User #${booking.userId}`}
+                                  </div>
+                                  <div className="text-sm text-gray-600 mt-1">
+                                    {booking.roomName || booking.roomCode || `Room #${booking.roomId}`}
+                                  </div>
                                 </div>
                               </div>
                               <div className="ml-2">
@@ -941,57 +955,36 @@ export default function OfficeBookingsPage() {
                               </div>
                             </div>
                             
-                            <div className="flex flex-wrap gap-2 pt-2 border-t">
-                              {booking.status === 'PENDING' && (
-                                <>
-                                  <Button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setSelectedBooking(booking);
-                                      setApprovalModalOpen(true);
-                                    }}
-                                    variant="primary"
-                                    className="text-xs flex-1 min-w-[80px]"
-                                  >
-                                    Duyệt
-                                  </Button>
-                                  <Button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setSelectedBooking(booking);
-                                      setApprovalModalOpen(true);
-                                    }}
-                                    variant="danger"
-                                    className="text-xs flex-1 min-w-[80px]"
-                                  >
-                                    Không duyệt
-                                  </Button>
-                                </>
-                              )}
-                              {booking.status === 'APPROVED' && (
-                                <Button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleCheckin(booking);
-                                  }}
-                                  variant="secondary"
-                                  className="text-xs flex-1"
-                                >
-                                  Check-in
-                                </Button>
-                              )}
-                              {booking.status === 'CHECKED_IN' && (
-                                <>
-                                  <Button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      openQrModal(booking);
-                                    }}
-                                    variant="primary"
-                                    className="text-xs flex-1"
-                                  >
-                                    Quét mã
-                                  </Button>
+                            <div className="space-y-2 pt-2 border-t">
+                              {/* Dòng 1: Các nút theo status */}
+                              <div className="flex gap-2">
+                                {booking.status === 'PENDING' && (
+                                  <>
+                                    <Button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setSelectedBooking(booking);
+                                        setApprovalModalOpen(true);
+                                      }}
+                                      variant="primary"
+                                      className="text-xs flex-1"
+                                    >
+                                      Duyệt
+                                    </Button>
+                                    <Button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setSelectedBooking(booking);
+                                        setApprovalModalOpen(true);
+                                      }}
+                                      variant="danger"
+                                      className="text-xs flex-1"
+                                    >
+                                      Từ chối
+                                    </Button>
+                                  </>
+                                )}
+                                {booking.status === 'CHECKED_IN' && (
                                   <Button
                                     onClick={(e) => {
                                       e.stopPropagation();
@@ -1002,19 +995,34 @@ export default function OfficeBookingsPage() {
                                   >
                                     Check-out
                                   </Button>
-                                </>
-                              )}
-                              <Button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setSelectedBooking(booking);
-                                  setDetailModalOpen(true);
-                                }}
-                                variant="secondary"
-                                className="text-xs flex-1"
-                              >
-                                Xem chi tiết
-                              </Button>
+                                )}
+                              </div>
+                              {/* Dòng 2: Ảnh và Chi tiết */}
+                              <div className="flex gap-2">
+                                <Button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedBooking(booking);
+                                    if (booking.userId) fetchFaceImage(String(booking.userId));
+                                    setFaceModalOpen(true);
+                                  }}
+                                  variant="secondary"
+                                  className="text-xs flex-1"
+                                >
+                                  Ảnh
+                                </Button>
+                                <Button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedBooking(booking);
+                                    setDetailModalOpen(true);
+                                  }}
+                                  variant="secondary"
+                                  className="text-xs flex-1"
+                                >
+                                  Chi tiết
+                                </Button>
+                              </div>
                             </div>
                           </div>
                         </CardBody>
@@ -1023,147 +1031,135 @@ export default function OfficeBookingsPage() {
                   </div>
 
                   {/* Desktop Table View */}
-                  <div className="hidden md:block overflow-x-auto">
-                    <div className="min-w-[800px]">
-                      <Table>
-                        <THead>
-                          <tr>
-                            <th className="px-3 lg:px-4 py-3 bg-gray-50 sticky top-0 z-10 text-center whitespace-nowrap text-xs lg:text-sm">Mã đặt phòng</th>
-                            <th className="px-2 lg:px-3 py-3 bg-gray-50 sticky top-0 z-10 text-center max-w-[120px] text-xs lg:text-sm">Người đặt</th>
-                            <th className="px-3 lg:px-4 py-3 bg-gray-50 sticky top-0 z-10 text-center whitespace-nowrap text-xs lg:text-sm">Phòng</th>
-                            <th className="px-3 lg:px-4 py-3 bg-gray-50 sticky top-0 z-10 text-center whitespace-nowrap text-xs lg:text-sm">Thời gian</th>
-                            <th className="px-3 lg:px-4 py-3 bg-gray-50 sticky top-0 z-10 text-center whitespace-nowrap text-xs lg:text-sm">Số khách</th>
-                            <th className="px-3 lg:px-4 py-3 bg-gray-50 sticky top-0 z-10 text-center whitespace-nowrap text-xs lg:text-sm">Trạng thái</th>
-                            <th className="px-3 lg:px-4 py-3 bg-gray-50 sticky top-0 z-10 text-center whitespace-nowrap text-xs lg:text-sm">Thao tác</th>
-                          </tr>
-                        </THead>
-                        <TBody>
-                          {filteredBookings.map((booking) => (
-                            <tr 
-                              key={booking.id} 
-                              className="odd:bg-white even:bg-gray-50 hover:bg-gray-100"
-                            >
-                              <td className="px-3 lg:px-4 py-3 align-middle whitespace-nowrap">
-                                <div className="font-medium text-gray-900 text-xs lg:text-sm cursor-pointer hover:text-blue-600" onClick={() => {
-                                  setSelectedBooking(booking);
-                                  setDetailModalOpen(true);
-                                }}>{booking.code}</div>
-                              </td>
-                              <td className="px-2 lg:px-3 py-3 align-middle max-w-[120px]">
-                                <div className="font-medium text-gray-900 text-xs lg:text-sm break-words">
-                                  {booking.userName || `User #${booking.userId}`}
-                                </div>
-                              </td>
-                              <td className="px-3 lg:px-4 py-3 align-middle whitespace-nowrap">
-                                <div className="font-medium text-gray-900 text-xs lg:text-sm">
-                                  {booking.roomName || booking.roomCode || `Room #${booking.roomId}`}
-                                </div>
-                              </td>
-                              <td className="px-3 lg:px-4 py-3 align-middle">
-                                <div className="text-xs lg:text-sm">
-                                  <div className="text-gray-900">CI: {booking.checkinDate}</div>
-                                  <div className="text-gray-900">CO: {booking.checkoutDate}</div>
-                                  <div className="text-gray-500 text-xs mt-1">
-                                    Đặt lúc: {booking.created_at 
-                                      ? (() => {
-                                          try {
-                                            return formatDateTime(booking.created_at);
-                                          } catch {
-                                            return booking.created_at;
-                                          }
-                                        })()
-                                      : 'N/A'}
+                  <div className="hidden lg:block">
+                    <Table className="table-fixed w-full">
+                      <THead>
+                        <tr>
+                          <th className="px-2 py-3 text-center text-sm font-bold w-[10%]">Mã Booking</th>
+                          <th className="px-2 py-3 text-left text-sm font-bold w-[20%]">Người đặt phòng</th>
+                          <th className="px-2 py-3 text-center text-sm font-bold w-[12%]">Phòng Đặt</th>
+                          <th className="px-2 py-3 text-center text-sm font-bold w-[20%]">Thời gian</th>
+                          <th className="px-2 py-3 text-center text-sm font-bold w-[13%]">Trạng thái</th>
+                          <th className="px-2 py-3 text-center text-sm font-bold w-[20%]">Thao tác</th>
+                        </tr>
+                      </THead>
+                      <TBody>
+                          {filteredBookings.map((booking, index) => {
+                            const faceImageUrl = getUserFaceImage(booking.userId);
+                            return (
+                              <tr key={booking.id} className={`transition-colors ${index % 2 === 0 ? 'bg-white' : 'bg-gray-100'} hover:bg-[#f2f8fe]`}>
+                                <td className="px-2 py-3 font-medium text-center text-gray-900 break-words line-clamp-2" title={booking.code}>{booking.code}</td>
+                                <td className="px-2 py-3 text-left text-gray-700">
+                                  <div className="flex items-start gap-2">
+                                    {faceImageUrl ? (
+                                      <img 
+                                        src={faceImageUrl} 
+                                        alt={getUserFullName(booking.userId) || booking.userName || `User #${booking.userId}`}
+                                        className="w-8 h-8 rounded-full object-cover border-2 border-gray-200 flex-shrink-0 mt-0.5"
+                                        onError={(e) => {
+                                          e.currentTarget.style.display = 'none';
+                                        }}
+                                      />
+                                    ) : (
+                                      <div className="w-8 h-8 rounded-full bg-[hsl(var(--primary)/0.12)] flex items-center justify-center border-2 border-gray-200 flex-shrink-0 mt-0.5">
+                                        <svg className="w-4 h-4 text-[hsl(var(--primary))]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                                        </svg>
+                                      </div>
+                                    )}
+                                    <span className="break-words line-clamp-2 flex-1 min-w-0" title={getUserFullName(booking.userId) || booking.userName || `User #${booking.userId}`}>{getUserFullName(booking.userId) || booking.userName || `User #${booking.userId}`}</span>
                                   </div>
-                                </div>
-                              </td>
-                              <td className="px-3 lg:px-4 py-3 align-middle whitespace-nowrap">
-                                <div className="text-xs lg:text-sm text-gray-900">{booking.numGuests} khách</div>
-                              </td>
-                              <td className="px-3 lg:px-4 py-3 align-middle whitespace-nowrap">
-                                {getStatusBadge(booking.status)}
-                              </td>
-                              <td className="px-3 lg:px-4 py-3 align-middle whitespace-nowrap">
-                                <div className="flex gap-1 justify-center">
-                                  {booking.status === 'PENDING' && (
-                                    <>
+                                </td>
+                                <td className="px-2 py-3 text-center text-gray-700 font-semibold break-words line-clamp-2" title={booking.roomName || booking.roomCode || `Room #${booking.roomId}`}>{booking.roomName || booking.roomCode || `Room #${booking.roomId}`}</td>
+                                <td className="px-2 py-3 text-center text-gray-700 text-sm" title={`Check-in: ${booking.checkinDate ? formatDate(booking.checkinDate) : booking.checkinDate} - Check-out: ${booking.checkoutDate ? formatDate(booking.checkoutDate) : booking.checkoutDate}`}>
+                                  <div className="break-words">
+                                    <span className="text-gray-500 font-medium">Check-in:</span>{" "}
+                                    <span className="break-words">{booking.checkinDate ? formatDate(booking.checkinDate) : booking.checkinDate}</span>
+                                  </div>
+                                  <div className="break-words">
+                                    <span className="text-gray-500 font-medium">Check-out:</span>{" "}
+                                    <span className="break-words">{booking.checkoutDate ? formatDate(booking.checkoutDate) : booking.checkoutDate}</span>
+                                  </div>
+                                </td>
+                                <td className="px-2 py-3 text-center">
+                                  {getStatusBadge(booking.status)}
+                                </td>
+                                <td className="px-2 py-3 text-center">
+                                  <div className="flex flex-col gap-1 items-center">
+                                    {/* Dòng 1: Các nút theo status */}
+                                    <div className="flex gap-1 flex-wrap justify-center">
+                                      {booking.status === 'PENDING' && (
+                                        <>
+                                          <Button
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setSelectedBooking(booking);
+                                              setApprovalModalOpen(true);
+                                            }}
+                                            variant="primary"
+                                            className="text-xs px-1.5 py-0.5"
+                                          >
+                                            Duyệt
+                                          </Button>
+                                          <Button
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setSelectedBooking(booking);
+                                              setApprovalModalOpen(true);
+                                            }}
+                                            variant="danger"
+                                            className="text-xs px-1.5 py-0.5"
+                                          >
+                                            Từ chối
+                                          </Button>
+                                        </>
+                                      )}
+                                      {booking.status === 'CHECKED_IN' && (
+                                        <Button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleCheckout(booking);
+                                          }}
+                                          variant="secondary"
+                                          className="text-xs px-1.5 py-0.5"
+                                        >
+                                          Check-out
+                                        </Button>
+                                      )}
+                                    </div>
+                                    {/* Dòng 2: Ảnh và Chi tiết */}
+                                    <div className="flex gap-1 flex-wrap justify-center">
                                       <Button
                                         onClick={(e) => {
                                           e.stopPropagation();
                                           setSelectedBooking(booking);
-                                          setApprovalModalOpen(true);
-                                        }}
-                                        variant="primary"
-                                        className="text-xs px-2 py-1"
-                                      >
-                                        Duyệt
-                                      </Button>
-                                      <Button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setSelectedBooking(booking);
-                                          setApprovalModalOpen(true);
-                                        }}
-                                        variant="danger"
-                                        className="text-xs px-2 py-1"
-                                      >
-                                        Từ chối
-                                      </Button>
-                                    </>
-                                  )}
-                                  {booking.status === 'APPROVED' && (
-                                    <Button
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleCheckin(booking);
-                                      }}
-                                      variant="secondary"
-                                      className="text-xs px-2 py-1"
-                                    >
-                                      Check-in
-                                    </Button>
-                                  )}
-                                  {booking.status === 'CHECKED_IN' && (
-                                    <>
-                                      <Button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          openQrModal(booking);
-                                        }}
-                                        variant="primary"
-                                        className="text-xs px-2 py-1"
-                                      >
-                                        Quét mã
-                                      </Button>
-                                      <Button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          handleCheckout(booking);
+                                          if (booking.userId) fetchFaceImage(String(booking.userId));
+                                          setFaceModalOpen(true);
                                         }}
                                         variant="secondary"
-                                        className="text-xs px-2 py-1"
+                                        className="text-xs px-1.5 py-0.5"
                                       >
-                                        Check-out
+                                        Ảnh
                                       </Button>
-                                    </>
-                                  )}
-                                  <Button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setSelectedBooking(booking);
-                                      setDetailModalOpen(true);
-                                    }}
-                                    variant="secondary"
-                                    className="text-xs px-2 py-1"
-                                  >
-                                    Chi tiết
-                                  </Button>
-                                </div>
-                              </td>
+                                      <Button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setSelectedBooking(booking);
+                                          setDetailModalOpen(true);
+                                        }}
+                                        variant="secondary"
+                                        className="text-xs px-1.5 py-0.5"
+                                      >
+                                        Chi tiết
+                                      </Button>
+                                    </div>
+                                  </div>
+                                </td>
                             </tr>
-                          ))}
-                        </TBody>
-                      </Table>
-                    </div>
+                          );
+                        })}
+                      </TBody>
+                    </Table>
                   </div>
                 </>
               )}
@@ -1173,322 +1169,285 @@ export default function OfficeBookingsPage() {
       </div>
 
       {/* Detail Modal */}
-      <Modal
-        open={detailModalOpen}
-        onClose={() => {
-          setDetailModalOpen(false);
-          setSelectedBooking(null);
-        }}
-        title={selectedBooking ? `Chi tiết đặt phòng - ${selectedBooking.code}` : ''}
-        size="xl"
-        footer={
-          <div className="flex justify-end">
-            <Button
-              variant="secondary"
-              onClick={() => {
-                setDetailModalOpen(false);
-                setSelectedBooking(null);
-              }}
-            >
-              Đóng
-            </Button>
-          </div>
-        }
-      >
-        {selectedBooking && (
-          <div className="p-3 sm:p-4 md:p-6">
-            <div className="space-y-4 sm:space-y-5 md:space-y-6">
-              {/* Header Section - Mobile Optimized */}
-              <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-3 sm:p-4 md:p-6 border border-blue-200">
-                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4">
-                  {/* Icon và Title */}
-                  <div className="flex items-center gap-3 w-full sm:w-auto sm:flex-1 min-w-0">
-                    <div className="w-12 h-12 sm:w-14 sm:h-14 md:w-16 md:h-16 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg flex-shrink-0">
-                      <svg className="w-6 h-6 sm:w-7 sm:h-7 md:w-8 md:h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                      </svg>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <h2 className="text-lg sm:text-xl md:text-2xl lg:text-3xl font-bold text-gray-900 mb-1 break-words">Đặt phòng {selectedBooking.code}</h2>
-                      <div className="flex flex-col xs:flex-row xs:items-center gap-1 xs:gap-2">
-                        <span className="text-xs sm:text-sm text-gray-600">ID: {selectedBooking.id}</span>
-                        <span className="hidden xs:inline text-gray-400">•</span>
-                        <span className="text-xs sm:text-sm text-gray-600 truncate">{selectedBooking.userId} - {selectedBooking.userName || 'User'}</span>
+      <Modal open={detailModalOpen} onClose={() => {
+        setDetailModalOpen(false);
+        setSelectedBooking(null);
+      }} title="Chi tiết đặt phòng" size="lg">
+        <div className="p-4 sm:p-6">
+          {selectedBooking && (
+            <div className="space-y-6">
+              {/* Header với thông tin chính */}
+              <div className="bg-gradient-to-r from-[hsl(var(--page-bg))] to-[hsl(var(--primary)/0.08)] rounded-xl p-4 sm:p-6 border border-[hsl(var(--primary)/0.25)]">
+                <div className="space-y-4">
+                  {/* Header với icon và status */}
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+                    <div className="flex items-center gap-3 w-full sm:w-auto">
+                      <div className="w-12 h-12 sm:w-14 sm:h-14 bg-[hsl(var(--primary))] rounded-xl flex items-center justify-center shadow-lg flex-shrink-0">
+                        <svg className="w-6 h-6 sm:w-7 sm:h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold text-gray-900">
+                          Mã đặt phòng {selectedBooking.code}
+                        </h2>
                       </div>
                     </div>
-                  </div>
-                  {/* Status Badge */}
-                  <div className="flex-shrink-0 w-full sm:w-auto sm:ml-auto">
-                    <div className="flex justify-start sm:justify-end">
+                    <div className="flex-shrink-0 w-full sm:w-auto">
                       {getStatusBadge(selectedBooking.status)}
                     </div>
                   </div>
-                </div>
-              </div>
 
-              {/* Thông tin khách hàng */}
-              <div className="space-y-3 sm:space-y-4">
-                <h3 className="text-base sm:text-lg font-semibold text-gray-800 border-b border-gray-200 pb-2">Thông tin khách hàng</h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                  <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-                    <div className="flex items-center gap-2 mb-2">
-                      <svg className="w-4 h-4 sm:w-5 sm:h-5 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                      </svg>
-                      <span className="text-xs sm:text-sm font-semibold text-gray-700">Người đặt</span>
+                  {/* Thông tin nhanh */}
+                  <div className="grid grid-cols-2 gap-3 sm:gap-4">
+                    <div className="bg-white/70 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-[hsl(var(--primary)/0.25)]">
+                      <p className="text-sm sm:text-base font-semibold text-gray-700">
+                        <span className="text-gray-600">ID:</span>{" "}
+                        <span className="font-bold text-[hsl(var(--primary))]">{selectedBooking.id}</span>
+                      </p>
                     </div>
-                    <p className="text-sm sm:text-base font-medium text-gray-900 break-words">
-                      {selectedBooking.userName || `User #${selectedBooking.userId}`}
-                    </p>
-                  </div>
-                  <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-                    <div className="flex items-center gap-2 mb-2">
-                      <svg className="w-4 h-4 sm:w-5 sm:h-5 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-                      </svg>
-                      <span className="text-xs sm:text-sm font-semibold text-gray-700">Số khách</span>
-                    </div>
-                    <p className="text-sm sm:text-base font-medium text-gray-900">{selectedBooking.numGuests} người</p>
-                  </div>
-                </div>
-              </div>
 
-              {/* Thông tin phòng */}
-              <div className="space-y-3 sm:space-y-4">
-                <h3 className="text-base sm:text-lg font-semibold text-gray-800 border-b border-gray-200 pb-2">Thông tin phòng</h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                  <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-                    <div className="flex items-center gap-2 mb-2">
-                      <svg className="w-4 h-4 sm:w-5 sm:h-5 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-                      </svg>
-                      <span className="text-xs sm:text-sm font-semibold text-gray-700">Phòng</span>
+                    <div className="bg-white/70 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-[hsl(var(--primary)/0.25)]">
+                      <p className="text-sm sm:text-base font-semibold text-gray-700">
+                        <span className="text-gray-600">Số khách:</span>{" "}
+                        <span className="font-bold text-[hsl(var(--primary))]">{selectedBooking.numGuests}</span>
+                      </p>
                     </div>
-                    <p className="text-sm sm:text-base font-medium text-gray-900 break-words">
-                      {selectedBooking.roomName || selectedBooking.roomCode || `Room #${selectedBooking.roomId}`}
-                      {(selectedBooking as any).roomCode ? ` - ${(selectedBooking as any).roomCode}` : ''}
-                    </p>
                   </div>
-                </div>
-              </div>
 
-              {/* Thời gian đặt phòng */}
-              <div className="space-y-3 sm:space-y-4">
-                <h3 className="text-base sm:text-lg font-semibold text-gray-800 border-b border-gray-200 pb-2">Thời gian đặt phòng</h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                  <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-                    <div className="flex items-center gap-2 mb-2">
-                      <svg className="w-4 h-4 sm:w-5 sm:h-5 text-green-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                      </svg>
-                      <span className="text-xs sm:text-sm font-semibold text-gray-700">Ngày check-in</span>
+                  {/* Người đặt phòng và Phòng */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-[hsl(var(--primary)/0.25)]">
+                      <div className="flex items-center gap-3">
+                        {(() => {
+                          const faceImageUrl = getUserFaceImage(selectedBooking.userId);
+                          return faceImageUrl ? (
+                            <img 
+                              src={faceImageUrl} 
+                              alt={getUserFullName(selectedBooking.userId) || selectedBooking.userName || `User #${selectedBooking.userId}`}
+                              className="w-16 h-16 rounded-full object-cover border-2 border-[hsl(var(--primary)/0.25)] flex-shrink-0"
+                              onError={(e) => {
+                                e.currentTarget.style.display = 'none';
+                              }}
+                            />
+                          ) : (
+                            <div className="w-16 h-16 rounded-full bg-[hsl(var(--primary)/0.12)] flex items-center justify-center border-2 border-[hsl(var(--primary)/0.25)] flex-shrink-0">
+                              <svg className="w-8 h-8 text-[hsl(var(--primary))]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                              </svg>
+                            </div>
+                          );
+                        })()}
+                        <div className="min-w-0">
+                          <p className="text-xs text-gray-600 mb-1">Người đặt phòng:</p>
+                          <p className="text-sm sm:text-base font-bold text-[hsl(var(--primary))] break-words">
+                            {getUserFullName(selectedBooking.userId) || selectedBooking.userName || `User #${selectedBooking.userId}`}
+                          </p>
+                        </div>
+                      </div>
                     </div>
-                    <p className="text-sm sm:text-base font-medium text-gray-900 break-words">
-                      {selectedBooking.checkinDate ? (() => {
-                        const date = new Date(selectedBooking.checkinDate);
-                        return date.toLocaleDateString('vi-VN', {
-                          year: 'numeric',
-                          month: 'long',
-                          day: 'numeric'
-                        });
-                      })() : selectedBooking.checkinDate}
-                    </p>
+                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-[hsl(var(--primary)/0.25)]">
+                      <p className="text-sm sm:text-base font-semibold text-gray-700 break-words leading-relaxed">
+                        <span className="text-gray-600">Phòng:</span>{" "}
+                        <span className="font-bold text-[hsl(var(--primary))]">{selectedBooking.roomName || selectedBooking.roomCode || `Room #${selectedBooking.roomId}`}</span>
+                      </p>
+                    </div>
                   </div>
-                  <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-                    <div className="flex items-center gap-2 mb-2">
-                      <svg className="w-4 h-4 sm:w-5 sm:h-5 text-red-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                      </svg>
-                      <span className="text-xs sm:text-sm font-semibold text-gray-700">Ngày check-out</span>
+
+                  {/* Thời gian */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-[hsl(var(--primary)/0.25)]">
+                      <p className="text-sm sm:text-base font-semibold text-gray-700">
+                        <span className="text-gray-600">Check-in:</span>{" "}
+                        <span className="font-bold text-[hsl(var(--primary))]">{selectedBooking.checkinDate ? formatDate(selectedBooking.checkinDate) : selectedBooking.checkinDate}</span>
+                      </p>
                     </div>
-                    <p className="text-sm sm:text-base font-medium text-gray-900 break-words">
-                      {selectedBooking.checkoutDate ? (() => {
-                        const date = new Date(selectedBooking.checkoutDate);
-                        return date.toLocaleDateString('vi-VN', {
-                          year: 'numeric',
-                          month: 'long',
-                          day: 'numeric'
-                        });
-                      })() : selectedBooking.checkoutDate}
-                    </p>
+                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-[hsl(var(--primary)/0.25)]">
+                      <p className="text-sm sm:text-base font-semibold text-gray-700">
+                        <span className="text-gray-600">Check-out:</span>{" "}
+                        <span className="font-bold text-[hsl(var(--primary))]">{selectedBooking.checkoutDate ? formatDate(selectedBooking.checkoutDate) : selectedBooking.checkoutDate}</span>
+                      </p>
+                    </div>
                   </div>
                 </div>
               </div>
 
-              {/* Mục đích và Ghi chú */}
               {selectedBooking.note && (
-                <div className="space-y-3 sm:space-y-4">
-                  <h3 className="text-base sm:text-lg font-semibold text-gray-800 border-b border-gray-200 pb-2">Thông tin bổ sung</h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                    {selectedBooking.note && (
-                      <div className="bg-white rounded-lg p-3 sm:p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
-                        <div className="flex items-center gap-2 mb-2">
-                          <svg className="w-4 h-4 sm:w-5 sm:h-5 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                          </svg>
-                          <span className="text-xs sm:text-sm font-semibold text-gray-700">Ghi chú</span>
-                        </div>
-                        <p className="text-sm sm:text-base text-gray-700 whitespace-pre-line break-words">{selectedBooking.note}</p>
-                      </div>
-                    )}
-                  </div>
+                <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-gray-200">
+                  <p className="text-sm text-gray-800 whitespace-pre-line">
+                    <span className="font-semibold text-gray-600">Ghi chú:</span>{" "}
+                    {selectedBooking.note}
+                  </p>
                 </div>
               )}
 
-              {/* Thông tin hệ thống */}
               {(selectedBooking.created_at || selectedBooking.updated_at) && (
-                <div className="space-y-3 sm:space-y-4">
-                  <h3 className="text-base sm:text-lg font-semibold text-gray-800 border-b border-gray-200 pb-2">Thông tin hệ thống</h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                    {selectedBooking.created_at && (
-                      <div className="bg-gray-50 rounded-lg p-3 sm:p-4 border border-gray-200">
-                        <div className="flex items-center gap-2 mb-2">
-                          <svg className="w-4 h-4 sm:w-5 sm:h-5 text-gray-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                          </svg>
-                          <span className="text-xs sm:text-sm font-semibold text-gray-600">Ngày tạo</span>
-                        </div>
-                        <p className="text-xs sm:text-sm text-gray-700 break-words">
-                          {formatDateTime(selectedBooking.created_at)}
-                        </p>
-                      </div>
-                    )}
-                    {selectedBooking.updated_at && (
-                      <div className="bg-gray-50 rounded-lg p-3 sm:p-4 border border-gray-200">
-                        <div className="flex items-center gap-2 mb-2">
-                          <svg className="w-4 h-4 sm:w-5 sm:h-5 text-gray-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                          </svg>
-                          <span className="text-xs sm:text-sm font-semibold text-gray-600">Cập nhật lần cuối</span>
-                        </div>
-                        <p className="text-xs sm:text-sm text-gray-700 break-words">
-                          {formatDateTime(selectedBooking.updated_at)}
-                        </p>
-                      </div>
-                    )}
-                  </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                  {selectedBooking.created_at && (
+                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-gray-200">
+                      <div className="text-xs sm:text-sm font-semibold text-gray-500 mb-1">Ngày tạo</div>
+                      <p className="text-sm font-medium text-gray-900">
+                        {formatDateTime(selectedBooking.created_at)}
+                      </p>
+                    </div>
+                  )}
+                  {selectedBooking.updated_at && (
+                    <div className="bg-white/80 backdrop-blur-sm rounded-lg p-3 sm:p-4 border border-gray-200">
+                      <div className="text-xs sm:text-sm font-semibold text-gray-500 mb-1">Cập nhật gần nhất</div>
+                      <p className="text-sm font-medium text-gray-900">
+                        {formatDateTime(selectedBooking.updated_at)}
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
-            </div>
-          </div>
-        )}
-      </Modal>
-
-      {/* QR Verify Modal */}
-      <Modal
-        open={qrModalOpen}
-        onClose={closeQrModal}
-        title={selectedBooking 
-          ? (qrModalPurpose === 'checkin' 
-              ? `Quét mã QR để Check-in - ${selectedBooking.code}` 
-              : `Quét mã xác thực - ${selectedBooking.code}`)
-          : (qrModalPurpose === 'checkin' ? 'Quét mã QR để Check-in' : 'Quét mã xác thực')}
-        footer={
-          <div className="flex justify-end gap-2">
-            <Button variant="secondary" onClick={closeQrModal}>Đóng</Button>
-            <Button onClick={startQrScan} disabled={qrScanning}>Khởi động lại</Button>
-          </div>
-        }
-      >
-        <div className="space-y-4">
-          {selectedBooking && (
-            <div className="bg-blue-50 border border-blue-200 p-3 rounded">
-              <div className="text-sm text-blue-900">
-                {qrModalPurpose === 'checkin' 
-                  ? `Quét mã QR để xác thực và check-in cho booking: `
-                  : `Xác thực mã cho booking: `}
-                <span className="font-semibold">{selectedBooking.code}</span> — Phòng: {selectedBooking.roomName || selectedBooking.roomCode || `#${selectedBooking.roomId}`}
-              </div>
             </div>
           )}
-          <div className="relative">
-            <div
-              id="office-qr-reader"
-              ref={scannerRef as any}
-              className="w-full max-w-sm mx-auto rounded-lg overflow-hidden border-2 border-blue-500 aspect-square"
-            />
-            {qrScanning && (
-              <div className="absolute top-2 left-2 bg-blue-600 text-white px-3 py-1 rounded-full text-xs font-medium flex items-center gap-2 z-10">
-                <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
-                Đang quét...
-              </div>
-            )}
-          </div>
+        </div>
+      </Modal>
 
-          {/* Upload file QR code */}
-          <div className="border-t pt-4">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Hoặc tải ảnh mã QR từ máy tính
-            </label>
-            <div className="flex gap-2">
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                onChange={handleFileChange as any}
-                className="hidden"
-                id="office-qr-file-input"
-                disabled={uploadingFile}
-              />
-              <label htmlFor="office-qr-file-input" className="flex-1 cursor-pointer">
-                <Button
-                  type="button"
+    
+
+
+      {/* Face Images Modal */}
+      <Modal open={faceModalOpen} onClose={() => setFaceModalOpen(false)} title="Ảnh nhận dạng khuôn mặt" size="md">
+        <div className="p-0 max-h-[calc(100vh-8rem)] flex flex-col">
+          {selectedBooking && (
+            <div className="space-y-0 flex flex-col flex-1 min-h-0">
+              {/* Header Section */}
+              <div className="bg-gradient-to-r from-blue-50 to-indigo-50 px-4 py-2 border-b border-gray-200 flex-shrink-0">
+                <div>
+                  <h3 className="text-base font-semibold text-gray-900 mb-0.5">
+                    Người đặt phòng: {getUserFullName(selectedBooking.userId) || selectedBooking.userName || `User #${selectedBooking.userId}`}
+                  </h3>
+                  <div className="text-xs text-gray-700">
+                    <span className="font-medium">Mã đặt phòng:</span>
+                    <span className="text-gray-900 font-semibold ml-1">{selectedBooking.code}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Images Section */}
+              <div className="p-3 bg-gray-50 flex-1 min-h-0 flex items-center justify-center">
+                {(() => {
+                  const uid = String(selectedBooking.userId);
+                  const images = faceImages[uid];
+
+                  // Helper function to get label for each image based on index
+                  const getImageLabel = (index: number): string => {
+                    const labels = ['Chính diện', 'Trái', 'Phải', 'CCCD trước', 'CCCD sau'];
+                    return labels[index] || `Ảnh ${index + 1}`;
+                  };
+
+                  // Loading state
+                  if (loadingFaces[uid]) {
+                    return (
+                      <div className="flex flex-col items-center justify-center">
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-2"></div>
+                        <p className="text-gray-700 font-semibold text-sm mb-0.5">Đang tải ảnh...</p>
+                        <p className="text-xs text-gray-500">Vui lòng đợi</p>
+                      </div>
+                    );
+                  }
+
+                  if (Array.isArray(images) && images.length > 0) {
+                    const currentImage = images[currentImageIndex];
+                    const currentLabel = getImageLabel(currentImageIndex);
+                    const hasPrev = currentImageIndex > 0;
+                    const hasNext = currentImageIndex < images.length - 1;
+
+                    return (
+                      <div className="w-full max-w-md mx-auto">
+                        {/* Main Image Container */}
+                        <div className="relative w-full">
+                          {/* Previous Button */}
+                          {hasPrev && (
+                            <button
+                              onClick={() => setCurrentImageIndex(prev => Math.max(0, prev - 1))}
+                              className="absolute left-1 top-1/2 -translate-y-1/2 bg-white/90 hover:bg-white text-gray-700 hover:text-blue-600 p-1.5 rounded-full shadow-lg transition-all z-10"
+                              aria-label="Ảnh trước"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                              </svg>
+                            </button>
+                          )}
+
+                          {/* Image */}
+                          <div className="bg-white rounded-lg overflow-hidden shadow-md">
+                            <div className="relative bg-gray-100" style={{ maxHeight: '50vh', minHeight: '300px' }}>
+                              <img
+                                src={currentImage}
+                                alt={`${currentLabel} - ${selectedBooking.userName || `User #${selectedBooking.userId}`}`}
+                                className="w-full h-full object-contain"
+                                style={{ maxHeight: '50vh' }}
+                                onError={(e) => {
+                                  const target = e.target as HTMLImageElement;
+                                  target.style.display = 'none';
+                                  const parent = target.parentElement;
+                                  if (parent) {
+                                    parent.innerHTML = `
+                                      <div class="w-full h-full flex items-center justify-center bg-gray-100" style="min-height: 300px;">
+                                        <svg class="w-10 h-10 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                        </svg>
+                                      </div>
+                                    `;
+                                  }
+                                }}
+                              />
+                            </div>
+                            {/* Label */}
+                            <div className="px-3 py-2 bg-gray-50 text-center">
+                              <p className="text-xs font-semibold text-gray-800">
+                                {currentLabel}
+                              </p>
+                              <p className="text-xs text-gray-500">
+                                {currentImageIndex + 1} / {images.length}
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* Next Button */}
+                          {hasNext && (
+                            <button
+                              onClick={() => setCurrentImageIndex(prev => Math.min(images.length - 1, prev + 1))}
+                              className="absolute right-1 top-1/2 -translate-y-1/2 bg-white/90 hover:bg-white text-gray-700 hover:text-blue-600 p-1.5 rounded-full shadow-lg transition-all z-10"
+                              aria-label="Ảnh tiếp theo"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                              </svg>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="flex flex-col items-center justify-center">
+                      <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mb-2">
+                        <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                      </div>
+                      <p className="text-sm font-semibold text-gray-700 mb-1">Không có ảnh nhận dạng</p>
+                      <p className="text-xs text-gray-500 text-center max-w-xs">Người đặt phòng này chưa có ảnh nhận dạng khuôn mặt trong hệ thống</p>
+                    </div>
+                  );
+                })()}
+              </div>
+              
+              {/* Footer */}
+              <div className="bg-white px-4 py-2 border-t border-gray-200 flex justify-end flex-shrink-0">
+                <Button 
                   variant="secondary"
-                  className="w-full"
-                  disabled={uploadingFile}
-                  onClick={() => fileInputRef.current?.click()}
+                  onClick={() => setFaceModalOpen(false)}
+                  className="px-4 py-1.5 text-xs h-8"
                 >
-                  {uploadingFile ? 'Đang đọc...' : 'Chọn ảnh QR từ máy tính'}
+                  Đóng
                 </Button>
-              </label>
-            </div>
-            <p className="text-xs text-gray-500 mt-2">Hỗ trợ các định dạng: JPG, PNG, GIF, WebP</p>
-          </div>
-
-          {qrResult && (
-            <div className="space-y-3">
-              <div className={`rounded-md border p-3 text-sm ${qrResult.valid ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
-                {qrResult.message}
-              </div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className={`text-xs px-2 py-1 rounded-full border ${qrResult.backendValidated ? 'bg-green-50 text-green-700 border-green-200' : 'bg-gray-50 text-gray-700 border-gray-200'}`}>
-                  {qrResult.backendValidated ? 'Backend đã xác thực' : 'Chưa xác thực từ backend'}
-                </span>
-                {typeof qrResult.expired !== 'undefined' && (
-                  <span className={`text-xs px-2 py-1 rounded-full border ${qrResult.expired ? 'bg-red-50 text-red-700 border-red-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
-                    {qrResult.expired ? 'Đã quá hạn' : 'Còn hiệu lực'}
-                  </span>
-                )}
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                <div>
-                  <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Mã đặt phòng</p>
-                  <p className="font-medium text-gray-900">{qrResult.bookingCode || selectedBooking?.code || (qrResult.bookingId ? `#${qrResult.bookingId}` : 'N/A')}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Khách hàng</p>
-                  <p className="font-medium text-gray-900">{qrResult.userName || selectedBooking?.userName || 'N/A'}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Email</p>
-                  <p className="font-medium text-gray-900">{qrResult.userEmail || 'N/A'}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Phòng</p>
-                  <p className="font-medium text-gray-900">{qrResult.roomCode || selectedBooking?.roomCode || selectedBooking?.roomName || 'N/A'}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Check-in</p>
-                  <p className="font-medium text-gray-900">{qrResult.checkinDate ? new Date(qrResult.checkinDate).toLocaleString('vi-VN') : (selectedBooking?.checkinDate || 'N/A')}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Check-out</p>
-                  <p className="font-medium text-gray-900">{qrResult.checkoutDate ? new Date(qrResult.checkoutDate).toLocaleString('vi-VN') : (selectedBooking?.checkoutDate || 'N/A')}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500 font-semibold uppercase mb-1">Số khách</p>
-                  <p className="font-medium text-gray-900">{qrResult.numGuests ?? selectedBooking?.numGuests ?? 'N/A'}</p>
-                </div>
               </div>
             </div>
           )}
@@ -1542,7 +1501,7 @@ export default function OfficeBookingsPage() {
               <h3 className="font-medium text-blue-900 mb-2">Thông tin đặt phòng</h3>
               <div className="grid grid-cols-2 gap-2 text-sm">
                 <div><span className="font-medium">Mã đặt phòng:</span> {selectedBooking.code}</div>
-                <div><span className="font-medium">Người đặt:</span> {selectedBooking.userName || `User #${selectedBooking.userId}`}</div>
+                <div><span className="font-medium">Người đặt:</span> {getUserFullName(selectedBooking.userId) || selectedBooking.userName || `User #${selectedBooking.userId}`}</div>
                 <div><span className="font-medium">Phòng:</span> {selectedBooking.roomCode || selectedBooking.roomName || `Room #${selectedBooking.roomId}`}</div>
                 <div><span className="font-medium">Số khách:</span> {selectedBooking.numGuests}</div>
                 <div><span className="font-medium">Check-in:</span> {selectedBooking.checkinDate}</div>
@@ -1567,5 +1526,3 @@ export default function OfficeBookingsPage() {
     </>
   );
 }
-
-
