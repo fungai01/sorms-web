@@ -802,24 +802,16 @@ class ApiClient {
     }
   }
 
-  async confirmOrder(orderId: number) {
+  async confirmOrder(orderId: number, payload?: { assignedStaffId: number; serviceTime: string; note?: string | null }) {
+    if (payload) {
+      return this.post(`/orders/${orderId}/confirm`, payload)
+    }
     return this.post(`/orders/${orderId}/confirm`)
   }
 
-  // Create service order with staff confirmation workflow
-  // Backend endpoint: POST /orders/service
-  async createServiceOrderWithStaff(payload: {
-    bookingId: number;
-    orderId: number;
-    serviceId: number;
-    quantity: number;
-    assignedStaffId: number;
-    requestedBy: string;
-    serviceTime: string; // LocalDateTime format: yyyy-MM-dd'T'HH:mm:ss
-    note?: string;
-  }) {
-    return this.post('/orders/service', payload)
-  }
+  // DEPRECATED: Create service order with staff confirmation workflow
+  // Backend endpoint POST /orders/service no longer exists
+  // Use confirmOrder() instead with assignedStaffId, serviceTime, and note
 
   // Cart-based order workflow
   async createOrderCart(params: { bookingId: number; requestedBy?: string; note?: string } | number) {

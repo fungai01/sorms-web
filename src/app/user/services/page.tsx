@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { useServices, useUserBookings, useStaffProfilesFiltered } from "@/hooks/useApi";
+import { useServices, useUserBookings, useStaffProfilesFiltered, useSelfUser } from "@/hooks/useApi";
 import { useAuth } from "@/hooks/useAuth";
 import { apiClient } from "@/lib/api-client";
 import type { Service, Booking } from "@/lib/types";
@@ -14,6 +14,7 @@ import Badge from "@/components/ui/Badge";
 export default function RequestServicePage() {
   const router = useRouter();
   const { user } = useAuth();
+  const { data: userProfileData, loading: userProfileLoading } = useSelfUser();
   const [serviceId, setServiceId] = useState<number | "">("");
   const [bookingId, setBookingId] = useState<number | "">("");
   const [quantity, setQuantity] = useState<number>(1);
@@ -22,6 +23,7 @@ export default function RequestServicePage() {
   const [date, setDate] = useState(today);
   const [time, setTime] = useState("12:00"); // Default to 12:00
   const [note, setNote] = useState("");
+  const [fullNote, setFullNote] = useState(""); // Ghi chú đầy đủ (autoNote + note có thể chỉnh sửa)
   const [submittingStep, setSubmittingStep] = useState<1 | 2 | 3 | 4 | null>(null); // Track which step is submitting
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -95,6 +97,101 @@ export default function RequestServicePage() {
     if (!serviceId) return null;
     return filteredServices.find((s: Service) => s.id === serviceId);
   }, [serviceId, filteredServices]);
+
+  // Tạo note tự động với thông tin đầy đủ từ user profile (format theo mẫu)
+  const autoNote = useMemo(() => {
+    // Xử lý cấu trúc response từ API (tương tự profile page)
+    let profile: any = null;
+    if (userProfileData && !userProfileLoading) {
+      const items: any[] = Array.isArray((userProfileData as any)?.items)
+        ? (userProfileData as any).items
+        : Array.isArray((userProfileData as any)?.data?.items)
+          ? (userProfileData as any).data.items
+          : Array.isArray((userProfileData as any)?.data?.content)
+            ? (userProfileData as any).data.content
+            : Array.isArray(userProfileData)
+              ? userProfileData
+              : [];
+
+      if (user?.email && items.length > 0) {
+        const found = items.find((u: any) => (u.email || "").toLowerCase() === user.email!.toLowerCase());
+        if (found) profile = found;
+      }
+
+      if (!profile) {
+        profile = (userProfileData as any)?.data || userProfileData;
+      }
+    }
+
+    // Tên người nhận
+    let userName = '';
+    if (profile) {
+      userName = profile.fullName ||
+        profile.full_name ||
+        (profile.firstName || profile.lastName
+          ? `${profile.firstName || ''} ${profile.lastName || ''}`.trim()
+          : '');
+    }
+    if (!userName || userName.trim() === '') {
+      userName = (user as any)?.full_name || (user as any)?.name || user?.username || '';
+    }
+    userName = userName?.trim?.() || '';
+
+    // SĐT
+    let userPhone = '';
+    if (profile) {
+      userPhone = profile.phoneNumber || profile.phone_number || '';
+    }
+    if (!userPhone || userPhone.trim() === '') {
+      userPhone = (user as any)?.phoneNumber || (user as any)?.phone_number || '';
+    }
+    userPhone = userPhone?.trim?.() || '';
+
+    // Thời gian sử dụng: 16:00, Thứ Sáu, 2 tháng 1, 2026
+    let timeLine = '';
+    if (date && time) {
+      const dateObj = new Date(`${date}T${time}`);
+      const formattedDate = dateObj.toLocaleDateString('vi-VN', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      });
+      timeLine = `${time}, ${formattedDate}`;
+    }
+
+    // Build note theo mẫu
+    const lines: string[] = [];
+    lines.push('THÔNG TIN NHẬN DỊCH VỤ');
+
+    // Nếu userName là email thì fallback sang email label (đỡ bị thiếu thông tin)
+    if (userName) {
+      if (userName.includes('@')) {
+        lines.push(`- Email: ${userName}`);
+      } else {
+        lines.push(`- Người nhận: ${userName}`);
+      }
+    }
+
+    if (userPhone) lines.push(`- SĐT: ${userPhone}`);
+    if (timeLine) lines.push(`- Thời gian sử dụng: ${timeLine}`);
+
+    return lines.join('\n');
+  }, [userProfileData, userProfileLoading, user, date, time]);
+
+  // Cập nhật fullNote khi autoNote thay đổi (chỉ nếu người dùng chưa chỉnh sửa)
+  useEffect(() => {
+    if (autoNote && currentStep === 3) {
+      // Nếu fullNote rỗng hoặc chỉ chứa autoNote (chưa chỉnh sửa), cập nhật
+      setFullNote((prevFullNote) => {
+        if (!prevFullNote || prevFullNote.trim() === autoNote.trim() || prevFullNote.trim() === '') {
+          return autoNote;
+        }
+        // Nếu người dùng đã chỉnh sửa, giữ nguyên phần chỉnh sửa của họ
+        return prevFullNote;
+      });
+    }
+  }, [autoNote, currentStep]);
 
   const totalPrice = useMemo(() => {
     if (!selectedService) return 0;
@@ -237,6 +334,7 @@ export default function RequestServicePage() {
       setStep3Completed(false);
       setError(null);
       setCartId(null);
+      setFullNote(""); // Reset ghi chú đầy đủ
     }
   }, [orderModalOpen]);
 
@@ -415,8 +513,8 @@ export default function RequestServicePage() {
     }
   };
 
-  // Step 3: Assign staff (POST /orders/service) - Backend workflow step 3
-  // Note: POST /orders/service automatically sets status to PENDING_STAFF_CONFIRMATION, so no need for separate confirm step
+      // Step 3: Assign staff and confirm order (POST /orders/{orderId}/confirm) - Backend workflow step 3
+      // Note: POST /orders/{orderId}/confirm sets status and assigns staff
   const handleStep3 = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -474,8 +572,8 @@ export default function RequestServicePage() {
         return;
       }
 
-      // Verify order has items before calling createServiceOrder
-      // Backend CreateServiceOrderService expects item to exist
+      // Verify order has items before calling confirmOrder
+      // Backend ConfirmOrderService expects item to exist
       let orderHasItems = false;
       try {
         const orderCheck = await apiClient.getServiceOrder(cartId);
@@ -507,17 +605,13 @@ export default function RequestServicePage() {
         await new Promise(resolve => setTimeout(resolve, 500));
       }
 
-      // POST /orders/service - Create service order with staff assignment
-      // Backend will update the order status to PENDING_STAFF_CONFIRMATION and assign staff
-      let createRes = await apiClient.createServiceOrder({
-        bookingId: Number(bookingId),
-        orderId: cartId,
-        serviceId: Number(serviceId),
-        quantity,
+      // POST /orders/{orderId}/confirm - Confirm order with staff assignment
+      // Backend will update the order status and assign staff
+      // Sử dụng fullNote (đã được người dùng chỉnh sửa nếu cần)
+      let createRes = await apiClient.confirmOrder(cartId, {
         assignedStaffId: Number(assignedStaffId),
-        requestedBy: String(user.id),
         serviceTime,
-        note: note || null,
+        note: fullNote.trim() || null,
       });
 
       if (!createRes.success) {
@@ -1138,16 +1232,17 @@ export default function RequestServicePage() {
                       )}
                     </div>
 
-                    {/* Note */}
+                    {/* Ghi chú (có thể chỉnh sửa) */}
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Ghi chú (tùy chọn)</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Ghi chú</label>
                       <textarea
-                        value={note}
-                        onChange={(e) => setNote(e.target.value)}
-                        rows={3}
-                        className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none resize-none"
-                        placeholder="Nhập yêu cầu đặc biệt hoặc ghi chú..."
+                        value={fullNote}
+                        onChange={(e) => setFullNote(e.target.value)}
+                        rows={6}
+                        className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm focus:outline-none resize-y"
+                        placeholder="Thông tin sẽ được tự động điền..."
                       />
+                      <p className="text-xs text-gray-500 mt-1">Bạn có thể chỉnh sửa thông tin trên nếu cần</p>
                     </div>
                   </div>
                 </div>

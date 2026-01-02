@@ -242,18 +242,22 @@ export default function CheckoutPage() {
       0
     );
 
-    // Nếu không có service orders cần thanh toán, cho phép checkout
+    // Nếu không có service orders cần thanh toán, kiểm tra xem có PENDING_PAYMENT orders không
+    // Chỉ cho phép checkout nếu không có PENDING_PAYMENT orders
     if (activeServiceOrders.length === 0 || requiredAmount === 0) {
+      // Nếu có service orders ở trạng thái PENDING_PAYMENT, không được coi là đã thanh toán đủ
+      const isFullyPaidWhenNoActiveOrders = !hasPendingPaymentOrder;
+      
       return {
         requiredAmount: 0,
         totalAmount: 0,
         paidAmount: 0,
         pendingAmount: 0,
         remainingAmount: 0,
-        status: "NO_PAYMENT" as const,
-        hasPending: false,
+        status: hasPendingPaymentOrder ? "PENDING" as const : "NO_PAYMENT" as const,
+        hasPending: hasPendingPaymentOrder,
         hasPaid: false,
-        isFullyPaid: true,
+        isFullyPaid: isFullyPaidWhenNoActiveOrders,
         hasPendingPaymentOrder,
         pendingPaymentOrders,
       };
@@ -274,7 +278,11 @@ export default function CheckoutPage() {
 
     const hasPending = payments.some((p) => p.status === "PENDING");
     const hasPaid = payments.some((p) => p.status === "SUCCEEDED");
-    const isFullyPaid = remainingAmount === 0 && paidAmount >= requiredAmount;
+    // Chỉ coi là đã thanh toán đủ khi:
+    // 1. Không có service orders ở trạng thái PENDING_PAYMENT
+    // 2. Số tiền còn thiếu = 0
+    // 3. Số tiền đã thanh toán >= số tiền cần thanh toán
+    const isFullyPaid = !hasPendingPaymentOrder && remainingAmount === 0 && paidAmount >= requiredAmount;
 
     let status: "NO_PAYMENT" | "PENDING" | "PARTIAL" | "PAID" = "NO_PAYMENT";
     if (isFullyPaid) {
@@ -352,10 +360,21 @@ export default function CheckoutPage() {
     }
 
     // Kiểm tra thanh toán đủ trước khi checkout
-    if (!paymentInfo.isFullyPaid && paymentInfo.remainingAmount > 0) {
-      setError(
-        `Bạn chưa thanh toán đủ. Còn thiếu ${paymentInfo.remainingAmount.toLocaleString("vi-VN")} VNĐ. Vui lòng thanh toán đầy đủ trước khi check-out.`
-      );
+    // Kiểm tra kỹ: không cho checkout nếu chưa thanh toán đủ
+    if (!paymentInfo.isFullyPaid) {
+      if (paymentInfo.remainingAmount > 0) {
+        setError(
+          `Bạn chưa thanh toán đủ. Còn thiếu ${paymentInfo.remainingAmount.toLocaleString("vi-VN")} VNĐ. Vui lòng thanh toán đầy đủ trước khi check-out.`
+        );
+      } else if (paymentInfo.requiredAmount > 0 && paymentInfo.paidAmount < paymentInfo.requiredAmount) {
+        setError(
+          `Bạn chưa thanh toán đủ. Cần thanh toán ${paymentInfo.requiredAmount.toLocaleString("vi-VN")} VNĐ nhưng chỉ đã thanh toán ${paymentInfo.paidAmount.toLocaleString("vi-VN")} VNĐ. Vui lòng thanh toán đầy đủ trước khi check-out.`
+        );
+      } else {
+        setError(
+          "Không thể check-out: Chưa hoàn tất thanh toán. Vui lòng kiểm tra lại trạng thái thanh toán."
+        );
+      }
       return;
     }
 

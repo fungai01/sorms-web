@@ -7,6 +7,7 @@ import Badge from "@/components/ui/Badge";
 import dynamic from "next/dynamic";
 import { Html5Qrcode } from "html5-qrcode";
 import * as faceapi from "face-api.js";
+import { apiClient } from "@/lib/api-client";
 
 const WebcamComponent = dynamic(() => import("react-webcam") as any, { 
   ssr: false,
@@ -20,9 +21,6 @@ const WebcamComponent = dynamic(() => import("react-webcam") as any, {
 type BookingInfo = {
   bookingId?: number;
   userId?: string;
-  userName?: string;
-  userEmail?: string;
-  phoneNumber?: string;
   roomCode?: string;
   checkinDate?: string;
   checkoutDate?: string;
@@ -301,75 +299,50 @@ export default function CheckInPage() {
         return;
       }
 
-      // Helper để lấy userName từ nhiều nguồn
-      const getUserName = () => {
-        return b.userName || 
-               b.user_name || 
-               b.accountName || 
-               b.account_name ||
-               b.fullName ||
-               b.full_name ||
-               b.user?.name ||
-               b.user?.fullName ||
-               b.user?.full_name ||
-               b.account?.name ||
-               b.account?.fullName ||
-               b.account?.full_name ||
-               b.userInfo?.name ||
-               b.accountInfo?.name ||
-               (finalUserId ? `User #${finalUserId}` : 'N/A');
-      };
 
-      // Helper để lấy userEmail từ nhiều nguồn
-      const getUserEmail = () => {
-        return b.userEmail || 
-               b.user_email || 
-               b.accountEmail || 
-               b.account_email ||
-               b.user?.email ||
-               b.account?.email ||
-               b.userInfo?.email ||
-               b.accountInfo?.email ||
-               'N/A';
-      };
-
-      // Helper để lấy phoneNumber từ nhiều nguồn
-      const getPhoneNumber = () => {
-        return b.phoneNumber || 
-               b.phone_number || 
-               b.phone ||
-               b.user?.phone ||
-               b.user?.phoneNumber ||
-               b.user?.phone_number ||
-               b.account?.phone ||
-               b.account?.phoneNumber ||
-               b.account?.phone_number ||
-               b.userInfo?.phone ||
-               b.accountInfo?.phone ||
-               'N/A';
-      };
-
-      // Helper để lấy roomCode từ nhiều nguồn
-      const getRoomCode = () => {
+      // Helper để lấy roomCode từ nhiều nguồn (ưu tiên name, sau đó code)
+      const getRoomCode = async () => {
+        // Ưu tiên tên phòng (name), sau đó mới đến code
+        const roomName = b.roomName || 
+                        b.room_name || 
+                        b.room?.name ||
+                        b.room?.roomName;
+        
+        const roomCode = b.roomCode || 
+                        b.room_code || 
+                        b.room?.code ||
+                        b.room?.roomCode ||
+                        b.room?.room_code;
+        
+        // Nếu đã có tên hoặc code từ booking object, trả về ngay
+        if (roomName) return roomName;
+        if (roomCode) return roomCode;
+        
+        // Nếu không có, thử gọi API để lấy thông tin room từ roomId
         const roomId = b.roomId || b.room_id;
-        return b.roomCode || 
-               b.room_code || 
-               b.room?.code ||
-               b.room?.roomCode ||
-               b.room?.room_code ||
-               b.roomName ||
-               b.room_name ||
-               (roomId ? `Room #${roomId}` : 'N/A');
+        if (roomId) {
+          try {
+            const roomRes = await apiClient.getRoom(Number(roomId));
+            if (roomRes.success && roomRes.data) {
+              const roomData = roomRes.data as any;
+              // Ưu tiên name, sau đó code
+              return roomData.name?.trim() || roomData.code || 'N/A';
+            }
+          } catch (error) {
+            console.error('Không thể lấy thông tin phòng từ API:', error);
+          }
+        }
+        
+        return 'N/A';
       };
 
+      const resolvedRoomCode = await getRoomCode();
+      
       setBookingInfo({
         bookingId,
         userId: finalUserId,
         bookingCode: b.code || b.bookingCode || `BK-${bookingId}`,
-        userName: getUserName(),
-        userEmail: getUserEmail(),
-        phoneNumber: getPhoneNumber(),
-        roomCode: getRoomCode(),
+        roomCode: resolvedRoomCode,
         checkinDate: b.checkinDate || b.checkin_date || b.checkInDate,
         checkoutDate: b.checkoutDate || b.checkout_date || b.checkOutDate,
         numGuests: b.numGuests || b.num_guests || b.guests || 1,
@@ -630,9 +603,7 @@ export default function CheckInPage() {
             <CardBody className="p-6">
               <div className="space-y-3 mb-6">
                 <InfoRow label="Mã đặt phòng" value={bookingInfo.bookingCode || `#${bookingInfo.bookingId}`} />
-                <InfoRow label="Khách hàng" value={bookingInfo.userName || 'N/A'} />
-                <InfoRow label="Email" value={bookingInfo.userEmail || 'N/A'} />
-                <InfoRow label="Điện thoại" value={bookingInfo.phoneNumber || 'N/A'} />
+                <InfoRow label="ID khách hàng" value={bookingInfo.userId || 'N/A'} />
                 <InfoRow label="Phòng" value={bookingInfo.roomCode || 'N/A'} highlight />
                 <InfoRow label="Số khách" value={String(bookingInfo.numGuests || 'N/A')} />
                 <InfoRow label="Check-in" value={formatDate(bookingInfo.checkinDate)} />

@@ -412,8 +412,8 @@ export default function OpenDoorPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
-      <div className="max-w-4xl mx-auto px-6 pt-4 pb-6">
+    <div className="bg-gradient-to-br from-blue-50 via-white to-purple-50 min-h-screen flex flex-col">
+      <div className={`${!selectedRoom ? 'w-full px-6 max-w-[1000px] mx-auto' : 'w-full'} py-4 flex-1 flex flex-col`}>
         {/* Header */}
         {!selectedRoom && (
           <div className="mb-6">
@@ -484,8 +484,8 @@ export default function OpenDoorPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
                 {rooms.map((room) => {
                   const hasAccess = !!getBookingForRoom(room);
-                  // Extract room number from code (e.g., "A10" -> "10", "B101" -> "101")
-                  const roomNumber = room.code.replace(/[A-Z]/g, '') || room.id.toString();
+                  // Hiển thị tên phòng, nếu không có thì hiển thị code
+                  const displayName = room.name || room.code;
                   
                   return (
                     <div
@@ -503,22 +503,16 @@ export default function OpenDoorPage() {
                           sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
                         />
                         
-                        {/* White overlay with large room number */}
+                        {/* White overlay with room name */}
                         <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
                           <div className="bg-white/95 backdrop-blur-sm rounded-lg px-6 py-4 shadow-lg">
-                            <p className="text-4xl font-bold text-gray-900">{roomNumber}</p>
+                            <p className="text-4xl font-bold text-gray-900 text-center whitespace-nowrap">{displayName}</p>
                           </div>
                         </div>
                       </div>
 
                       {/* Room identifier and status below image */}
                       <div className="p-4 bg-white">
-                        <div className="mb-3">
-                          <p className="text-sm font-semibold text-gray-900">
-                            Phòng {room.code}
-                          </p>
-                        </div>
-                        
                         {/* Action button */}
                         <Button
                           variant="secondary"
@@ -558,7 +552,8 @@ export default function OpenDoorPage() {
 
         {/* Camera View */}
         {selectedRoom && (
-          <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-md rounded-2xl overflow-hidden">
+          <div className="flex-1 flex items-center justify-center w-full">
+            <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-md rounded-xl overflow-hidden w-full max-w-2xl mx-auto">
             <CardHeader className="bg-[hsl(var(--page-bg))]/40 border-b border-gray-200 !px-6 py-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -568,7 +563,7 @@ export default function OpenDoorPage() {
                     </svg>
                   </div>
                   <div>
-                    <h2 className="text-xl font-bold text-gray-900">Phòng {selectedRoom.code}</h2>
+                    <h2 className="text-xl font-bold text-gray-900">{selectedRoom.name || `Phòng ${selectedRoom.code}`}</h2>
                     <p className="text-sm text-gray-500">{selectedRoom.roomTypeName}</p>
                   </div>
                 </div>
@@ -582,15 +577,15 @@ export default function OpenDoorPage() {
               <div className="mb-6">
                 <div className="p-4 bg-gradient-to-r from-[hsl(var(--primary))]/10 to-[hsl(var(--primary))]/5 border border-[hsl(var(--primary))]/20 rounded-xl">
                   <div className="flex items-center gap-2">
-                    <svg className="w-5 h-5 text-[hsl(var(--primary))]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-4 h-4 text-[hsl(var(--primary))] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
-                    <p className="text-sm font-medium text-gray-700">Xác thực khuôn mặt để mở cửa phòng {selectedRoom.code}</p>
+                    <p className="text-xs font-medium text-gray-700">Xác thực khuôn mặt để mở cửa {selectedRoom.name || `phòng ${selectedRoom.code}`}</p>
                   </div>
                 </div>
               </div>
               
-              <div className="relative aspect-[4/3] rounded-xl overflow-hidden bg-gray-100 mb-6 border-2 border-gray-200 shadow-inner">
+              <div className="relative aspect-[4/3] rounded-xl overflow-hidden bg-gray-100 mb-6 border-2 border-gray-200 shadow-inner max-h-[60vh] w-full">
                 <WebcamComponent
                   ref={webcamRef}
                   audio={false}
@@ -619,13 +614,7 @@ export default function OpenDoorPage() {
                   onUserMediaError={() => setCameraError("Không thể truy cập camera")}
                 />
 
-                {/* Khung gợi ý ban đầu (giữ lại nếu cần) */}
-                <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-                  <div className="w-72 h-96 border-4 border-[hsl(var(--primary))]/60 rounded-[50%] shadow-lg"></div>
-                </div>
-
-                {/* Vẽ khung khuôn mặt dựa trên dữ liệu backend trả về
-                    Giả định: faceBox.x, y, width, height là tỉ lệ (0–1) theo chiều rộng/chiều cao */}
+              
                 {faceBox && (
                   <div
                     className="absolute border-4 border-green-400 rounded-xl pointer-events-none shadow-lg"
@@ -657,6 +646,41 @@ export default function OpenDoorPage() {
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                       </svg>
                       <p className="text-red-400 text-sm font-medium text-center">{result.message}</p>
+                    </div>
+                  </div>
+                )}
+
+                {result?.success && (
+                  <div className="absolute inset-0 bg-gray-900/95 flex items-center justify-center p-6 z-50">
+                    <div className="text-center max-w-md w-full">
+                      {/* Success icon */}
+                      <div className="w-20 h-20 bg-gradient-to-br from-green-400 to-green-600 rounded-full flex items-center justify-center mx-auto mb-6 shadow-lg animate-pulse">
+                        <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                        </svg>
+                      </div>
+                      
+                      {/* Success message */}
+                      <h2 className="text-3xl font-bold text-white mb-2">Đã mở cửa!</h2>
+                      <p className="text-xl text-green-200 mb-1">{selectedRoom?.name || `Phòng ${selectedRoom?.code}`}</p>
+                      <p className="text-sm text-gray-300 mb-6">Xác thực khuôn mặt thành công</p>
+                      
+                      {/* Thông tin check-in */}
+                      {getBookingForRoom(selectedRoom!) && (
+                        <div className="bg-green-500/90 backdrop-blur-sm rounded-xl p-4 mb-4">
+                          <div className="flex items-center justify-center gap-2 mb-2">
+                            <div className="w-6 h-6 bg-white rounded-full flex items-center justify-center">
+                              <svg className="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                              </svg>
+                            </div>
+                            <span className="text-sm font-semibold text-white">Đã check-in</span>
+                          </div>
+                          <p className="text-xs text-green-100">Có quyền truy cập</p>
+                        </div>
+                      )}
+                      
+                      
                     </div>
                   </div>
                 )}
@@ -704,6 +728,7 @@ export default function OpenDoorPage() {
               </div>
             </CardBody>
           </Card>
+          </div>
         )}
 
         {/* Error/Failure - Hiển thị bên dưới camera view */}
@@ -722,7 +747,7 @@ export default function OpenDoorPage() {
                   
                   {/* Error message */}
                   <h2 className="text-2xl font-bold text-gray-900 mb-2">Xác thực thất bại</h2>
-                  <p className="text-lg text-gray-900 mb-1">Phòng {selectedRoom.code}</p>
+                  <p className="text-lg text-gray-900 mb-1">{selectedRoom.name || `Phòng ${selectedRoom.code}`}</p>
                   <p className="text-sm text-gray-500 mb-6">{result.message || 'Xác thực khuôn mặt thất bại'}</p>
                   
                   {/* Card xanh với thông tin phòng */}
@@ -730,7 +755,7 @@ export default function OpenDoorPage() {
                     <div className="flex items-center justify-between mb-4">
                       <div className="text-left">
                         <p className="text-base font-bold text-white">
-                          Phòng {selectedRoom.code}
+                          {selectedRoom.name || `Phòng ${selectedRoom.code}`}
                         </p>
                         <p className="text-sm text-green-100 mt-1">
                           {validBooking ? 'Có quyền truy cập' : 'Không có quyền truy cập'}
@@ -773,61 +798,6 @@ export default function OpenDoorPage() {
           );
         })()}
 
-        {/* Success */}
-        {result?.success && selectedRoom && (() => {
-          const validBooking = getBookingForRoom(selectedRoom);
-          return (
-            <Card className="bg-white/80 backdrop-blur-sm border border-gray-200/50 shadow-md rounded-2xl overflow-hidden">
-              <CardBody className="p-8">
-                <div className="text-center">
-                  {/* Success icon */}
-                  <div className="w-20 h-20 bg-gradient-to-br from-green-400 to-green-600 rounded-full flex items-center justify-center mx-auto mb-6 shadow-lg">
-                    <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                    </svg>
-                  </div>
-                  
-                  {/* Success message */}
-                  <h2 className="text-2xl font-bold text-gray-900 mb-2">Đã mở cửa!</h2>
-                  <p className="text-lg text-gray-900 mb-1">Phòng {selectedRoom.code}</p>
-                  <p className="text-sm text-gray-500 mb-6">Xác thực khuôn mặt thành công</p>
-                  
-                  {/* Thông tin check-in và quyền truy cập - chỉ hiển thị sau khi chụp ảnh thành công */}
-                  {validBooking && (
-                    <div className="bg-green-500 rounded-xl p-5 mb-6">
-                      <div className="flex items-center justify-between mb-4">
-                        <div className="text-left">
-                          <p className="text-base font-bold text-white">
-                            Phòng {selectedRoom.code}
-                          </p>
-                          <p className="text-sm text-green-100 mt-1">Có quyền truy cập</p>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <div className="w-6 h-6 bg-white rounded-full flex items-center justify-center">
-                            <svg className="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                            </svg>
-                          </div>
-                          <span className="text-sm font-semibold text-white">Đã check-in</span>
-                        </div>
-                      </div>
-                      <Button
-                        variant="primary"
-                        className="w-full h-12 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold"
-                        onClick={() => {}}
-                      >
-                        <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z" />
-                        </svg>
-                        Mở cửa
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              </CardBody>
-            </Card>
-          );
-        })()}
 
       </div>
     </div>

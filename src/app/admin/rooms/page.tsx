@@ -43,15 +43,20 @@ export default function RoomsPage() {
   const [selected, setSelected] = useState<Room | null>(null)
 
   const [editOpen, setEditOpen] = useState(false)
-  const [edit, setEdit] = useState<{ id?: number, code: string, name: string, roomTypeId: number, floor: number, status: RoomStatus, description: string }>({ code: "", name: "", roomTypeId: 1, floor: 1, status: "AVAILABLE", description: "" })
+  const defaultRoomTypeId = useMemo(() => {
+    // Prefer first available room type from API; fallback to 1 for safety if not loaded yet
+    return Number(roomTypes?.[0]?.id ?? 1)
+  }, [roomTypes])
+
+  const [edit, setEdit] = useState<{ id?: number, code: string, name: string, roomTypeId: number, floor: number, status: RoomStatus, description: string }>({ code: "", name: "", roomTypeId: defaultRoomTypeId, floor: 1, status: "AVAILABLE", description: "" })
   const [confirmOpen, setConfirmOpen] = useState<{ open: boolean, id?: number }>({ open: false })
   const [codeError, setCodeError] = useState<string | null>(null)
 
   const handleCloseEdit = useCallback(() => {
     setEditOpen(false)
-    setEdit({ code: "", name: "", roomTypeId: 1, floor: 1, status: "AVAILABLE", description: "" })
+    setEdit({ code: "", name: "", roomTypeId: defaultRoomTypeId, floor: 1, status: "AVAILABLE", description: "" })
     setCodeError(null)
-  }, [])
+  }, [defaultRoomTypeId])
 
   useEffect(() => {
     if (!flash) return
@@ -112,7 +117,14 @@ export default function RoomsPage() {
     setCodeError(null)
     setFlash(null)
     const nextCode = await getNextAvailableCode()
-    setEdit({ code: nextCode, name: "", roomTypeId: 1, floor: 1, status: "AVAILABLE", description: "" })
+    setEdit({ 
+      code: nextCode, 
+      name: "", 
+      roomTypeId: defaultRoomTypeId, 
+      floor: 1, 
+      status: "AVAILABLE", 
+      description: "" 
+    })
     setEditOpen(true)
   }
 
@@ -123,7 +135,7 @@ export default function RoomsPage() {
       id: r.id, 
       code: r.code || "", 
       name: r.name || "", 
-      roomTypeId: r.roomTypeId || 1, 
+      roomTypeId: (r.roomTypeId ?? defaultRoomTypeId), 
       floor: r.floor || 1, 
       status: r.status || "AVAILABLE", 
       description: r.description || "" 

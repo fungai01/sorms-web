@@ -1,9 +1,12 @@
 export const API_CONFIG = {
   BASE_URL: (() => {
     // Use environment variable if set, otherwise use default based on NODE_ENV
-    const defaultUrl = process.env.NODE_ENV === 'production' 
+    const defaultUrl =
+    process.env.NEXT_PUBLIC_API_URL ||
+    (process.env.NODE_ENV === 'production'
       ? 'https://backend.sorms.online/api'
-      : 'http://103.81.87.99:5656/api'
+      : 'http://103.81.87.99:5656/api/');
+  
     
     const rawUrl = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || defaultUrl
     const normalized = rawUrl.endsWith('/') ? rawUrl.slice(0, -1) : rawUrl

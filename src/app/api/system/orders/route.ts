@@ -297,90 +297,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(response.data, { status: 201 })
     }
 
-    // Staff workflow: Create service order
+    // DEPRECATED: Staff workflow: Create service order
+    // This action is no longer used. Frontend now uses POST /orders/{orderId}/confirm directly
+    // Keeping for backward compatibility but will return error
     if (action === 'service') {
-      // Validate required fields according to backend CreateServiceOrderRequest
-      // Backend requires: bookingId, orderId, serviceId, quantity, assignedStaffId, requestedBy, serviceTime
-      if (!body.bookingId) {
-        return NextResponse.json({ error: 'bookingId is required' }, { status: 400 })
-      }
-      if (!body.orderId) {
-        return NextResponse.json({ error: 'orderId is required' }, { status: 400 })
-      }
-      if (!body.serviceId) {
-        return NextResponse.json({ error: 'serviceId is required' }, { status: 400 })
-      }
-      if (!body.quantity || body.quantity <= 0) {
-        return NextResponse.json({ error: 'quantity is required and must be greater than 0' }, { status: 400 })
-      }
-      if (!body.assignedStaffId) {
-        return NextResponse.json({ error: 'assignedStaffId is required' }, { status: 400 })
-      }
-      if (!body.requestedBy) {
-        return NextResponse.json({ error: 'requestedBy is required' }, { status: 400 })
-      }
-      // Validate and normalize serviceTime
-      let serviceTime: string | undefined = body.serviceTime || body.scheduledDateTime
-      if (!serviceTime || (typeof serviceTime === 'string' && serviceTime.trim() === '')) {
-        return NextResponse.json({ error: 'serviceTime is required' }, { status: 400 })
-      }
-      
-      // Normalize serviceTime to LocalDateTime format without timezone for Spring (yyyy-MM-dd'T'HH:mm:ss)
-      if (typeof serviceTime === 'string') {
-        // Strip timezone 'Z' and milliseconds if present
-        serviceTime = serviceTime.replace(/Z$/, '')
-        serviceTime = serviceTime.replace(/\.\d+$/, '')
-        // Ensure seconds are present
-        if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(serviceTime)) {
-          serviceTime = serviceTime + ':00'
-        }
-        // Validate format: should match yyyy-MM-dd'T'HH:mm:ss
-        if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(serviceTime)) {
-          return NextResponse.json({ error: 'serviceTime must be in format: yyyy-MM-dd\'T\'HH:mm:ss' }, { status: 400 })
-        }
-      }
-      
-      // Format payload according to backend expectations
-      // Backend expects: bookingId (Long), orderId (Long), serviceId (Long), 
-      // quantity (BigDecimal), assignedStaffId (Long), requestedBy (String - UUID), 
-      // serviceTime (LocalDateTime), note (String, optional)
-      const payload = {
-        bookingId: Number(body.bookingId),
-        orderId: Number(body.orderId),
-        serviceId: Number(body.serviceId),
-        quantity: Number(body.quantity), // Backend will convert to BigDecimal
-        assignedStaffId: Number(body.assignedStaffId),
-        requestedBy: String(body.requestedBy), // Backend expects String (UUID), not Long
-        serviceTime: serviceTime, // Normalized to format: "yyyy-MM-dd'T'HH:mm:ss"
-        note: body.note || null,
-      }
-      
-      // Call backend POST /orders/service endpoint directly
-      const auth = getAuthorizationHeader(req)
-      const headers: HeadersInit = {
-        'Content-Type': 'application/json',
-      }
-      if (auth) {
-        headers['Authorization'] = auth
-      }
-      
-      const backendUrl = `${API_CONFIG.BASE_URL}/orders/service`
-      const backendRes = await fetch(backendUrl, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload),
-      })
-      
-      if (!backendRes.ok) {
-        const errorData = await backendRes.json().catch(() => ({ error: `Backend error: ${backendRes.status}` }))
-        return NextResponse.json(
-          { error: errorData.error || errorData.message || 'Request failed' },
-          { status: backendRes.status || 500 }
-        )
-      }
-      
-      const data = await backendRes.json()
-      return NextResponse.json(data.data || data, { status: 201 })
+      return NextResponse.json(
+        { error: 'This endpoint is deprecated. Use POST /orders/{orderId}/confirm instead.' },
+        { status: 410 }
+      )
     }
 
     // Staff workflow: Staff confirm order

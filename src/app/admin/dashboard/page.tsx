@@ -489,14 +489,22 @@ export default function AdminHome() {
     const occupiedRooms = rooms.filter((r: any) => r.status === 'OCCUPIED').length;
     const pendingBookings = bookings.filter((b: any) => b.status === 'PENDING').length;
 
-    // Calculate today's revenue and payment count
+    // Calculate today's revenue from service orders (not bookings)
     const today = new Date().toISOString().split('T')[0];
-    const todayPayments = payments.filter((p: any) => {
-      const paymentDate = p.created_at?.split('T')[0] || p.createdAt?.split('T')[0];
-      return paymentDate === today && p.status === 'SUCCESS';
+    const todayServiceOrders = orders.filter((so: any) => {
+      // Get paid amount from various possible field names
+      const paidAmount = so.paidAmount || so.paid_amount || so.amountPaid || so.amount_paid || 0;
+      if (paidAmount <= 0) return false;
+      
+      // Check if updated today (prefer updated_at, fallback to created_at)
+      const updateDate = so.updated_at?.split('T')[0] || so.updatedAt?.split('T')[0] || so.created_at?.split('T')[0] || so.createdAt?.split('T')[0];
+      return updateDate === today;
     });
-    const paymentsToday = todayPayments.length;
-    const revenueToday = todayPayments.reduce((sum: number, p: any) => sum + (p.amount || 0), 0);
+    const paymentsToday = todayServiceOrders.length;
+    const revenueToday = todayServiceOrders.reduce((sum: number, so: any) => {
+      const paidAmount = so.paidAmount || so.paid_amount || so.amountPaid || so.amount_paid || 0;
+      return sum + paidAmount;
+    }, 0);
 
     // Calculate tasks todo
     const tasksTodo = tasks.filter((t: any) => {
@@ -512,7 +520,7 @@ export default function AdminHome() {
       revenueToday,
       tasksTodo
     };
-  }, [roomsData, bookingsData, paymentsData, tasksData]);
+  }, [roomsData, bookingsData, serviceOrdersData, tasksData]);
 
   // Calculate tasks summary
   const tasksSummary = useMemo(() => {
@@ -563,7 +571,7 @@ export default function AdminHome() {
               <KPICard 
                 title="Phòng đang ở" 
                 value={`${kpis.occupiedRooms}/${kpis.totalRooms}`} 
-                hint={`${occupancyPercent}% đang ở`}
+                hint={`Phòng đang có người ở`}
                 bgColor="#f4f8ff"
                 iconColor="#0277b0" 
                 icon={
@@ -587,7 +595,7 @@ export default function AdminHome() {
               <KPICard 
                 title="Doanh thu" 
                 value={fmtCurrency(kpis.revenueToday)} 
-                hint={`${kpis.paymentsToday} giao dịch`}
+                hint={`Đơn hàng đã thanh toán`}
                 bgColor="#f4f8ff"
                 iconColor="#0277b0"
                 icon={
